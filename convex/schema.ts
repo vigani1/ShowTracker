@@ -1,7 +1,24 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { authTables } from "@convex-dev/auth/server";
 
 export default defineSchema({
+  ...authTables,
+  users: defineTable({
+    name: v.optional(v.string()),
+    image: v.optional(v.string()),
+    email: v.optional(v.string()),
+    emailVerificationTime: v.optional(v.number()),
+    phone: v.optional(v.string()),
+    phoneVerificationTime: v.optional(v.number()),
+    isAnonymous: v.optional(v.boolean()),
+    avatarUrl: v.optional(v.string()),
+    tokenIdentifier: v.optional(v.string()),
+    createdAt: v.optional(v.number()),
+  })
+    .index("email", ["email", "_creationTime"])
+    .index("phone", ["phone", "_creationTime"])
+    .index("by_tokenIdentifier", ["tokenIdentifier"]),
   shows: defineTable({
     tmdbId: v.optional(v.number()),
     anilistId: v.optional(v.number()),
@@ -25,13 +42,6 @@ export default defineSchema({
     .index("by_anilistId", ["anilistId"])
     .index("by_tvmazeId", ["tvmazeId"])
     .index("by_mediaType", ["mediaType"]),
-  users: defineTable({
-    name: v.optional(v.string()),
-    email: v.optional(v.string()),
-    avatarUrl: v.optional(v.string()),
-    tokenIdentifier: v.optional(v.string()),
-    createdAt: v.optional(v.number()),
-  }).index("by_tokenIdentifier", ["tokenIdentifier"]),
   userShows: defineTable({
     userId: v.id("users"),
     showId: v.id("shows"),

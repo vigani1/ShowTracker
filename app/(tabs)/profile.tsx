@@ -1,7 +1,29 @@
+import { useState } from "react";
 import { Text, View } from "react-native";
+import { useConvexAuth } from "convex/react";
+import { useAuthActions } from "@convex-dev/auth/react";
+import { Button } from "@/components/Button";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 
 export default function ProfileScreen() {
+  const { signOut } = useAuthActions();
+  const { isAuthenticated } = useConvexAuth();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+
+  const handleSignOut = async () => {
+    setSignOutError(null);
+    setIsSigningOut(true);
+    try {
+      await signOut();
+    } catch (error) {
+      console.error("Sign out failed", error);
+      setSignOutError("Could not sign out. Please try again.");
+    } finally {
+      setIsSigningOut(false);
+    }
+  };
+
   return (
     <ScreenWrapper>
       <View className="gap-3">
@@ -16,6 +38,16 @@ export default function ProfileScreen() {
             User stats and settings components will live here.
           </Text>
         </View>
+        <Button
+          label={isSigningOut ? "Signing out..." : "Sign out"}
+          onPress={handleSignOut}
+          disabled={!isAuthenticated || isSigningOut}
+        />
+        {signOutError ? (
+          <Text className="text-sm text-red-500 dark:text-red-400">
+            {signOutError}
+          </Text>
+        ) : null}
       </View>
     </ScreenWrapper>
   );

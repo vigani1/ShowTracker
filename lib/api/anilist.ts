@@ -54,7 +54,7 @@ async function request<T>(query: string, variables: Record<string, unknown>) {
   const parseResponseBody = async (response: Response) => {
     try {
       return await response.json();
-    } catch (error) {
+    } catch {
       return await response.text();
     }
   };

@@ -45,6 +45,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - **Never commit directly to main** — always create a feature branch and open a PR
 - **Never commit unless the user explicitly asks** — only stage/commit/push when instructed
 - **All changes go through PRs** — CodeRabbit reviews every PR before merge
+- **After user feedback on an open PR, always update that PR** — push follow-up commits to the same PR branch unless the user asks for a different branch/PR
 - **Branch naming**: `feat/short-description`, `fix/short-description`, `docs/short-description`
 - **Squash merge only** — keep main history clean (repo enforces this)
 

@@ -12,8 +12,13 @@
       "resizeMode": "contain",
       "backgroundColor": "#0b0f1a"
     },
-    "assetBundlePatterns": ["**/*"],
-    "plugins": ["expo-router"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ],
     "ios": {
       "supportsTablet": true
     },

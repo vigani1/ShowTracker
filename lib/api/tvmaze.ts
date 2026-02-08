@@ -51,7 +51,7 @@ async function request<T>(path: string, params?: Record<string, string>) {
   const parseResponseBody = async (response: Response) => {
     try {
       return await response.json();
-    } catch (error) {
+    } catch {
       return await response.text();
     }
   };
