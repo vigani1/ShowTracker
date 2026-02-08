@@ -35,12 +35,19 @@ Cross-platform show/anime/movie tracking app built with Expo (React Native + Web
 - File naming: kebab-case for files, PascalCase for components
 - Imports: absolute paths via `@/` alias
 
+## Git Workflow
+- Never commit unless the user explicitly asks — do not auto-commit
+- Never push directly to main — always create a branch + PR
+- Branch naming: feat/, fix/, docs/ prefixes
+- All PRs reviewed by CodeRabbit before merge
+
 ## Never Do
 - Never commit API keys or secrets
 - Never make API calls directly from components — use lib/api/ clients
 - Never store images in Convex — use URL references
 - Never bypass Convex for data that needs to sync
 - Never use StyleSheet.create — use NativeWind className
+- Never push directly to main
 
 ## Key Commands
 - `npx expo start` — Dev server

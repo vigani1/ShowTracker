@@ -41,12 +41,20 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - File naming: kebab-case for files, PascalCase for components
 - Imports: absolute paths via `@/` alias (e.g., `@/components/ShowCard`)
 
+## Git Workflow
+- **Never commit directly to main** — always create a feature branch and open a PR
+- **Never commit unless the user explicitly asks** — only stage/commit/push when instructed
+- **All changes go through PRs** — CodeRabbit reviews every PR before merge
+- **Branch naming**: `feat/short-description`, `fix/short-description`, `docs/short-description`
+- **Squash merge only** — keep main history clean (repo enforces this)
+
 ## Boundaries — Never Do These
 - Never commit API keys or secrets (use .env + Convex environment variables)
 - Never make API calls directly from components — always go through lib/api/ clients
 - Never store images in Convex — always use URL references to external CDNs (TMDB, AniList)
 - Never bypass Convex for data that needs to sync — all user data goes through Convex
 - Never use StyleSheet.create — always use NativeWind className
+- Never push directly to main — always use a branch + PR
 
 ## Detailed Docs
 - See docs/PLAN.md for implementation phases and feature breakdown

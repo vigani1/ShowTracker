@@ -11,3 +11,6 @@ See @AGENTS.md
 - Use Expo/React Native skills when building screens
 - Prefer FlashList over FlatList for performance
 - Run `npx expo lint` after changes to catch issues
+- **Never commit unless the user explicitly asks you to** — do not auto-commit
+- **Never push directly to main** — always create a feature branch and open a PR
+- All PRs are reviewed by CodeRabbit before merging
