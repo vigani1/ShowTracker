@@ -1,7 +1,7 @@
 # ShowTracker Progress
 
 ## Current Phase
-Phase 1: Project Setup (in progress)
+Phase 1: Project Setup (pending)
 
 ## Completed
 - [x] Project planning and research (docs/PLAN.md)
@@ -11,9 +11,6 @@ Phase 1: Project Setup (in progress)
 
 ## In Progress
 - [ ] Phase 1: Project setup (Expo init, NativeWind, Convex, Expo Router)
-  - [x] Scaffold Expo Router layouts and placeholder screens
-  - [x] Configure NativeWind + Tailwind presets
-  - [x] Add initial Convex schema and environment template
 
 ## Pending
 - [ ] Phase 2: API Layer + Data Infrastructure
