@@ -31,9 +31,7 @@ function formatAniListDate(date?: {
 }
 
 export function normalizeTmdbMedia(media: TmdbMedia): NormalizedShow {
-  const mediaType =
-    media.media_type ??
-    (media.release_date ? "movie" : media.first_air_date ? "tv" : "tv");
+  const mediaType = media.media_type ?? "tv";
   return {
     id: `tmdb:${media.id}`,
     mediaType,

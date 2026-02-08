@@ -2,7 +2,8 @@ import { Link } from "expo-router";
 import { Text, View } from "react-native";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 
-export function LoginScreen() {
+export default function LoginScreen() {
+
   return (
     <ScreenWrapper contentClassName="justify-center">
       <View className="gap-4">
@@ -24,5 +25,3 @@ export function LoginScreen() {
     </ScreenWrapper>
   );
 }
-
-export default LoginScreen;

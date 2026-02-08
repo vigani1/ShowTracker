@@ -4,8 +4,6 @@ const tvmazeBaseUrl =
   process.env.EXPO_PUBLIC_TVMAZE_BASE_URL ?? "https://api.tvmaze.com";
 
 const cacheTtlMs = 15 * 60 * 1000;
-const maxAttempts = 4;
-const baseDelayMs = 500;
 
 export type TvMazeShow = {
   id: number;
@@ -41,27 +39,6 @@ export type TvMazeScheduleEntry = {
   image?: { medium?: string; original?: string } | null;
 };
 
-function getRetryDelayMs(retryAfter: string | null) {
-  if (!retryAfter) {
-    return null;
-  }
-  const seconds = Number(retryAfter);
-  if (!Number.isNaN(seconds)) {
-    return seconds * 1000;
-  }
-  const dateMs = Date.parse(retryAfter);
-  if (!Number.isNaN(dateMs)) {
-    return Math.max(0, dateMs - Date.now());
-  }
-  return null;
-}
-
-function sleep(delayMs: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
-  });
-}
-
 async function request<T>(path: string, params?: Record<string, string>) {
   const url = new URL(path, tvmazeBaseUrl);
   if (params) {
@@ -69,34 +46,11 @@ async function request<T>(path: string, params?: Record<string, string>) {
       url.searchParams.set(key, value);
     });
   }
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const response = await fetch(url.toString());
-
-    if (response.ok) {
-      return (await response.json()) as T;
-    }
-
-    if (response.status !== 429) {
-      const body = await response.text();
-      throw new Error(
-        `TVMaze request failed: ${response.status}${body ? ` ${body}` : ""}`
-      );
-    }
-
-    if (attempt === maxAttempts - 1) {
-      const body = await response.text();
-      throw new Error(
-        `TVMaze request failed: ${response.status}${body ? ` ${body}` : ""}`
-      );
-    }
-
-    const retryAfterMs = getRetryDelayMs(response.headers.get("Retry-After"));
-    const backoffMs = baseDelayMs * 2 ** attempt;
-    const jitterMs = Math.random() * 200;
-    await sleep((retryAfterMs ?? backoffMs) + jitterMs);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    throw new Error(`TVMaze request failed: ${response.status}`);
   }
-
-  throw new Error("TVMaze request failed: retry limit exceeded");
+  return (await response.json()) as T;
 }
 
 export async function getTvMazeScheduleByDate(

@@ -47,63 +47,16 @@ export type AniListAiringSchedule = {
   media: AniListMedia;
 };
 
-const maxAttempts = 4;
-const baseDelayMs = 500;
-
-function getRetryDelayMs(retryAfter: string | null) {
-  if (!retryAfter) {
-    return null;
-  }
-  const seconds = Number(retryAfter);
-  if (!Number.isNaN(seconds)) {
-    return seconds * 1000;
-  }
-  const dateMs = Date.parse(retryAfter);
-  if (!Number.isNaN(dateMs)) {
-    return Math.max(0, dateMs - Date.now());
-  }
-  return null;
-}
-
-function sleep(delayMs: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
-  });
-}
-
 async function request<T>(query: string, variables: Record<string, unknown>) {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const response = await fetch(anilistUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables }),
-    });
-
-    if (response.ok) {
-      return (await response.json()) as T;
-    }
-
-    if (response.status !== 429) {
-      const body = await response.text();
-      throw new Error(
-        `AniList request failed: ${response.status}${body ? ` ${body}` : ""}`
-      );
-    }
-
-    if (attempt === maxAttempts - 1) {
-      const body = await response.text();
-      throw new Error(
-        `AniList request failed: ${response.status}${body ? ` ${body}` : ""}`
-      );
-    }
-
-    const retryAfterMs = getRetryDelayMs(response.headers.get("Retry-After"));
-    const backoffMs = baseDelayMs * 2 ** attempt;
-    const jitterMs = Math.random() * 200;
-    await sleep((retryAfterMs ?? backoffMs) + jitterMs);
+  const response = await fetch(anilistUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, variables }),
+  });
+  if (!response.ok) {
+    throw new Error(`AniList request failed: ${response.status}`);
   }
-
-  throw new Error("AniList request failed: retry limit exceeded");
+  return (await response.json()) as T;
 }
 
 export async function searchAniList(query: string, page = 1, perPage = 20) {

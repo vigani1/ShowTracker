@@ -24,11 +24,6 @@ const showInput = {
 export const upsertShow = mutation({
   args: showInput,
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Unauthorized");
-    }
-
     const existing =
       (args.tmdbId
         ? await ctx.db
