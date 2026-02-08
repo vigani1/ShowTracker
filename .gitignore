@@ -26,6 +26,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Local agent settings (auto-generated, user-specific)
+.claude/settings.local.json
+
 # Build outputs
 *.tsbuildinfo
 *.log

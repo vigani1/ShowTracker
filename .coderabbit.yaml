@@ -1,0 +1,142 @@
+language: en-US
+tone_instructions: >-
+  Be direct and concise. Focus on correctness, performance, and security.
+  Flag real issues, not style nitpicks. Watch for API key leaks and Convex anti-patterns.
+early_access: true
+enable_free_tier: true
+
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  review_status: true
+  review_details: true
+  commit_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  auto_apply_labels: false
+  suggested_reviewers: false
+  poem: false
+
+  labeling_instructions:
+    - label: "expo"
+      instructions: "Changes to Expo Router screens, app/ directory, or expo config files"
+    - label: "convex"
+      instructions: "Changes to Convex backend functions, schema, or convex/ directory"
+    - label: "api"
+      instructions: "Changes to external API clients in lib/api/"
+    - label: "ui"
+      instructions: "Changes to UI components in components/"
+    - label: "docs"
+      instructions: "Changes to documentation files (docs/, AGENTS.md, CLAUDE.md, PROGRESS.md)"
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT REVIEW"
+    base_branches:
+      - "main"
+
+  path_filters:
+    - "!**/*.lock"
+    - "!**/package-lock.json"
+    - "!**/.agents/skills/**"
+    - "!**/.claude/skills/**"
+    - "!**/.cursor/skills/**"
+    - "!**/.agent/skills/**"
+
+  path_instructions:
+    - path: "convex/**"
+      instructions: >-
+        This is the Convex backend. Review for:
+        - All queries/mutations MUST validate auth via ctx.auth.getUserIdentity()
+        - All function arguments MUST use v.* validators
+        - External API calls MUST use actions (not queries/mutations)
+        - Database queries MUST use .withIndex() instead of .filter() where indexes exist
+        - Cached data MUST include lastUpdated timestamps
+        - One file per domain (shows.ts, users.ts, lists.ts, schedule.ts, stats.ts)
+        - Never expose internal IDs or raw data to the client without normalization
+
+    - path: "lib/api/**"
+      instructions: >-
+        These are external API clients (TMDB, AniList, TVMaze, Jikan). Review for:
+        - All functions MUST return NormalizedShow/NormalizedEpisode types from types.ts
+        - Raw API responses MUST NOT be exposed to components
+        - 429 responses MUST be handled with retry + exponential backoff
+        - API keys MUST come from environment variables, never hardcoded
+        - TMDB image URLs MUST use the format: https://image.tmdb.org/t/p/{size}{path}
+        - AniList GraphQL queries MUST request only needed fields
+        - All fetch calls MUST have error handling with typed error responses
+
+    - path: "app/**"
+      instructions: >-
+        These are Expo Router screens and layouts. Review for:
+        - Use Expo Router for navigation (never @react-navigation directly)
+        - Use expo-image for images (never React Native Image)
+        - Use FlashList for long lists (never FlatList)
+        - All styling MUST use NativeWind className (never StyleSheet.create)
+        - Route params via useLocalSearchParams
+        - No direct API calls — must go through lib/api/ clients or Convex hooks
+        - Auth-protected screens must check authentication state
+
+    - path: "components/**"
+      instructions: >-
+        These are reusable UI components. Review for:
+        - Functional components only with named exports
+        - NativeWind className for all styling (no StyleSheet.create)
+        - Components must be platform-agnostic (web + mobile)
+        - Use expo-image for images, FlashList for lists
+        - Props should be typed with TypeScript interfaces
+        - No business logic — components should receive data via props or hooks
+
+    - path: "store/**"
+      instructions: >-
+        These are Zustand stores. Review for:
+        - Stores should be minimal — most state lives in Convex
+        - Only client-side UI state and offline cache should go here
+        - MMKV persistence should be used for offline data
+        - No API calls from stores — use lib/api/ clients
+
+    - path: "**/*.ts"
+      instructions: >-
+        TypeScript project with strict mode. Check for:
+        - No 'any' types unless absolutely necessary with a comment explaining why
+        - Proper error handling (no swallowed catches)
+        - No hardcoded API keys, secrets, or credentials
+        - Imports should use @/ alias for absolute paths
+
+  tools:
+    markdownlint:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 90000
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local
