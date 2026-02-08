@@ -25,6 +25,13 @@ export default defineSchema({
     .index("by_anilistId", ["anilistId"])
     .index("by_tvmazeId", ["tvmazeId"])
     .index("by_mediaType", ["mediaType"]),
+  users: defineTable({
+    name: v.optional(v.string()),
+    email: v.optional(v.string()),
+    avatarUrl: v.optional(v.string()),
+    tokenIdentifier: v.optional(v.string()),
+    createdAt: v.optional(v.number()),
+  }).index("by_tokenIdentifier", ["tokenIdentifier"]),
   userShows: defineTable({
     userId: v.id("users"),
     showId: v.id("shows"),

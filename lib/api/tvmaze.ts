@@ -46,11 +46,30 @@ async function request<T>(path: string, params?: Record<string, string>) {
       url.searchParams.set(key, value);
     });
   }
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    throw new Error(`TVMaze request failed: ${response.status}`);
+  const maxAttempts = 4;
+  const baseDelayMs = 500;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetch(url.toString());
+    if (response.ok) {
+      return (await response.json()) as T;
+    }
+    if (response.status !== 429) {
+      throw new Error(`TVMaze request failed: ${response.status}`);
+    }
+    if (attempt === maxAttempts) {
+      throw new Error(`TVMaze request failed: ${response.status}`);
+    }
+    const retryAfter = response.headers.get("Retry-After");
+    const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
+    const delayMs = Number.isFinite(retryAfterMs)
+      ? retryAfterMs
+      : baseDelayMs * 2 ** (attempt - 1);
+    const jitter = Math.random() * 200;
+    await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
   }
-  return (await response.json()) as T;
+
+  throw new Error("TVMaze request failed: exceeded retry attempts");
 }
 
 export async function getTvMazeScheduleByDate(

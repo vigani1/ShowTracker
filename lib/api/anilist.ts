@@ -48,15 +48,37 @@ export type AniListAiringSchedule = {
 };
 
 async function request<T>(query: string, variables: Record<string, unknown>) {
-  const response = await fetch(anilistUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!response.ok) {
-    throw new Error(`AniList request failed: ${response.status}`);
+  const maxAttempts = 4;
+  const baseDelayMs = 750;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetch(anilistUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (response.ok) {
+      return (await response.json()) as T;
+    }
+    if (response.status !== 429) {
+      throw new Error(`AniList request failed: ${response.status}`);
+    }
+    if (attempt === maxAttempts) {
+      const body = await response.text();
+      throw new Error(
+        `AniList request failed: ${response.status} ${body || ""}`.trim()
+      );
+    }
+    const retryAfter = response.headers.get("Retry-After");
+    const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
+    const delayMs = Number.isFinite(retryAfterMs)
+      ? retryAfterMs
+      : baseDelayMs * 2 ** (attempt - 1);
+    const jitter = Math.random() * 250;
+    await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
   }
-  return (await response.json()) as T;
+
+  throw new Error("AniList request failed: exceeded retry attempts");
 }
 
 export async function searchAniList(query: string, page = 1, perPage = 20) {

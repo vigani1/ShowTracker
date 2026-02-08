@@ -6,10 +6,10 @@ const baseClasses =
   "flex-1 bg-brand-light-background dark:bg-brand-background";
 const contentClasses = "flex-1 px-4 py-3";
 
-type ScreenWrapperProps = PropsWithChildren<{
+interface ScreenWrapperProps extends PropsWithChildren {
   className?: string;
   contentClassName?: string;
-}>;
+}
 
 export function ScreenWrapper({
   children,

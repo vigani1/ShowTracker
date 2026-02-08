@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Pressable, Text } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 const baseClasses =
   "items-center justify-center rounded-full bg-brand-primary px-5 py-3";
@@ -32,11 +32,13 @@ export function Button({
         className ?? ""
       }`.trim()}
     >
-      <Text className={`${textClasses} ${textClassName ?? ""}`.trim()}>
-        {leftIcon}
-        {label}
-        {rightIcon}
-      </Text>
+      <View className="flex-row items-center justify-center gap-2">
+        {leftIcon ? <View className="items-center">{leftIcon}</View> : null}
+        <Text className={`${textClasses} ${textClassName ?? ""}`.trim()}>
+          {label}
+        </Text>
+        {rightIcon ? <View className="items-center">{rightIcon}</View> : null}
+      </View>
     </Pressable>
   );
 }

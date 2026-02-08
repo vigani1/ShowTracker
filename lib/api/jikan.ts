@@ -1,4 +1,6 @@
 import { getCached, setCached } from "@/lib/api/cache";
+import type { NormalizedShow } from "@/lib/api/types";
+import { normalizeJikanAnime } from "@/lib/api/normalize";
 
 const jikanBaseUrl =
   process.env.EXPO_PUBLIC_JIKAN_BASE_URL ?? "https://api.jikan.moe/v4";
@@ -22,9 +24,13 @@ export type JikanAnime = {
   aired?: { from?: string | null };
 };
 
-export type JikanSearchResult = {
+type JikanSearchResponse = {
   data: JikanAnime[];
-  pagination?: { last_visible_page: number; current_page: number; items: { total: number } };
+  pagination?: {
+    last_visible_page: number;
+    current_page: number;
+    items: { total: number };
+  };
 };
 
 async function request<T>(path: string, params?: Record<string, string>) {
@@ -34,28 +40,48 @@ async function request<T>(path: string, params?: Record<string, string>) {
       url.searchParams.set(key, value);
     });
   }
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    throw new Error(`Jikan request failed: ${response.status}`);
+  const maxAttempts = 4;
+  const baseDelayMs = 700;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetch(url.toString());
+    if (response.ok) {
+      return (await response.json()) as T;
+    }
+    if (response.status !== 429) {
+      throw new Error(`Jikan request failed: ${response.status}`);
+    }
+    if (attempt === maxAttempts) {
+      throw new Error(`Jikan request failed: ${response.status}`);
+    }
+    const retryAfter = response.headers.get("Retry-After");
+    const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
+    const delayMs = Number.isFinite(retryAfterMs)
+      ? retryAfterMs
+      : baseDelayMs * 2 ** (attempt - 1);
+    const jitter = Math.random() * 250;
+    await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
   }
-  return (await response.json()) as T;
+
+  throw new Error("Jikan request failed: exceeded retry attempts");
 }
 
 export async function searchJikan(query: string, page = 1) {
   const cacheKey = `jikan-search:${query}:${page}`;
-  const cached = getCached<JikanSearchResult>(cacheKey);
+  const cached = getCached<NormalizedShow[]>(cacheKey);
   if (cached) {
     return cached;
   }
-  const data = await request<JikanSearchResult>("/anime", {
+  const data = await request<JikanSearchResponse>("/anime", {
     q: query,
     page: String(page),
   });
-  setCached(cacheKey, data, cacheTtlMs);
-  return data;
+  const normalized = data.data.map((anime) => normalizeJikanAnime(anime));
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
 }
 
-export async function getJikanAnime(id: number) {
+export async function getJikanAnime(id: number): Promise<NormalizedShow> {
   const response = await request<{ data: JikanAnime }>(`/anime/${id}`);
-  return response.data;
+  return normalizeJikanAnime(response.data);
 }
