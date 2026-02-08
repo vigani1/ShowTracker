@@ -85,6 +85,18 @@ async function request<T>(path: string, params?: Record<string, string | number>
   const url = buildUrl(path, params);
   const maxAttempts = 4;
   const baseDelayMs = 500;
+  const parseResponseBody = async (response: Response) => {
+    try {
+      return await response.json();
+    } catch (error) {
+      return await response.text();
+    }
+  };
+
+  type TmdbError = {
+    status: number;
+    body: unknown;
+  };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const response = await fetch(url.toString());
@@ -92,10 +104,14 @@ async function request<T>(path: string, params?: Record<string, string | number>
       return (await response.json()) as T;
     }
     if (response.status !== 429) {
-      throw new Error(`TMDB request failed: ${response.status}`);
+      const body = await parseResponseBody(response);
+      const error: TmdbError = { status: response.status, body };
+      throw error;
     }
     if (attempt === maxAttempts) {
-      throw new Error(`TMDB request failed: ${response.status}`);
+      const body = await parseResponseBody(response);
+      const error: TmdbError = { status: response.status, body };
+      throw error;
     }
     const retryAfter = response.headers.get("Retry-After");
     const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
@@ -106,7 +122,11 @@ async function request<T>(path: string, params?: Record<string, string | number>
     await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
   }
 
-  throw new Error("TMDB request failed: exceeded retry attempts");
+  const error: TmdbError = {
+    status: 429,
+    body: "TMDB request failed: exceeded retry attempts",
+  };
+  throw error;
 }
 
 export async function searchTmdb(

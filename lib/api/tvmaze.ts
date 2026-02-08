@@ -48,6 +48,19 @@ async function request<T>(path: string, params?: Record<string, string>) {
   }
   const maxAttempts = 4;
   const baseDelayMs = 500;
+  const parseResponseBody = async (response: Response) => {
+    try {
+      return await response.json();
+    } catch (error) {
+      return await response.text();
+    }
+  };
+
+  type TvMazeError = {
+    status: number;
+    body: unknown;
+    message: string;
+  };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const response = await fetch(url.toString());
@@ -55,10 +68,22 @@ async function request<T>(path: string, params?: Record<string, string>) {
       return (await response.json()) as T;
     }
     if (response.status !== 429) {
-      throw new Error(`TVMaze request failed: ${response.status}`);
+      const body = await parseResponseBody(response);
+      const error: TvMazeError = {
+        status: response.status,
+        body,
+        message: "TVMaze request failed",
+      };
+      throw error;
     }
     if (attempt === maxAttempts) {
-      throw new Error(`TVMaze request failed: ${response.status}`);
+      const body = await parseResponseBody(response);
+      const error: TvMazeError = {
+        status: response.status,
+        body,
+        message: "TVMaze request failed",
+      };
+      throw error;
     }
     const retryAfter = response.headers.get("Retry-After");
     const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
@@ -69,7 +94,12 @@ async function request<T>(path: string, params?: Record<string, string>) {
     await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
   }
 
-  throw new Error("TVMaze request failed: exceeded retry attempts");
+  const error: TvMazeError = {
+    status: 429,
+    body: "TVMaze request failed: exceeded retry attempts",
+    message: "TVMaze request failed",
+  };
+  throw error;
 }
 
 export async function getTvMazeScheduleByDate(

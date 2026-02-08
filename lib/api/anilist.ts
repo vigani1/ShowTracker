@@ -51,6 +51,19 @@ async function request<T>(query: string, variables: Record<string, unknown>) {
   const maxAttempts = 4;
   const baseDelayMs = 750;
 
+  const parseResponseBody = async (response: Response) => {
+    try {
+      return await response.json();
+    } catch (error) {
+      return await response.text();
+    }
+  };
+
+  type AniListError = {
+    status: number;
+    body: unknown;
+  };
+
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const response = await fetch(anilistUrl, {
       method: "POST",
@@ -61,13 +74,14 @@ async function request<T>(query: string, variables: Record<string, unknown>) {
       return (await response.json()) as T;
     }
     if (response.status !== 429) {
-      throw new Error(`AniList request failed: ${response.status}`);
+      const body = await parseResponseBody(response);
+      const error: AniListError = { status: response.status, body };
+      throw error;
     }
     if (attempt === maxAttempts) {
-      const body = await response.text();
-      throw new Error(
-        `AniList request failed: ${response.status} ${body || ""}`.trim()
-      );
+      const body = await parseResponseBody(response);
+      const error: AniListError = { status: response.status, body };
+      throw error;
     }
     const retryAfter = response.headers.get("Retry-After");
     const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;

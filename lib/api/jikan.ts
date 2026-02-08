@@ -42,6 +42,18 @@ async function request<T>(path: string, params?: Record<string, string>) {
   }
   const maxAttempts = 4;
   const baseDelayMs = 700;
+  const parseResponseBody = async (response: Response) => {
+    try {
+      return await response.json();
+    } catch (error) {
+      return await response.text();
+    }
+  };
+
+  type JikanError = {
+    status: number;
+    body: unknown;
+  };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const response = await fetch(url.toString());
@@ -49,10 +61,14 @@ async function request<T>(path: string, params?: Record<string, string>) {
       return (await response.json()) as T;
     }
     if (response.status !== 429) {
-      throw new Error(`Jikan request failed: ${response.status}`);
+      const body = await parseResponseBody(response);
+      const error: JikanError = { status: response.status, body };
+      throw error;
     }
     if (attempt === maxAttempts) {
-      throw new Error(`Jikan request failed: ${response.status}`);
+      const body = await parseResponseBody(response);
+      const error: JikanError = { status: response.status, body };
+      throw error;
     }
     const retryAfter = response.headers.get("Retry-After");
     const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
@@ -63,7 +79,11 @@ async function request<T>(path: string, params?: Record<string, string>) {
     await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
   }
 
-  throw new Error("Jikan request failed: exceeded retry attempts");
+  const error: JikanError = {
+    status: 429,
+    body: "Jikan request failed: exceeded retry attempts",
+  };
+  throw error;
 }
 
 export async function searchJikan(query: string, page = 1) {
