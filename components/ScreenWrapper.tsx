@@ -2,7 +2,8 @@ import type { PropsWithChildren } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { View } from "react-native";
 
-const baseClasses = "flex-1 bg-brand-background";
+const baseClasses =
+  "flex-1 bg-brand-light-background dark:bg-brand-background";
 const contentClasses = "flex-1 px-4 py-3";
 
 type ScreenWrapperProps = PropsWithChildren<{
