@@ -1,0 +1,52 @@
+---
+description: ShowTracker project-wide conventions and context
+alwaysApply: true
+---
+
+# ShowTracker
+
+Cross-platform show/anime/movie tracking app built with Expo (React Native + Web), Convex backend, NativeWind styling.
+
+## Tech Stack
+- Expo SDK 52+ (React Native + React Native Web)
+- TypeScript (strict mode)
+- Expo Router v4 (file-based routing)
+- NativeWind v4 (Tailwind CSS for RN)
+- Convex (real-time DB, server functions, auth)
+- Zustand + react-native-mmkv (client state)
+- APIs: TMDB, TVMaze, AniList, Jikan
+
+## Project Structure
+- `app/` — Expo Router screens and layouts
+- `components/` — Reusable UI components
+- `lib/` — Business logic, API clients, utilities
+- `lib/api/` — External API clients
+- `convex/` — Convex backend (schema, queries, mutations, actions)
+- `constants/` — Theme colors, config values
+- `hooks/` — Custom React hooks
+- `store/` — Zustand stores
+- `types/` — Shared TypeScript types
+
+## Code Conventions
+- Functional components only, prefer named exports
+- Use NativeWind className for all styling (no StyleSheet.create)
+- Convex: one file per domain (shows.ts, users.ts, lists.ts)
+- API clients return normalized types from lib/api/types.ts
+- File naming: kebab-case for files, PascalCase for components
+- Imports: absolute paths via `@/` alias
+
+## Never Do
+- Never commit API keys or secrets
+- Never make API calls directly from components — use lib/api/ clients
+- Never store images in Convex — use URL references
+- Never bypass Convex for data that needs to sync
+- Never use StyleSheet.create — use NativeWind className
+
+## Key Commands
+- `npx expo start` — Dev server
+- `npx convex dev` — Convex dev backend
+- `npx expo lint` — Lint
+
+## Docs
+- See docs/PLAN.md, docs/ARCHITECTURE.md, docs/TECH_STACK.md, docs/API_REFERENCE.md
+- See PROGRESS.md for current status

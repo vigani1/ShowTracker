@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.convex.dev)",
+      "WebFetch(domain:developer.themoviedb.org)",
+      "WebFetch(domain:www.tvmaze.com)",
+      "WebFetch(domain:docs.anilist.co)",
+      "WebFetch(domain:docs.api.jikan.moe)",
+      "WebFetch(domain:simkl.docs.apiary.io)",
+      "WebFetch(domain:www.trustpilot.com)",
+      "WebFetch(domain:justuseapp.com)",
+      "WebFetch(domain:www.makeuseof.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:taiga.moe)",
+      "Bash(node --version:*)",
+      "Bash(npm --version:*)",
+      "Bash(npx:*)",
+      "WebFetch(domain:www.humanlayer.dev)",
+      "WebFetch(domain:agents.md)",
+      "WebFetch(domain:www.callstack.com)",
+      "WebFetch(domain:eclipsesource.com)",
+      "WebFetch(domain:github.blog)",
+      "WebFetch(domain:kau.sh)",
+      "WebFetch(domain:skills.sh)",
+      "Bash(dir:*)",
+      "Bash(gh auth:*)",
+      "Bash(git -C \"D:/Projects-Personal/ShowTracker\" config user.name)",
+      "Bash(git -C \"D:/Projects-Personal/ShowTracker\" config user.email)",
+      "Bash(gh api:*)",
+      "Bash(git init:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
