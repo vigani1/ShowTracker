@@ -1,19 +1,29 @@
 # ShowTracker Progress
 
 ## Current Phase
-Phase 1: Project Setup (pending)
+Phase 3: Core Screens (Discovery, Search, Show Detail) (in progress)
 
 ## Completed
 - [x] Project planning and research (docs/PLAN.md)
 - [x] Tech stack selection
 - [x] API selection and evaluation
 - [x] Repo organization for AI agents
-
-## In Progress
-- [ ] Phase 1: Project setup (Expo init, NativeWind, Convex, Expo Router)
+- [x] Phase 1: Project setup (Expo init, NativeWind, Convex, Expo Router)
+  - [x] Scaffold Expo Router layouts and placeholder screens
+  - [x] Configure NativeWind + Tailwind presets
+  - [x] Add initial Convex schema and environment template
+  - [x] Create base UI components (Card, Button, Badge, ScreenWrapper)
+  - [x] Configure dark mode support (NativeWind + system preference)
+- [x] Phase 2: API Layer + Data Infrastructure
+  - [x] Build TMDB client (lib/api/tmdb.ts)
+  - [x] Build AniList GraphQL client (lib/api/anilist.ts)
+  - [x] Build TVMaze client (lib/api/tvmaze.ts)
+  - [x] Build Jikan client (lib/api/jikan.ts)
+  - [x] Create unified types (NormalizedShow, NormalizedEpisode, NormalizedSeason)
+  - [x] Build normalizer functions for each API → unified types
+  - [x] Implement Convex show caching mutation (upsert show)
 
 ## Pending
-- [ ] Phase 2: API Layer + Data Infrastructure
 - [ ] Phase 3: Core Screens (Discovery, Search, Show Detail)
 - [ ] Phase 4: Tracking Features (Watchlist, Episode marking)
 - [ ] Phase 5: Schedule View
