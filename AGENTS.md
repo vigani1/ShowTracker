@@ -36,6 +36,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 ## Code Conventions
 - Functional components only, prefer named exports
 - Use NativeWind className for all styling (no StyleSheet.create)
+- For any frontend/UI work, always use the `frontend-design` skill as the default design workflow.
 - Convex queries/mutations in `convex/` directory, one file per domain (shows.ts, users.ts, lists.ts)
 - API clients return normalized types defined in `lib/api/types.ts`
 - File naming: kebab-case for files, PascalCase for components
@@ -56,6 +57,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - Never bypass Convex for data that needs to sync — all user data goes through Convex
 - Never use StyleSheet.create — always use NativeWind className
 - Never push directly to main — always use a branch + PR
+- User runs their own frontend/backend server instances: never start/restart local app/backend servers (e.g., `npx expo start`, `npx convex dev`) unless the user explicitly asks, or it is mandatory to validate a required fix.
 
 ## Detailed Docs
 - See docs/PLAN.md for implementation phases and feature breakdown

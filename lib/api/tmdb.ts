@@ -2,9 +2,44 @@ import { getCached, setCached } from "@/lib/api/cache";
 import { normalizeTmdbEpisode } from "@/lib/api/normalize";
 import type { NormalizedEpisode } from "@/lib/api/types";
 
-const tmdbBaseUrl =
-  process.env.EXPO_PUBLIC_TMDB_BASE_URL ?? "https://api.themoviedb.org/3";
-const tmdbApiKey = process.env.EXPO_PUBLIC_TMDB_API_KEY;
+function normalizeTmdbBaseUrl(input?: string) {
+  const fallback = "https://api.themoviedb.org/3";
+  if (!input?.trim()) {
+    return fallback;
+  }
+
+  const trimmed = input.trim().replace(/\/+$/, "");
+
+  try {
+    const parsed = new URL(trimmed);
+    const isTmdbHost = parsed.hostname === "api.themoviedb.org";
+    const hasVersionPath = parsed.pathname === "/3";
+    if (isTmdbHost && !hasVersionPath) {
+      parsed.pathname = "/3";
+      return parsed.toString().replace(/\/+$/, "");
+    }
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return fallback;
+  }
+}
+
+function sanitizeCredential(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("your_")) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+const tmdbBaseUrl = normalizeTmdbBaseUrl(process.env.EXPO_PUBLIC_TMDB_BASE_URL);
+const tmdbApiKey = sanitizeCredential(process.env.EXPO_PUBLIC_TMDB_API_KEY);
+const tmdbReadAccessToken = sanitizeCredential(
+  process.env.EXPO_PUBLIC_TMDB_READ_ACCESS_TOKEN
+);
 
 const cacheTtlMs = 15 * 60 * 1000;
 
@@ -17,7 +52,7 @@ export type TmdbSearchResult = {
 
 export type TmdbMedia = {
   id: number;
-  media_type?: "tv" | "movie";
+  media_type?: "tv" | "movie" | "person";
   name?: string;
   title?: string;
   overview?: string;
@@ -45,6 +80,11 @@ export type TmdbShowDetails = {
   first_air_date?: string;
   release_date?: string;
   imdb_id?: string | null;
+  seasons?: {
+    season_number: number;
+    name?: string;
+    episode_count?: number;
+  }[];
 };
 
 export type TmdbSeasonDetails = {
@@ -67,15 +107,21 @@ export type TmdbEpisode = {
   runtime?: number | null;
 };
 
-function assertApiKey() {
-  if (!tmdbApiKey) {
-    throw new Error("Missing EXPO_PUBLIC_TMDB_API_KEY");
+function assertTmdbCredentials() {
+  if (!tmdbApiKey && !tmdbReadAccessToken) {
+    throw new Error(
+      "TMDB is not configured. Add EXPO_PUBLIC_TMDB_API_KEY or EXPO_PUBLIC_TMDB_READ_ACCESS_TOKEN to your env."
+    );
   }
 }
 
 function buildUrl(path: string, params: Record<string, string | number> = {}) {
-  const url = new URL(path, tmdbBaseUrl);
-  url.searchParams.set("api_key", tmdbApiKey ?? "");
+  const normalizedPath = path.replace(/^\/+/, "");
+  const base = tmdbBaseUrl.replace(/\/+$/, "");
+  const url = new URL(`${base}/${normalizedPath}`);
+  if (tmdbApiKey) {
+    url.searchParams.set("api_key", tmdbApiKey);
+  }
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.set(key, String(value));
   });
@@ -83,10 +129,16 @@ function buildUrl(path: string, params: Record<string, string | number> = {}) {
 }
 
 async function request<T>(path: string, params?: Record<string, string | number>) {
-  assertApiKey();
+  assertTmdbCredentials();
   const url = buildUrl(path, params);
   const maxAttempts = 4;
   const baseDelayMs = 500;
+  // Prefer API key query auth when available to avoid browser preflight/CORS issues.
+  const headers: HeadersInit = !tmdbApiKey && tmdbReadAccessToken
+    ? {
+        Authorization: `Bearer ${tmdbReadAccessToken}`,
+      }
+    : {};
   const parseResponseBody = async (response: Response) => {
     try {
       return await response.json();
@@ -101,7 +153,7 @@ async function request<T>(path: string, params?: Record<string, string | number>
   };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), { headers });
     if (response.ok) {
       return (await response.json()) as T;
     }

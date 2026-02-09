@@ -1,4 +1,6 @@
 import { getCached, setCached } from "@/lib/api/cache";
+import { normalizeAniListMedia } from "@/lib/api/normalize";
+import type { NormalizedShow } from "@/lib/api/types";
 
 const anilistUrl =
   process.env.EXPO_PUBLIC_ANILIST_URL ?? "https://graphql.anilist.co";
@@ -37,6 +39,12 @@ export type AniListScheduleResult = {
     Page: {
       airingSchedules: AniListAiringSchedule[];
     };
+  };
+};
+
+export type AniListMediaByIdResult = {
+  data: {
+    Media: AniListMedia | null;
   };
 };
 
@@ -210,4 +218,42 @@ export async function getAniListAiringSchedule(
 
   setCached(cacheKey, data, cacheTtlMs);
   return data;
+}
+
+export async function getAniListMediaById(
+  id: number
+): Promise<NormalizedShow | null> {
+  const cacheKey = `anilist-media:${id}`;
+  const cached = getCached<NormalizedShow>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const data = await request<AniListMediaByIdResult>(
+    `query ($id: Int) {
+      Media(id: $id, type: ANIME) {
+        id
+        title { romaji english native }
+        description
+        coverImage { large extraLarge }
+        bannerImage
+        genres
+        status
+        episodes
+        duration
+        averageScore
+        startDate { year month day }
+      }
+    }`,
+    { id }
+  );
+
+  const media = data.data.Media;
+  if (!media) {
+    return null;
+  }
+
+  const normalized = normalizeAniListMedia(media);
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
 }

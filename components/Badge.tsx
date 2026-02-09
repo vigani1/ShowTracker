@@ -1,8 +1,8 @@
 import { Text, View } from "react-native";
 
 const baseClasses =
-  "rounded-full border border-brand-primary/40 bg-brand-primary/20 px-3 py-1";
-const textClasses = "text-xs font-medium text-brand-primary";
+  "rounded-lg border border-brand-surface/55 bg-brand-primary/15 px-2.5 py-1";
+const textClasses = "text-[10px] font-bold uppercase tracking-[1px] text-brand-primary";
 
 type BadgeProps = {
   label: string;

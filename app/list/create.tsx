@@ -1,10 +1,13 @@
 import { Text, View } from "react-native";
+import { PageBackButton } from "@/components/PageBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 
 export default function CreateListScreen() {
   return (
     <ScreenWrapper>
-      <View className="gap-3">
+      <View className="gap-3 pt-12">
+        <PageBackButton fallbackHref="/" />
+
         <Text className="text-2xl font-semibold text-brand-light-text dark:text-brand-text">
           Create list
         </Text>

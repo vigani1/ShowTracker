@@ -6,13 +6,30 @@ function getWebStorage() {
   if (typeof window === "undefined") {
     return null;
   }
-  return window.localStorage;
+  try {
+    return window.localStorage;
+  } catch (error) {
+    console.error("localStorage is unavailable", error);
+    return null;
+  }
 }
+
+const inMemoryWebStorage = new Map<string, string>();
 
 export const tokenStorage: TokenStorage = {
   async getItem(key) {
     if (Platform.OS === "web") {
-      return getWebStorage()?.getItem(key) ?? null;
+      try {
+        const storage = getWebStorage();
+        const value = storage?.getItem(key) ?? inMemoryWebStorage.get(key) ?? null;
+        if (value !== null) {
+          inMemoryWebStorage.set(key, value);
+        }
+        return value;
+      } catch (error) {
+        console.error("Web storage getItem failed", error);
+        return inMemoryWebStorage.get(key) ?? null;
+      }
     }
     try {
       return await SecureStore.getItemAsync(key);
@@ -23,7 +40,13 @@ export const tokenStorage: TokenStorage = {
   },
   async setItem(key, value) {
     if (Platform.OS === "web") {
-      getWebStorage()?.setItem(key, value);
+      try {
+        getWebStorage()?.setItem(key, value);
+      } catch (error) {
+        console.error("Web storage setItem failed", error);
+      } finally {
+        inMemoryWebStorage.set(key, value);
+      }
       return;
     }
     try {
@@ -34,7 +57,13 @@ export const tokenStorage: TokenStorage = {
   },
   async removeItem(key) {
     if (Platform.OS === "web") {
-      getWebStorage()?.removeItem(key);
+      try {
+        getWebStorage()?.removeItem(key);
+      } catch (error) {
+        console.error("Web storage removeItem failed", error);
+      } finally {
+        inMemoryWebStorage.delete(key);
+      }
       return;
     }
     try {

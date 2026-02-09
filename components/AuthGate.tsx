@@ -1,26 +1,26 @@
 import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
-import { useRouter, useSegments } from "expo-router";
+import { usePathname, useRouter } from "expo-router";
 import { useConvexAuth } from "convex/react";
 
 export function AuthGate({ children }: PropsWithChildren) {
   const { isAuthenticated, isLoading } = useConvexAuth();
-  const segments = useSegments();
+  const pathname = usePathname();
   const router = useRouter();
 
   useEffect(() => {
     if (isLoading) {
       return;
     }
-    const inAuthGroup = segments[0] === "(auth)";
-    if (!isAuthenticated && !inAuthGroup) {
+    const isAuthRoute = pathname === "/login" || pathname === "/register";
+    if (!isAuthenticated && !isAuthRoute) {
       router.replace("/login");
       return;
     }
-    if (isAuthenticated && inAuthGroup) {
+    if (isAuthenticated && isAuthRoute) {
       router.replace("/");
     }
-  }, [isAuthenticated, isLoading, router, segments]);
+  }, [isAuthenticated, isLoading, pathname, router]);
 
   if (isLoading) {
     return null;
