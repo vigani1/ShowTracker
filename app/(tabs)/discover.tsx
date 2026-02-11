@@ -1,21 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
   ScrollView,
   Text,
   View,
-  Pressable,
   useWindowDimensions,
+  type LayoutChangeEvent,
 } from "react-native";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { getTabContentWidth } from "@/constants/navigation";
+import { SegmentedControl } from "@/components/SegmentedControl";
+import { HeroSection } from "@/components/HeroSection";
+import { Button } from "@/components/Button";
 import { getTrendingAniList } from "@/lib/api/anilist";
 import { normalizeAniListMedia, normalizeTmdbMedia } from "@/lib/api/normalize";
 import { getTrendingTmdb } from "@/lib/api/tmdb";
 import type { NormalizedShow } from "@/lib/api/types";
 import { createShowRouteId } from "@/lib/show-route";
+import { Link } from "expo-router";
 
 type DiscoverTab = "tv" | "anime" | "movie";
 
@@ -25,120 +28,56 @@ type SectionState = {
   items: NormalizedShow[];
 };
 
-const initialSectionState: SectionState = {
-  isLoading: true,
-  error: null,
-  items: [],
-};
+const initialSectionState: SectionState = { isLoading: true, error: null, items: [] };
 
 function getSectionError(reason: unknown, fallback: string) {
-  if (reason instanceof Error) {
-    return reason.message;
-  }
-
-  if (
-    typeof reason === "object" &&
-    reason !== null &&
-    "status" in reason &&
-    typeof (reason as { status?: unknown }).status === "number"
-  ) {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "object" && reason !== null && "status" in reason) {
     return `${fallback} (API ${(reason as { status: number }).status})`;
   }
-
   return fallback;
 }
 
-function DiscoverTabs({
-  value,
-  onChange,
-}: {
-  value: DiscoverTab;
-  onChange: (next: DiscoverTab) => void;
-}) {
-  return (
-    <View className="mb-3 flex-row rounded-2xl border-2 border-brand-frame/55 bg-brand-light-surface p-1 dark:border-brand-surface/75 dark:bg-brand-surface/75">
-      {([
-        { key: "tv", label: "TV Shows" },
-        { key: "anime", label: "Anime" },
-        { key: "movie", label: "Movies" },
-      ] as const).map((tab) => {
-        const active = value === tab.key;
-        return (
-          <Pressable
-            key={tab.key}
-            onPress={() => onChange(tab.key)}
-            className={`flex-1 items-center rounded-xl px-2 py-2 ${
-              active ? "bg-brand-primary" : "bg-transparent"
-            }`}
-          >
-            <Text
-            className={`text-[11px] font-bold uppercase tracking-[1.2px] ${
-              active
-                ? "text-white"
-                : "text-brand-ink dark:text-brand-text"
-            }`}
-          >
-            {tab.label}
-          </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
+const tabOptions = [
+  { value: "tv" as const, label: "TV Shows" },
+  { value: "anime" as const, label: "Anime" },
+  { value: "movie" as const, label: "Movies" },
+];
 
 function getGridColumnCount(width: number, isWeb: boolean) {
-  if (!isWeb) {
-    return 2;
-  }
-  if (width >= 1800) {
-    return 8;
-  }
-  if (width >= 1500) {
-    return 7;
-  }
-  if (width >= 1260) {
-    return 6;
-  }
-  if (width >= 1040) {
-    return 5;
-  }
-  if (width >= 920) {
-    return 4;
-  }
-  return 2;
+  if (!isWeb) return 2;
+  if (width >= 1800) return 8;
+  if (width >= 1500) return 7;
+  if (width >= 1260) return 6;
+  if (width >= 1040) return 5;
+  if (width >= 920) return 4;
+  return 3;
 }
 
-function getGridItemWidth(columns: number) {
-  if (columns === 8) {
-    return "11.8%";
-  }
-  if (columns === 7) {
-    return "13.7%";
-  }
-  if (columns === 6) {
-    return "15.8%";
-  }
-  if (columns === 5) {
-    return "19%";
-  }
-  if (columns === 4) {
-    return "23.6%";
-  }
-  if (columns === 3) {
-    return "31.8%";
-  }
-  return "48%";
+const GRID_GAP = 12;
+
+function SectionHeader({ title }: { title: string }) {
+  return (
+    <View className="mb-3 flex-row items-center justify-between">
+      <Text className="text-lg font-bold text-text-primary">
+        {title}
+      </Text>
+    </View>
+  );
 }
 
 export default function DiscoverScreen() {
   const [activeTab, setActiveTab] = useState<DiscoverTab>("tv");
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
-  const contentWidth = getTabContentWidth(width, isWeb);
+  const [gridWidth, setGridWidth] = useState(0);
   const [tvState, setTvState] = useState<SectionState>(initialSectionState);
   const [animeState, setAnimeState] = useState<SectionState>(initialSectionState);
   const [movieState, setMovieState] = useState<SectionState>(initialSectionState);
+
+  const onGridLayout = useCallback((e: LayoutChangeEvent) => {
+    setGridWidth(e.nativeEvent.layout.width);
+  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -154,144 +93,115 @@ export default function DiscoverScreen() {
         getTrendingTmdb("movie"),
       ]);
 
-      if (isCancelled) {
-        return;
-      }
+      if (isCancelled) return;
 
       if (tvResult.status === "fulfilled") {
-        setTvState({
-          isLoading: false,
-          error: null,
-          items: tvResult.value.results.slice(0, 24).map(normalizeTmdbMedia),
-        });
+        setTvState({ isLoading: false, error: null, items: tvResult.value.results.slice(0, 24).map(normalizeTmdbMedia) });
       } else {
-        setTvState({
-          isLoading: false,
-          error: getSectionError(
-            tvResult.reason,
-            "Could not load trending TV shows right now."
-          ),
-          items: [],
-        });
+        setTvState({ isLoading: false, error: getSectionError(tvResult.reason, "Could not load trending TV shows."), items: [] });
       }
 
       if (animeResult.status === "fulfilled") {
-        setAnimeState({
-          isLoading: false,
-          error: null,
-          items: animeResult.value.data.Page.media
-            .slice(0, 24)
-            .map(normalizeAniListMedia),
-        });
+        setAnimeState({ isLoading: false, error: null, items: animeResult.value.data.Page.media.slice(0, 24).map(normalizeAniListMedia) });
       } else {
-        setAnimeState({
-          isLoading: false,
-          error: getSectionError(
-            animeResult.reason,
-            "Could not load trending anime right now."
-          ),
-          items: [],
-        });
+        setAnimeState({ isLoading: false, error: getSectionError(animeResult.reason, "Could not load trending anime."), items: [] });
       }
 
       if (movieResult.status === "fulfilled") {
-        setMovieState({
-          isLoading: false,
-          error: null,
-          items: movieResult.value.results.slice(0, 24).map(normalizeTmdbMedia),
-        });
+        setMovieState({ isLoading: false, error: null, items: movieResult.value.results.slice(0, 24).map(normalizeTmdbMedia) });
       } else {
-        setMovieState({
-          isLoading: false,
-          error: getSectionError(
-            movieResult.reason,
-            "Could not load popular movies right now."
-          ),
-          items: [],
-        });
+        setMovieState({ isLoading: false, error: getSectionError(movieResult.reason, "Could not load popular movies."), items: [] });
       }
     };
 
     void loadDiscovery();
-
-    return () => {
-      isCancelled = true;
-    };
+    return () => { isCancelled = true; };
   }, []);
 
   const activeState = useMemo(() => {
-    if (activeTab === "anime") {
-      return animeState;
-    }
-    if (activeTab === "movie") {
-      return movieState;
-    }
+    if (activeTab === "anime") return animeState;
+    if (activeTab === "movie") return movieState;
     return tvState;
   }, [activeTab, animeState, movieState, tvState]);
 
-  const panelTitle =
-    activeTab === "anime" ? "Anime" : activeTab === "movie" ? "Movies" : "TV";
-  const columns = getGridColumnCount(contentWidth, isWeb);
-  const gridItemWidth = getGridItemWidth(columns);
-  const showOverview = isWeb && contentWidth >= 1660;
+  const heroShow = activeState.items[0] ?? null;
+  // Use measured grid width (accounts for scrollbar, sidebar, padding)
+  // Fall back to window width estimate before first layout
+  const effectiveWidth = gridWidth || width;
+  const columns = getGridColumnCount(effectiveWidth, isWeb);
+  const gridItemWidth = gridWidth
+    ? Math.floor((gridWidth - (columns - 1) * GRID_GAP) / columns)
+    : Math.floor((effectiveWidth / (columns + 0.5))); // conservative fallback
 
   return (
-    <ScreenWrapper>
+    <ScreenWrapper contentClassName="px-0 py-0">
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View className="pb-0">
-          <View className="mb-3 flex-row items-center justify-between px-1">
-            <Text className="pt-[4px] text-[10px] font-bold uppercase tracking-[1.5px] text-brand-ink-soft dark:text-[#d8c8ab]">
-              Discovery desk
-            </Text>
-            <Text className="pt-[4px] text-[10px] font-semibold uppercase tracking-[1.4px] text-brand-ink-soft dark:text-[#d8c8ab]">
-              {panelTitle}
-            </Text>
-          </View>
+        {/* Hero banner */}
+        {heroShow ? (
+          <HeroSection
+            imageUrl={heroShow.backdropUrl ?? heroShow.posterUrl}
+            title={heroShow.title}
+            subtitle={heroShow.overview ?? undefined}
+            mobileHeight={180}
+          >
+            <Link
+              href={{ pathname: "/show/[id]", params: { id: createShowRouteId(heroShow) } }}
+              asChild
+            >
+              <Button label="View Details" variant="primary" className="self-start" />
+            </Link>
+          </HeroSection>
+        ) : null}
 
-          <DiscoverTabs value={activeTab} onChange={setActiveTab} />
+        <View className="px-4 pt-4">
+          <Text className="mb-1 text-3xl font-extrabold tracking-[-0.5px] text-text-primary">
+            Discover
+          </Text>
+          <Text className="mb-4 text-sm text-text-secondary">
+            Trending across TV, Anime, and Movies
+          </Text>
+
+          <SegmentedControl options={tabOptions} value={activeTab} onValueChange={setActiveTab} className="mb-5" />
 
           {activeState.isLoading ? (
-            <View className="items-center gap-2 rounded-2xl border-2 border-brand-frame/50 bg-brand-light-surface/80 py-8 dark:border-brand-surface/65 dark:bg-brand-surface/70">
-              <ActivityIndicator size="small" color="#cf5d3f" />
-              <Text className="text-xs font-semibold uppercase tracking-[1.2px] text-brand-ink-soft dark:text-[#d8c8ab]">
-                Loading trending titles
-              </Text>
+            <View className="items-center gap-2 rounded-2xl border border-border-default bg-bg-surface py-8">
+              <ActivityIndicator size="small" color="#ef4444" />
+              <Text className="text-sm text-text-secondary">Loading trending titles</Text>
             </View>
           ) : null}
 
           {activeState.error ? (
-            <View className="mb-4 rounded-2xl border-2 border-red-400/60 bg-red-500/10 p-4">
-              <Text className="text-sm text-red-700 dark:text-red-300">
-                {activeState.error}
-              </Text>
+            <View className="mb-4 rounded-2xl border border-primary/30 bg-primary/10 p-4">
+              <Text className="text-sm text-primary">{activeState.error}</Text>
             </View>
           ) : null}
 
-          <View className="flex-row flex-wrap justify-between gap-y-4">
-            {activeState.items.map((item, index) => (
-              <MediaPosterCard
-                key={`${item.id}-${activeTab}-${index}`}
-                show={item}
-                href={{
-                  pathname: "/show/[id]",
-                  params: { id: createShowRouteId(item) },
-                }}
-                rank={index < 3 ? index + 1 : undefined}
-                className={isWeb ? "" : "w-[48%]"}
-                containerStyle={isWeb ? { width: gridItemWidth } : undefined}
-                posterClassName={isWeb ? "h-56" : "h-64"}
-                showOverview={showOverview}
-              />
-            ))}
-          </View>
+          {!activeState.isLoading && activeState.items.length > 0 ? (
+            <>
+              <SectionHeader title={`Trending ${activeTab === "anime" ? "Anime" : activeTab === "movie" ? "Movies" : "TV Shows"}`} />
+              <View className="flex-row flex-wrap gap-3" onLayout={onGridLayout}>
+                {activeState.items.map((item, index) => (
+                  <View key={`${item.id}-${activeTab}-${index}`} style={isWeb ? { width: gridItemWidth } : { width: "48%" }}>
+                    <MediaPosterCard
+                      show={item}
+                      href={{ pathname: "/show/[id]", params: { id: createShowRouteId(item) } }}
+                      rank={index < 3 ? index + 1 : undefined}
+                      className="w-full"
+                      posterClassName={isWeb ? "h-56" : "h-64"}
+                    />
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : null}
 
           {!activeState.isLoading && !activeState.error && !activeState.items.length ? (
-            <View className="mt-5 rounded-2xl border-2 border-brand-frame/50 bg-brand-light-surface px-4 py-5 dark:border-brand-surface/65 dark:bg-brand-surface/70">
-              <Text className="text-sm text-brand-ink-soft dark:text-[#e2d7c1]">
-                No discovery data available right now.
-              </Text>
+            <View className="mt-5 rounded-2xl border border-border-default bg-bg-surface px-4 py-5">
+              <Text className="text-sm text-text-secondary">No discovery data available right now.</Text>
             </View>
           ) : null}
+
+          <View className="h-8" />
         </View>
       </ScrollView>
     </ScreenWrapper>

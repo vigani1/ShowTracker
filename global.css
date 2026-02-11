@@ -2,20 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Midnight Pulse - base styles */
+:root {
+  --gradient-brand: linear-gradient(135deg, #ef4444, #f97316);
+  --gradient-cool: linear-gradient(135deg, #0ea5e9, #38bdf8);
+}
+
 html,
 body,
 #root {
   margin: 0;
   height: 100%;
-  background: #e9ddca;
+  background: #09090b;
   overflow: hidden;
   overscroll-behavior: none;
-}
-
-html.dark,
-body.dark,
-html.dark #root,
-body.dark #root,
-#root.dark {
-  background: #0f141d;
+  color-scheme: dark;
 }

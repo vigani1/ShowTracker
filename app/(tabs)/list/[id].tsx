@@ -10,15 +10,14 @@ export default function ListDetailScreen() {
     <ScreenWrapper>
       <View className="gap-3 pt-12">
         <PageBackButton fallbackHref="/" />
-
-        <Text className="text-2xl font-semibold text-brand-light-text dark:text-brand-text">
+        <Text className="text-2xl font-bold text-text-primary">
           Custom list
         </Text>
-        <Text className="text-base text-slate-600 dark:text-slate-400">
+        <Text className="text-sm text-text-secondary">
           List ID: {id}
         </Text>
-        <View className="rounded-2xl border border-brand-surface/40 bg-brand-light-surface p-4 dark:border-brand-surface dark:bg-brand-surface/60">
-          <Text className="text-sm text-brand-light-text dark:text-brand-text">
+        <View className="rounded-2xl border border-border-default bg-bg-surface p-4">
+          <Text className="text-sm text-text-secondary">
             List posters and reorder UI will live here.
           </Text>
         </View>

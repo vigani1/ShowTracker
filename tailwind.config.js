@@ -6,19 +6,25 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        "brand-background": "#0f141d",
-        "brand-surface": "#222a37",
-        "brand-primary": "#d16042",
-        "brand-text": "#f7efe2",
-        "brand-light-background": "#e9ddca",
-        "brand-light-surface": "#f8f0e2",
-        "brand-light-text": "#251c13",
-        "brand-ink": "#2e2316",
-        "brand-ink-soft": "#6f5e4b",
-        "brand-frame": "#2b2115",
-        "brand-frame-light": "#d8c5a7",
-        "brand-accent": "#2fb8ae",
-      }
+        // Midnight Pulse - dark (primary experience)
+        "bg-base": "#09090b",
+        "bg-surface": "#18181b",
+        "bg-elevated": "#27272a",
+        "bg-hover": "#3f3f46",
+        "border-default": "#27272a",
+        "border-bright": "#3f3f46",
+        // Signature accents
+        primary: "#ef4444",
+        "primary-glow": "#f97316",
+        accent: "#38bdf8",
+        "accent-dim": "#0ea5e9",
+        success: "#34d399",
+        warning: "#fbbf24",
+        // Text
+        "text-primary": "#fafafa",
+        "text-secondary": "#a1a1aa",
+        "text-muted": "#52525b",
+      },
     },
   },
   plugins: [],

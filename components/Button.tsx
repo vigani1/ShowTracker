@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 
-const baseClasses =
-  "items-center justify-center rounded-xl border-2 border-brand-frame/70 bg-brand-primary px-5 py-3 dark:border-brand-surface/85";
-const textClasses = "text-xs font-bold uppercase tracking-[1.2px] text-white";
+export type ButtonVariant = "primary" | "secondary" | "ghost";
 
 type ButtonProps = {
   label: string;
   onPress?: () => void;
+  variant?: ButtonVariant;
   className?: string;
   textClassName?: string;
   leftIcon?: ReactNode;
@@ -15,9 +14,22 @@ type ButtonProps = {
   disabled?: boolean;
 };
 
+const variantClasses: Record<ButtonVariant, string> = {
+  primary: "bg-primary rounded-xl px-5 py-3",
+  secondary: "rounded-xl px-5 py-3 border-2 border-border-bright",
+  ghost: "rounded-xl px-5 py-3",
+};
+
+const variantTextClasses: Record<ButtonVariant, string> = {
+  primary: "text-white font-semibold text-sm",
+  secondary: "text-text-primary font-semibold text-sm",
+  ghost: "text-primary font-semibold text-sm",
+};
+
 export function Button({
   label,
   onPress,
+  variant = "primary",
   className,
   textClassName,
   leftIcon,
@@ -28,13 +40,18 @@ export function Button({
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      className={`${baseClasses} ${disabled ? "opacity-60" : ""} ${
-        className ?? ""
-      }`.trim()}
+      className={`items-center justify-center ${variantClasses[variant]} ${
+        disabled ? "opacity-50" : ""
+      } ${className ?? ""}`.trim()}
+      style={({ pressed }) =>
+        pressed && !disabled
+          ? { opacity: 0.9, transform: [{ scale: 0.98 }] }
+          : undefined
+      }
     >
       <View className="flex-row items-center justify-center gap-2">
         {leftIcon ? <View className="items-center">{leftIcon}</View> : null}
-        <Text className={`${textClasses} ${textClassName ?? ""}`.trim()}>
+        <Text className={`${variantTextClasses[variant]} ${textClassName ?? ""}`.trim()}>
           {label}
         </Text>
         {rightIcon ? <View className="items-center">{rightIcon}</View> : null}

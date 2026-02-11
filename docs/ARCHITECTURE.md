@@ -64,9 +64,9 @@ User taps "Add to Watchlist"
 
 ### Mark Episode Watched
 ```
-User taps episode checkbox
-  → Convex mutation: markEpisodeWatched
-  → Inserts into watchedEpisodes table
+User toggles episode / season / full show watched state
+  → Convex mutations: toggleEpisodeWatched, markSeasonWatched, unmarkSeasonWatched
+  → Inserts/removes rows in watchedEpisodes table
   → Updates userShows.lastWatchedAt
   → Reactive queries update: watchlist badge count, stats, schedule highlighting
 ```
@@ -111,6 +111,14 @@ Login/Register
   → All Convex queries/mutations validate auth via ctx.auth.getUserIdentity()
 ```
 
+## Navigation Shell (Current UI)
+
+- Theme is currently dark-only (ThemeProvider forces `dark` mode).
+- Desktop web (`>=1024px`) uses a collapsible left sidebar (expanded/collapsed rail).
+- Mobile uses a bottom tab bar with 5 visible tabs: Home, Discover, Search, Watchlist, Profile.
+- `Schedule` is still routed and available from desktop nav, but hidden from mobile tabs for now.
+- `Extra` route is retained as hidden placeholder during navigation cleanup.
+
 ## Caching Strategy (3 Layers)
 
 | Layer | Storage | TTL | What's Cached |
@@ -152,7 +160,7 @@ scheduleCache — cached schedule data by date, independent of users
 
 ```
 app/
-  _layout.tsx              # Root: ConvexProvider + AuthProvider + ThemeProvider
+  _layout.tsx              # Root: Convex/Auth providers + dark-only ThemeProvider
   │
   ├── (auth)/
   │   _layout.tsx          # Auth layout (no tab bar)
@@ -160,12 +168,14 @@ app/
   │   register.tsx
   │
   ├── (tabs)/
-  │   _layout.tsx          # Tab bar with 5 tabs
-  │   index.tsx            # Discovery (Home)
+  │   _layout.tsx          # Desktop sidebar + mobile tab bar
+  │   index.tsx            # Home dashboard
+  │   discover.tsx         # Discovery
   │   search.tsx           # Search
   │   watchlist.tsx        # Watchlist
-  │   schedule.tsx         # Schedule
-  │   profile.tsx          # Profile + Stats + Settings
+  │   schedule.tsx         # Schedule (hidden from mobile tab bar)
+  │   profile.tsx          # Profile + account settings
+  │   Extra.tsx            # Hidden placeholder route
   │
   ├── show/
   │   [id].tsx             # Show detail (dynamic route)

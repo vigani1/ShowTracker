@@ -1,15 +1,25 @@
 import type { PropsWithChildren } from "react";
-import { View } from "react-native";
-
-const baseClasses =
-  "rounded-2xl border-2 border-brand-surface/65 bg-brand-light-surface p-4 dark:bg-brand-surface/80";
+import { Pressable, View } from "react-native";
 
 interface CardProps extends PropsWithChildren {
   className?: string;
+  onPress?: () => void;
 }
 
-export function Card({ children, className }: CardProps) {
-  return (
-    <View className={`${baseClasses} ${className ?? ""}`.trim()}>{children}</View>
-  );
+export function Card({ children, className, onPress }: CardProps) {
+  const base = "rounded-2xl border border-border-default bg-bg-elevated overflow-hidden";
+
+  if (onPress) {
+    return (
+      <Pressable
+        onPress={onPress}
+        className={`${base} ${className ?? ""}`.trim()}
+        style={({ pressed }) => (pressed ? { opacity: 0.95 } : undefined)}
+      >
+        {children}
+      </Pressable>
+    );
+  }
+
+  return <View className={`${base} ${className ?? ""}`.trim()}>{children}</View>;
 }

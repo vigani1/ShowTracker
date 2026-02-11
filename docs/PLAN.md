@@ -72,7 +72,7 @@ Building a cross-platform show/anime/movie tracking app to replace TVTime, which
 
 ### Recommended Additions
 12. **Batch mark** - "Mark all up to here" for catching up on episodes
-13. **Dark/Light mode** - System-aware theme toggle
+13. **Theme expansion (optional)** - Re-introduce Light mode later (current production shell is dark-only)
 14. **Data export** - JSON export of all user data
 15. **Pull-to-refresh** - Standard refresh pattern on all lists
 16. **Offline caching** - Recently viewed shows/watchlist available offline via MMKV
@@ -88,12 +88,14 @@ app/
     login.tsx              # Login screen
     register.tsx           # Register screen
   (tabs)/
-    _layout.tsx            # Tab bar layout (5 tabs)
-    index.tsx              # Discovery/Home
+    _layout.tsx            # Desktop sidebar + mobile bottom tab layout
+    index.tsx              # Home dashboard
+    discover.tsx           # Discovery
     search.tsx             # Search
     watchlist.tsx          # Watchlist
-    schedule.tsx           # Schedule calendar
-    profile.tsx            # Profile + Stats + Settings
+    schedule.tsx           # Schedule calendar (hidden from mobile tab bar)
+    profile.tsx            # Profile + account/settings
+    Extra.tsx              # Hidden placeholder route
   show/
     [id].tsx               # Show detail (type+externalId in URL)
   list/
@@ -237,7 +239,7 @@ lib/
 4. Configure Expo Router with tab navigation layout
 5. Set up TMDB API key management (environment variables)
 6. Create base UI components (Card, Button, Badge, ScreenWrapper)
-7. Configure dark mode support (NativeWind + system preference)
+7. Configure dark-mode-first theming (currently enforced dark-only)
 
 ### Phase 2: API Layer + Data Infrastructure
 1. Build TMDB client (`lib/api/tmdb.ts`) — search, trending, show/season/episode details
@@ -285,7 +287,7 @@ lib/
    - Breakdown by media type (TV / Anime / Movies)
    - Shows completed count
    - Current streak (consecutive days with watched episodes)
-2. **Profile screen** — Stats cards + settings (theme toggle, export data, logout)
+2. **Profile screen** — Stats cards + settings (export data, logout, account controls)
 
 ### Phase 8: Polish
 1. Skeleton loading states for all screens

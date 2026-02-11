@@ -1,6 +1,6 @@
 import type { Href } from "expo-router";
-import { Link } from "expo-router";
 import { Image } from "expo-image";
+import { Link } from "expo-router";
 import {
   Pressable,
   Text,
@@ -19,6 +19,8 @@ interface MediaPosterCardProps {
   posterClassName?: string;
   containerStyle?: StyleProp<ViewStyle>;
   showOverview?: boolean;
+  progress?: number;
+  unwatchedCount?: number;
 }
 
 const mediaTypeLabel: Record<NormalizedShow["mediaType"], string> = {
@@ -35,15 +37,22 @@ export function MediaPosterCard({
   posterClassName,
   containerStyle,
   showOverview,
+  progress,
+  unwatchedCount,
 }: MediaPosterCardProps) {
   return (
     <Link href={href} asChild>
       <Pressable
         className={`w-36 ${className ?? ""}`.trim()}
-        style={containerStyle}
+        style={({ pressed }) => [
+          containerStyle,
+          pressed && { opacity: 0.95, transform: [{ scale: 0.98 }] },
+        ]}
       >
         <View
-          className={`relative overflow-hidden rounded-2xl border-2 border-brand-frame/55 bg-brand-light-surface dark:border-brand-surface/70 dark:bg-brand-surface/70 ${posterClassName ?? "h-56"}`.trim()}
+          className={`relative overflow-hidden rounded-2xl border border-border-default bg-bg-elevated ${
+            posterClassName ?? "h-56"
+          }`.trim()}
         >
           {show.posterUrl ? (
             <Image
@@ -52,46 +61,60 @@ export function MediaPosterCard({
               contentFit="cover"
             />
           ) : (
-            <View className="h-full w-full items-center justify-center bg-brand-surface/20 px-3">
-              <Text className="text-center text-sm font-semibold text-brand-light-text dark:text-brand-text">
+            <View className="h-full w-full items-center justify-center bg-bg-surface px-3">
+              <Text className="text-center text-sm font-semibold text-text-primary">
                 {show.title}
               </Text>
             </View>
           )}
 
-          <View className="absolute inset-x-0 bottom-0 border-t-2 border-brand-frame/50 bg-[#fff5df]/92 px-2 py-1.5 dark:border-brand-surface/70 dark:bg-[#1e2734]/90">
-            <Text
-              className="text-[10px] font-bold uppercase tracking-[1.3px] text-brand-ink dark:text-brand-text"
-              numberOfLines={1}
-            >
-              {mediaTypeLabel[show.mediaType]}
-            </Text>
+          {/* Dark gradient overlay at bottom - reduced */}
+          <View
+            pointerEvents="none"
+            className="absolute inset-x-0 bottom-0 h-12"
+            style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
+          />
+
+          {/* Bottom type + badge */}
+          <View className="absolute bottom-0 left-0 right-0 flex-row items-center justify-between gap-2 px-2.5 pb-2 pt-4">
+            <Badge label={mediaTypeLabel[show.mediaType]} />
+            {typeof unwatchedCount === "number" && unwatchedCount > 0 ? (
+              <Badge label={String(unwatchedCount)} variant="accent" />
+            ) : null}
           </View>
 
+          {/* Progress bar */}
+          {typeof progress === "number" && progress > 0 && progress < 1 ? (
+            <View className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
+              <View className="h-full rounded-r bg-primary" style={{ width: `${progress * 100}%` }} />
+            </View>
+          ) : null}
+
           {typeof rank === "number" ? (
-            <Badge
-              label={`Top ${rank}`}
-              className="absolute left-2 top-2 border-brand-surface bg-[#fff3d8]"
-              textClassName="text-[10px] text-brand-light-text"
-            />
+            <View
+              className="absolute left-2 top-2 rounded-full bg-bg-base/95 px-2 py-1"
+              style={{
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 1 },
+                shadowOpacity: 0.3,
+                shadowRadius: 2,
+                elevation: 3,
+              }}
+            >
+              <Text className="text-xs font-bold text-primary">#{rank}</Text>
+            </View>
           ) : null}
         </View>
 
-        <View className="mt-2 gap-1 px-1">
-          <Text
-            className="font-serif text-sm font-semibold text-brand-ink dark:text-brand-text"
-            numberOfLines={1}
-          >
+        <View className="mt-2 gap-0.5 px-0.5">
+          <Text className="text-sm font-semibold text-text-primary" numberOfLines={1}>
             {show.title}
           </Text>
-          <Text className="text-[11px] uppercase tracking-[1.2px] text-brand-ink-soft dark:text-[#d8c8ab]">
+          <Text className="text-xs text-text-secondary">
             {show.firstAired?.slice(0, 4) ?? "TBA"}
           </Text>
           {showOverview && show.overview ? (
-            <Text
-              className="text-[12px] leading-5 text-brand-ink-soft dark:text-[#e2d7c1]"
-              numberOfLines={3}
-            >
+            <Text className="text-xs leading-relaxed text-text-secondary" numberOfLines={3}>
               {show.overview}
             </Text>
           ) : null}

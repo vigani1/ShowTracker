@@ -1,11 +1,11 @@
 import {
   mutation,
   query,
-} from "@/convex/_generated/server";
-import type { MutationCtx, QueryCtx } from "@/convex/_generated/server.js";
-import type { Doc } from "@/convex/_generated/dataModel";
+} from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { auth } from "@/convex/auth";
+import { auth } from "./auth";
 
 const showInput = {
   tmdbId: v.optional(v.number()),
@@ -510,3 +510,54 @@ export const markSeasonWatched = mutation({
     };
   },
 });
+
+export const unmarkSeasonWatched = mutation({
+  args: {
+    show: v.object(showInput),
+    season: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const showId = await ensureShowRecordId(ctx, args.show);
+
+    const userShow = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .unique();
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .collect();
+
+    const seasonEpisodes = watchedEpisodes.filter(
+      (entry) => entry.season === args.season
+    );
+
+    let removedCount = 0;
+    for (const entry of seasonEpisodes) {
+      await ctx.db.delete(entry._id);
+      removedCount++;
+    }
+
+    if (userShow && removedCount > 0) {
+      const remainingCount = watchedEpisodes.length - removedCount;
+      const newStatus =
+        userShow.status === "completed" &&
+        args.show.totalEpisodes &&
+        remainingCount < args.show.totalEpisodes
+          ? "watching"
+          : userShow.status;
+
+      await ctx.db.patch(userShow._id, {
+        status: newStatus,
+      });
+    }
+
+    return {
+      removedCount,
+      watchedEpisodes: watchedEpisodes.length - removedCount,
+    };
+  },
+});
+
