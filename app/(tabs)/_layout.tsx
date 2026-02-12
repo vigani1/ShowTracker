@@ -1,25 +1,18 @@
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
-import { useState } from "react";
 import { Platform, View, useWindowDimensions } from "react-native";
 import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
-import { Sidebar } from "@/components/Sidebar";
 
 export default function TabsLayout() {
   const { width } = useWindowDimensions();
   const isDesktop = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const mobileTabBarHeight = Platform.OS === "ios" ? 70 : 62;
+  const mobileTabBarPaddingBottom = Platform.OS === "ios" ? 10 : 6;
+  const mobileTabBarPaddingTop = Platform.OS === "ios" ? 4 : 6;
 
   return (
-    <View className="flex-1 flex-row" style={{ backgroundColor: "#09090b" }}>
-      {isDesktop ? (
-        <Sidebar
-          collapsed={sidebarCollapsed}
-          onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
-        />
-      ) : null}
-      <View className="flex-1 min-w-0">
-        <Tabs
+    <View className="flex-1" style={{ backgroundColor: "#09090b" }}>
+      <Tabs
           screenOptions={{
             headerShown: false,
             tabBarHideOnKeyboard: true,
@@ -28,9 +21,9 @@ export default function TabsLayout() {
               : {
                   backgroundColor: "rgba(9,9,11,0.92)",
                   borderTopWidth: 0,
-                  height: 60,
-                  paddingBottom: 6,
-                  paddingTop: 6,
+                  height: mobileTabBarHeight,
+                  paddingBottom: mobileTabBarPaddingBottom,
+                  paddingTop: mobileTabBarPaddingTop,
                   elevation: 8,
                   shadowColor: "#000",
                   shadowOffset: { width: 0, height: -4 },
@@ -47,7 +40,7 @@ export default function TabsLayout() {
           }}
         >
           <Tabs.Screen
-            name="index"
+            name="home"
             options={{
               title: "Home",
               tabBarIcon: ({ color, focused }) => (
@@ -72,11 +65,15 @@ export default function TabsLayout() {
             }}
           />
           <Tabs.Screen
-            name="watchlist"
+            name="library"
             options={{
-              title: "Watchlist",
+              title: "Library",
               tabBarIcon: ({ color, focused }) => (
-                <Ionicons name={focused ? "list" : "list-outline"} size={22} color={color} />
+                <Ionicons
+                  name={focused ? "albums" : "albums-outline"}
+                  size={22}
+                  color={color}
+                />
               ),
             }}
           />
@@ -89,13 +86,7 @@ export default function TabsLayout() {
               ),
             }}
           />
-          <Tabs.Screen name="Extra" options={{ href: null }} />
-          <Tabs.Screen name="schedule" options={{ href: null }} />
-          <Tabs.Screen name="show/[id]" options={{ href: null }} />
-          <Tabs.Screen name="list/[id]" options={{ href: null }} />
-          <Tabs.Screen name="list/create" options={{ href: null }} />
         </Tabs>
-      </View>
     </View>
   );
 }

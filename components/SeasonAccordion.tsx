@@ -122,8 +122,8 @@ export function SeasonAccordion({
                   isFullyWatched 
                     ? "border-success" 
                     : !canMarkSeason
-                      ? "border-text-muted" 
-                      : "border-text-secondary"
+                      ? "border-border-default" 
+                      : "border-border-bright"
                 }`}
               />
               

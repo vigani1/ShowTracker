@@ -144,6 +144,14 @@ npx expo export --platform web
 | react-native-reanimated | Animations |
 | react-native-gesture-handler | Touch gestures |
 
+## Image Rendering Standard
+
+- Use `Image` from `react-native` for core media surfaces (posters, backdrops, and hero images) in app screens.
+- Normalize external image URLs with `toHttpsImageUrl(...)` before passing to `source={{ uri }}`.
+- Use `resizeMode="cover"` for poster/backdrop fills unless a specific screen needs different behavior.
+- If an image URL is missing or empty, render a placeholder view rather than mounting an image with an empty URI.
+- Treat `expo-image` as optional for targeted use cases, not the default for core show/movie poster rendering.
+
 ### State & Storage
 | Package | Purpose |
 |---------|---------|
@@ -188,9 +196,10 @@ npx convex dev --once
 # This creates/updates convex/_generated/ directory
 ```
 
-### Expo Image Not Loading on Web
-- Ensure `expo-image` is properly configured in `app.json`
-- On web, verify CORS headers allow image loading from TMDB/AniList CDNs
+### Poster/Backdrop Image Not Loading
+- Confirm the screen uses `Image` from `react-native` and not a mixed image API.
+- Ensure URL values are passed through `toHttpsImageUrl(...)` and are non-empty.
+- On web, verify CDN/CORS access for TMDB/AniList image URLs.
 
 ### Module Resolution Errors
 ```bash

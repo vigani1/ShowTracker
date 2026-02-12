@@ -1,34 +1,69 @@
 import { Link, type Href, useRouter } from "expo-router";
 import { useState } from "react";
-import { Platform, Text, TextInput, View, useWindowDimensions } from "react-native";
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useAuthActions } from "@convex-dev/auth/react";
-import { Button } from "@/components/Button";
-import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { useMutation } from "convex/react";
 import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { api } from "@/convex/_generated/api";
 
-const inputClasses =
-  "rounded-xl border border-border-default bg-bg-elevated px-4 py-3 text-base text-text-primary";
+const gradientBase = "absolute inset-0";
+const gradientDivider = "h-1 w-full";
+const gradientButton = "items-center justify-center py-3";
+
+const fieldBase =
+  "flex-row items-center gap-2 rounded-2xl border border-border-default bg-bg-base/70 px-3 py-2.5";
+
+function FeatureRow({
+  icon,
+  text,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  text: string;
+}) {
+  return (
+    <View className="flex-row items-center gap-2">
+      <View className="h-7 w-7 items-center justify-center rounded-lg bg-bg-base/60">
+        <Ionicons name={icon} size={14} color="#f97316" />
+      </View>
+      <Text className="text-sm text-text-secondary">{text}</Text>
+    </View>
+  );
+}
 
 export function LoginScreen() {
   const { signIn } = useAuthActions();
+  const checkPasswordAccount = useMutation(api.auth.checkPasswordAccount);
   const router = useRouter();
   const { width } = useWindowDimensions();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
-  const isDesktopAuth =
-    Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
+
+  const isDesktopAuth = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
 
   const handleAuthResult = (
     result: Awaited<ReturnType<typeof signIn>>,
-    messages: { verificationRequired: string; authenticationFailed: string; fallback: string }
+    messages: { fallback: string }
   ) => {
-    const authResult = result as Record<string, unknown>;
-    const redirectValue = authResult.redirect;
-    if (redirectValue instanceof URL || typeof redirectValue === "string") {
-      const redirectTarget = redirectValue.toString();
+    const { redirect, signingIn } = result;
+
+    if (redirect instanceof URL || typeof redirect === "string") {
+      const redirectTarget = redirect.toString();
       if (Platform.OS === "web" && typeof window !== "undefined") {
         window.location.href = redirectTarget;
       } else {
@@ -36,42 +71,52 @@ export function LoginScreen() {
       }
       return;
     }
-    if (authResult.signingIn === true) { 
-      setSuccess("Successfully signed in! Redirecting...");
-      // AuthGate will handle the redirect when auth state updates
-      return; 
+
+    if (signingIn === true) {
+      setSuccess("Signed in. Opening your dashboard...");
+      return;
     }
-    const verificationRequired = authResult.started === true || authResult.verificationRequired === true || authResult.requiresVerification === true || authResult.emailVerificationRequired === true || authResult.requiresEmailVerification === true || authResult.confirmationRequired === true || authResult.requiresConfirmation === true || authResult.needsConfirmation === true;
-    if (verificationRequired) { setError(messages.verificationRequired); return; }
-    const rawFailureSignal = (typeof authResult.errorCode === "string" && authResult.errorCode) || (typeof authResult.reason === "string" && authResult.reason) || (typeof authResult.error === "string" && authResult.error) || (typeof authResult.status === "string" && authResult.status) || "";
-    const failureSignal = rawFailureSignal.toLowerCase();
-    const authFailed = authResult.failed === true || authResult.success === false || authResult.authenticationFailed === true || authResult.invalidCredentials === true || failureSignal.includes("invalid") || failureSignal.includes("credential") || failureSignal.includes("unauthorized") || failureSignal.includes("auth_failed");
-    if (authFailed) { setError(messages.authenticationFailed); return; }
+
     setError(messages.fallback);
   };
 
   const handleSignIn = async () => {
-    if (!email.trim()) { setError("Please enter your email address."); return; }
-    if (!password) { setError("Please enter your password."); return; }
+    if (!email.trim()) {
+      setError("Please enter your email address.");
+      return;
+    }
+    if (!password) {
+      setError("Please enter your password.");
+      return;
+    }
+
     setIsPending(true);
     setError(null);
     setSuccess(null);
+
     try {
-      const result = await signIn("password", { flow: "signIn", email: email.trim().toLowerCase(), password });
-      handleAuthResult(result, { 
-        verificationRequired: "Please check your email and verify your account before signing in.", 
-        authenticationFailed: "Invalid email or password. Please try again.", 
-        fallback: "Sign in needs an additional verification step. Please check your email." 
+      // Account check now returns generic response to prevent enumeration
+      // Proceed with sign-in attempt directly
+      await checkPasswordAccount({ email });
+
+      const result = await signIn("password", {
+        flow: "signIn",
+        email: email.trim().toLowerCase(),
+        password,
+      });
+
+      handleAuthResult(result, {
+        fallback: "Invalid email or password. Please try again.",
       });
     } catch (authError) {
-      console.error("Login failed", authError);
       const errorMessage = authError instanceof Error ? authError.message : "";
+
       if (errorMessage.includes("Invalid") || errorMessage.includes("credential")) {
-        setError("Invalid email or password. Please try again.");
+        setError("Invalid email or password.");
       } else if (errorMessage.includes("network") || errorMessage.includes("connection")) {
-        setError("Network error. Please check your internet connection and try again.");
+        setError("Network error. Check your connection and try again.");
       } else {
-        setError("Something went wrong. Please try again later.");
+        setError("Something went wrong. Please try again.");
       }
     } finally {
       setIsPending(false);
@@ -82,81 +127,212 @@ export function LoginScreen() {
     setIsPending(true);
     setError(null);
     setSuccess(null);
+
     try {
       const result = await signIn("anonymous");
-      const authResult = result as Record<string, unknown>;
-      
-      if (authResult.signingIn === true) {
-        setSuccess("Continuing as guest...");
-        return;
-      }
-      
-      setError("Failed to continue as guest. Please try again.");
-    } catch (authError) {
-      console.error("Anonymous login failed", authError);
-      setError("Failed to continue as guest. Please try again.");
+      handleAuthResult(result, {
+        fallback: "Failed to continue as guest. Please try again.",
+      });
+    } catch {
+      setError("Failed to continue as guest.");
     } finally {
       setIsPending(false);
     }
   };
 
   return (
-    <ScreenWrapper>
-      <View className={`gap-5 ${isDesktopAuth ? "mx-auto max-w-md pt-12" : "pt-16"}`}>
-        <View>
-          <Text className="text-sm font-semibold text-primary">ShowTracker</Text>
-          <Text className="mt-2 text-3xl font-extrabold tracking-[-0.5px] text-text-primary">
-            Sign In
-          </Text>
-          <Text className="mt-1 text-sm text-text-secondary">
-            Access your watch data
-          </Text>
-        </View>
+    <SafeAreaView className="flex-1 bg-bg-base" edges={["top", "bottom"]}>
+      <View className="relative flex-1 overflow-hidden bg-bg-base">
+        <LinearGradient
+          colors={["#09090b", "#120d0d", "#09090b"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          className={gradientBase}
+        />
+        <View className="absolute -left-20 -top-12 h-56 w-56 rounded-full bg-primary/20" />
+        <View className="absolute -bottom-28 right-0 h-72 w-72 rounded-full bg-accent/10" />
 
-        <View className="gap-3 rounded-2xl border border-border-default bg-bg-surface p-5">
-          <TextInput
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
-            placeholder="Email"
-            placeholderTextColor="#52525b"
-            className={inputClasses}
-            editable={!isPending}
-          />
-          <TextInput
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            placeholder="Password"
-            placeholderTextColor="#52525b"
-            className={inputClasses}
-            editable={!isPending}
-          />
-          
-          {/* Error Message */}
-          {error ? (
-            <View className="rounded-lg bg-primary/10 p-3">
-              <Text className="text-sm text-primary">{error}</Text>
+        <View className={`flex-1 ${isDesktopAuth ? "flex-row" : ""}`}>
+          {isDesktopAuth ? (
+            <View className="w-[44%] justify-center border-r border-border-default px-8 py-9">
+              <View>
+                <View className="mb-5 flex-row items-center gap-2">
+                  <View className="h-8 w-8 items-center justify-center rounded-xl bg-primary/20">
+                    <Text className="text-sm font-black text-primary">ST</Text>
+                  </View>
+                  <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    ShowTracker
+                  </Text>
+                </View>
+
+                <Text className="text-5xl font-black tracking-tight text-text-primary">
+                  Track everything.
+                </Text>
+                <Text className="mt-2 text-5xl font-black tracking-tight text-primary">
+                  Miss nothing.
+                </Text>
+
+                <Text className="mt-5 max-w-md text-sm leading-relaxed text-text-secondary">
+                  Your watchlist, progress, upcoming episodes, and stats in one fast,
+                  focused workspace.
+                </Text>
+
+                <View className="mt-7 gap-3">
+                  <FeatureRow icon="flash-outline" text="Instant progress sync across web and mobile" />
+                  <FeatureRow icon="calendar-outline" text="Upcoming episodes grouped by day" />
+                  <FeatureRow icon="stats-chart-outline" text="Detailed watch streaks and time insights" />
+                </View>
+              </View>
             </View>
           ) : null}
-          
-          {/* Success Message */}
-          {success ? (
-            <View className="rounded-lg bg-success/10 p-3">
-              <Text className="text-sm text-success">{success}</Text>
-            </View>
-          ) : null}
-          
-          <Button label={isPending ? "Signing in..." : "Sign in"} onPress={handleSignIn} disabled={isPending} />
-          <Button label="Continue as guest" variant="secondary" onPress={handleAnonymousSignIn} disabled={isPending} />
-        </View>
 
-        <Link href="/register" className="text-sm font-semibold text-primary">
-          Need an account? Create one
-        </Link>
+          <ScrollView
+            className="flex-1"
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerClassName="flex-grow"
+          >
+            <View
+              className={`flex-1 ${
+                isDesktopAuth ? "items-center justify-center px-8 py-8" : "px-0 pb-0 pt-0"
+              }`}
+            >
+              {!isDesktopAuth ? (
+                <View className="mb-4 rounded-2xl border border-border-default bg-bg-surface/80 p-4">
+                  <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    Welcome back
+                  </Text>
+                  <Text className="mt-1 text-lg font-black text-text-primary">
+                    Continue your watch journey
+                  </Text>
+                </View>
+              ) : null}
+
+              <View
+                className={`w-full overflow-hidden bg-bg-surface/95 ${
+                  isDesktopAuth
+                    ? "max-w-md rounded-3xl border border-border-default"
+                    : "rounded-none"
+                }`}
+              >
+                <LinearGradient
+                  colors={["rgba(239,68,68,0.2)", "rgba(56,189,248,0.06)", "transparent"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  className={gradientDivider}
+                />
+
+                <View className="px-5 pb-5 pt-4">
+                  <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    Sign in
+                  </Text>
+                  <Text className="mt-1 text-3xl font-black tracking-tight text-text-primary">
+                    Welcome back
+                  </Text>
+                  <Text className="mt-1 text-sm text-text-secondary">
+                    Access your profile, library, and schedule.
+                  </Text>
+
+                  <View className="mt-5 gap-3">
+                    <View className={fieldBase}>
+                      <View className="h-8 w-8 items-center justify-center rounded-xl bg-bg-elevated/70">
+                        <Ionicons name="mail-outline" size={16} color="#a1a1aa" />
+                      </View>
+                      <TextInput
+                        value={email}
+                        onChangeText={setEmail}
+                        autoCapitalize="none"
+                        keyboardType="email-address"
+                        placeholder="Email"
+                        placeholderTextColor="#52525b"
+                        className="flex-1 text-base text-text-primary"
+                        editable={!isPending}
+                      />
+                    </View>
+
+                    <View className={fieldBase}>
+                      <View className="h-8 w-8 items-center justify-center rounded-xl bg-bg-elevated/70">
+                        <Ionicons name="lock-closed-outline" size={16} color="#a1a1aa" />
+                      </View>
+                      <TextInput
+                        value={password}
+                        onChangeText={setPassword}
+                        secureTextEntry={!showPassword}
+                        placeholder="Password"
+                        placeholderTextColor="#52525b"
+                        className="flex-1 text-base text-text-primary"
+                        editable={!isPending}
+                      />
+                      <Pressable
+                        onPress={() => setShowPassword((prev) => !prev)}
+                        className="h-8 w-8 items-center justify-center rounded-lg bg-bg-elevated/60"
+                      >
+                        <Ionicons
+                          name={showPassword ? "eye-off-outline" : "eye-outline"}
+                          size={15}
+                          color="#a1a1aa"
+                        />
+                      </Pressable>
+                    </View>
+                  </View>
+
+                  {error ? (
+                    <View className="mt-3 flex-row items-start gap-2 rounded-xl border border-primary/30 bg-primary/10 px-3 py-2.5">
+                      <Ionicons name="alert-circle-outline" size={16} color="#ef4444" />
+                      <Text className="flex-1 text-sm text-primary">{error}</Text>
+                    </View>
+                  ) : null}
+
+                  {success ? (
+                    <View className="mt-3 flex-row items-start gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2.5">
+                      <Ionicons name="checkmark-circle-outline" size={16} color="#34d399" />
+                      <Text className="flex-1 text-sm text-success">{success}</Text>
+                    </View>
+                  ) : null}
+
+                  <Pressable
+                    onPress={handleSignIn}
+                    disabled={isPending}
+                    className="mt-4 overflow-hidden rounded-xl active:opacity-90"
+                  >
+                    <LinearGradient
+                      colors={["#ef4444", "#f97316"]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      className={gradientButton}
+                    >
+                      {isPending ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Text className="text-sm font-bold uppercase tracking-wide text-white">Sign In</Text>
+                      )}
+                    </LinearGradient>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={handleAnonymousSignIn}
+                    disabled={isPending}
+                    className="mt-2 flex-row items-center justify-center gap-2 rounded-xl border border-border-default bg-bg-elevated/70 py-3 active:opacity-90"
+                  >
+                    <Ionicons name="person-outline" size={15} color="#a1a1aa" />
+                    <Text className="text-sm font-semibold text-text-primary">Continue as guest</Text>
+                  </Pressable>
+
+                  <View className="mt-4 flex-row items-center justify-center gap-1">
+                    <Text className="text-sm text-text-secondary">Need an account?</Text>
+                    <Link href="/register" asChild>
+                      <Pressable>
+                        <Text className="text-sm font-bold text-primary">Create one</Text>
+                      </Pressable>
+                    </Link>
+                  </View>
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        </View>
       </View>
-    </ScreenWrapper>
+    </SafeAreaView>
   );
 }
 

@@ -1,6 +1,7 @@
-import { Image } from "expo-image";
-import { View, Text, Platform } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { Image, View, Text } from "react-native";
 import { Badge } from "./Badge";
+import { toHttpsImageUrl } from "@/lib/image-url";
 
 interface ShowHeaderProps {
   backdropUrl?: string | null;
@@ -32,31 +33,48 @@ export function ShowHeader({
   rating,
   isDesktop,
 }: ShowHeaderProps) {
-  const heroHeight = isDesktop ? 420 : 280;
+  const heroHeight = isDesktop ? 420 : 300;
 
   return (
-    <View style={{ height: heroHeight }} className="relative overflow-hidden">
+    <View
+      style={{ height: heroHeight }}
+      className="relative overflow-hidden rounded-3xl border border-border-default"
+    >
       {/* Backdrop Image */}
       {backdropUrl ? (
         <Image
-          source={{ uri: backdropUrl }}
+          source={{ uri: toHttpsImageUrl(backdropUrl) }}
           className="absolute inset-0 h-full w-full"
-          contentFit="cover"
-          transition={500}
+          resizeMode="cover"
         />
       ) : (
-        <View className="absolute inset-0 bg-bg-elevated">
-          <View
-            className="absolute inset-0 opacity-30"
-            style={{
-              backgroundImage:
-                Platform.OS === "web"
-                  ? "radial-gradient(circle at 50% 0%, rgba(239,68,68,0.15) 0%, transparent 50%)"
-                  : undefined,
-            }}
-          />
-        </View>
+        <LinearGradient
+          colors={["#27272a", "#18181b", "#09090b"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
+        />
       )}
+
+      {/* Global darkening for readability */}
+      <LinearGradient
+        colors={["rgba(9,9,11,0.18)", "rgba(9,9,11,0.45)", "rgba(9,9,11,0.92)"]}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
+      />
+
+      {/* Subtle side vignette */}
+      <LinearGradient
+        colors={["rgba(9,9,11,0.55)", "transparent", "rgba(9,9,11,0.35)"]}
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 1, y: 0.5 }}
+        style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
+      />
+
+      {/* Accent glows */}
+      <View className="absolute -right-8 -top-10 h-32 w-32 rounded-full bg-primary/15" />
+      <View className="absolute -left-10 bottom-0 h-36 w-36 rounded-full bg-accent/10" />
 
 
 
@@ -79,11 +97,10 @@ export function ShowHeader({
                 elevation: 20,
               }}
             >
-              <Image
-                source={{ uri: posterUrl }}
+                <Image
+                  source={{ uri: toHttpsImageUrl(posterUrl) }}
                 className="h-full w-full"
-                contentFit="cover"
-                transition={300}
+                resizeMode="cover"
               />
             </View>
           )}
@@ -100,7 +117,7 @@ export function ShowHeader({
               {firstAired && <Badge label={firstAired} variant="default" />}
               {rating && rating > 0 && (
                 <View className="flex-row items-center gap-1 rounded-full bg-warning/20 px-2.5 py-1">
-                  <Text className="text-sm">★</Text>
+                  <Text className="text-sm text-warning">★</Text>
                   <Text className="text-xs font-semibold text-warning">
                     {rating.toFixed(1)}
                   </Text>

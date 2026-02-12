@@ -348,6 +348,7 @@ export const toggleEpisodeWatched = mutation({
     season: v.number(),
     episode: v.number(),
     runtime: v.optional(v.number()),
+    action: v.union(v.literal("toggle"), v.literal("rewatch")),
   },
   handler: async (ctx, args) => {
     const userId = await getCurrentUserId(ctx);
@@ -378,25 +379,49 @@ export const toggleEpisodeWatched = mutation({
       (entry) => entry.season === args.season && entry.episode === args.episode
     );
 
+    const now = Date.now();
+
     if (existingEpisode) {
-      await ctx.db.delete(existingEpisode._id);
+      if (args.action === "rewatch") {
+        const currentCount = existingEpisode.watchCount ?? 1;
+        const currentHistory = existingEpisode.watchHistory ?? [existingEpisode.watchedAt];
+        
+        await ctx.db.patch(existingEpisode._id, {
+          watchCount: currentCount + 1,
+          watchHistory: [...currentHistory, now],
+          watchedAt: now,
+        });
 
-      const remainingCount = watchedEpisodes.length - 1;
-      if (
-        userShow &&
-        userShow.status === "completed" &&
-        (!args.show.totalEpisodes || remainingCount < args.show.totalEpisodes)
-      ) {
-        await ctx.db.patch(userShow._id, { status: "watching" });
+        if (userShow) {
+          await ctx.db.patch(userShow._id, {
+            lastWatchedAt: now,
+          });
+        }
+
+        return {
+          watched: true,
+          watchCount: currentCount + 1,
+          isRewatch: true,
+        };
+      } else {
+        await ctx.db.delete(existingEpisode._id);
+
+        const remainingCount = watchedEpisodes.length - 1;
+        if (
+          userShow &&
+          userShow.status === "completed" &&
+          (!args.show.totalEpisodes || remainingCount < args.show.totalEpisodes)
+        ) {
+          await ctx.db.patch(userShow._id, { status: "watching" });
+        }
+
+        return {
+          watched: false,
+          watchedEpisodes: remainingCount,
+        };
       }
-
-      return {
-        watched: false,
-        watchedEpisodes: remainingCount,
-      };
     }
 
-    const now = Date.now();
     await ctx.db.insert("watchedEpisodes", {
       userId,
       showId,
@@ -404,6 +429,8 @@ export const toggleEpisodeWatched = mutation({
       episode: args.episode,
       watchedAt: now,
       runtime: args.runtime,
+      watchCount: 1,
+      watchHistory: [now],
     });
 
     const totalWatched = watchedEpisodes.length + 1;
@@ -423,6 +450,8 @@ export const toggleEpisodeWatched = mutation({
       watched: true,
       watchedEpisodes: totalWatched,
       status: nextStatus,
+      watchCount: 1,
+      isRewatch: false,
     };
   },
 });
@@ -486,6 +515,8 @@ export const markSeasonWatched = mutation({
         episode: entry.episode,
         watchedAt: now,
         runtime: entry.runtime,
+        watchCount: 1,
+        watchHistory: [now],
       });
       addedCount += 1;
     }
@@ -561,3 +592,217 @@ export const unmarkSeasonWatched = mutation({
   },
 });
 
+export const getWatchlist = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getCurrentUserId(ctx);
+
+    const userShows = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_status", (q) =>
+        q.eq("userId", userId).eq("status", "watching")
+      )
+      .collect();
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    const watchedByShow = new Map<string, Set<string>>();
+    for (const entry of watchedEpisodes) {
+      const key = entry.showId as string;
+      if (!watchedByShow.has(key)) {
+        watchedByShow.set(key, new Set());
+      }
+      watchedByShow.get(key)!.add(`${entry.season}:${entry.episode}`);
+    }
+
+    const watchlistItems = await Promise.all(
+      userShows.map(async (userShow) => {
+        const show = await ctx.db.get(userShow.showId);
+        if (!show || show.mediaType === "movie") {
+          return null;
+        }
+
+        const totalEpisodes =
+          typeof show.totalEpisodes === "number" ? show.totalEpisodes : null;
+        if (totalEpisodes === null) {
+          return null;
+        }
+
+        const watchedKeys = watchedByShow.get(userShow.showId as string) || new Set();
+        const watchedCount = watchedKeys.size;
+        const remainingEpisodes = totalEpisodes - watchedCount;
+
+        if (remainingEpisodes <= 0) {
+          return null;
+        }
+
+        const progressPercent = totalEpisodes > 0
+          ? Math.min(100, Math.round((watchedCount / totalEpisodes) * 100))
+          : 0;
+
+        const lastWatchedEntry = watchedEpisodes
+          .filter((e) => e.showId === userShow.showId)
+          .sort((a, b) => b.watchedAt - a.watchedAt)[0];
+
+        return {
+          id: getExternalShowId(show),
+          title: show.title,
+          mediaType: show.mediaType,
+          posterUrl: show.posterUrl ?? null,
+          backdropUrl: show.backdropUrl ?? null,
+          overview: show.overview ?? null,
+          firstAired: show.firstAired ?? null,
+          tmdbId: show.tmdbId ?? null,
+          anilistId: show.anilistId ?? null,
+          tvmazeId: show.tvmazeId ?? null,
+          imdbId: show.imdbId ?? null,
+          watchedEpisodes: watchedCount,
+          totalEpisodes,
+          remainingEpisodes,
+          progressPercent,
+          lastWatchedAt: lastWatchedEntry?.watchedAt ?? userShow.addedAt,
+        };
+      })
+    );
+
+    return watchlistItems
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+      .sort((a, b) => b.lastWatchedAt - a.lastWatchedAt);
+  },
+});
+
+export const batchMarkWatched = mutation({
+  args: {
+    show: v.object(showInput),
+    upToSeason: v.number(),
+    upToEpisode: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const showId = await ensureShowRecordId(ctx, args.show);
+
+    let userShow = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .unique();
+
+    if (!userShow) {
+      const userShowId = await ctx.db.insert("userShows", {
+        userId,
+        showId,
+        status: "watching",
+        addedAt: Date.now(),
+        lastWatchedAt: Date.now(),
+      });
+      userShow = await ctx.db.get(userShowId);
+    }
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .collect();
+
+    const existingKeys = new Set(
+      watchedEpisodes.map((entry) => `${entry.season}:${entry.episode}`)
+    );
+
+    const now = Date.now();
+    let addedCount = 0;
+    const totalEpisodes = args.show.totalEpisodes;
+    let episodesInserted = 0;
+
+    for (let season = 1; season <= args.upToSeason; season++) {
+      const isLastSeason = season === args.upToSeason;
+      const maxEpisode = isLastSeason ? args.upToEpisode : 99;
+
+      for (let episode = 1; episode <= maxEpisode; episode++) {
+        // Stop if we've reached the show's total episode count
+        if (typeof totalEpisodes === "number" && episodesInserted >= totalEpisodes) {
+          break;
+        }
+
+        const key = `${season}:${episode}`;
+        if (existingKeys.has(key)) {
+          continue;
+        }
+
+        await ctx.db.insert("watchedEpisodes", {
+          userId,
+          showId,
+          season,
+          episode,
+          watchedAt: now,
+          runtime: args.show.episodeRuntime,
+          watchCount: 1,
+          watchHistory: [now],
+        });
+        addedCount++;
+        episodesInserted++;
+      }
+
+      // Break outer loop if we've reached total episodes
+      if (typeof totalEpisodes === "number" && episodesInserted >= totalEpisodes) {
+        break;
+      }
+    }
+
+    const totalWatched = watchedEpisodes.length + addedCount;
+    const nextStatus =
+      args.show.totalEpisodes && totalWatched >= args.show.totalEpisodes
+        ? "completed"
+        : "watching";
+
+    if (userShow) {
+      await ctx.db.patch(userShow._id, {
+        status: nextStatus,
+        lastWatchedAt: now,
+      });
+    }
+
+    return {
+      addedCount,
+      totalWatched,
+      status: nextStatus,
+    };
+  },
+});
+
+export const getEpisodeWatchHistory = query({
+  args: {
+    show: v.object(showInput),
+    season: v.number(),
+    episode: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const show = await findShowByLookup(ctx, args.show);
+
+    if (!show) {
+      return null;
+    }
+
+    const watchedEntry = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show_season_episode", (q) =>
+        q.eq("userId", userId)
+          .eq("showId", show._id)
+          .eq("season", args.season)
+          .eq("episode", args.episode)
+      )
+      .unique();
+
+    if (!watchedEntry) {
+      return null;
+    }
+
+    return {
+      watchCount: watchedEntry.watchCount ?? 1,
+      watchHistory: watchedEntry.watchHistory ?? [watchedEntry.watchedAt],
+      firstWatchedAt: watchedEntry.watchedAt,
+      lastWatchedAt: watchedEntry.watchHistory?.[watchedEntry.watchHistory.length - 1] ?? watchedEntry.watchedAt,
+    };
+  },
+});

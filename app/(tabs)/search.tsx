@@ -11,6 +11,7 @@ import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SearchInput } from "@/components/SearchInput";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import { PageIntro } from "@/components/PageIntro";
 import { getMainContentWidth } from "@/constants/navigation";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { searchAniList } from "@/lib/api/anilist";
@@ -141,7 +142,6 @@ export function SearchScreen() {
         key={`search-grid-${isWeb ? columns : 2}`}
         numColumns={isWeb ? columns : 2}
         keyExtractor={(item) => `${item.id}-${item.mediaType}`}
-        estimatedItemSize={isWeb ? 360 : 330}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={{ height: GRID_GAP }} />}
         renderItem={({ item }) => (
@@ -156,12 +156,14 @@ export function SearchScreen() {
         )}
         ListHeaderComponent={
           <View className="pb-2">
-            <Text className="mb-1 text-3xl font-extrabold tracking-[-0.5px] text-text-primary">
-              Search
-            </Text>
-            <Text className="mb-4 text-sm text-text-secondary">
-              Find shows, anime, and movies across all sources
-            </Text>
+            <PageIntro
+              title="Search"
+              subtitle="Find shows, anime, and movies across all sources"
+              eyebrow="Universal search"
+              icon="search-outline"
+              rightLabel={debouncedQuery.trim() && !isLoading ? `${results.length} found` : undefined}
+              className="mb-4"
+            />
 
             <SearchInput
               value={query}
@@ -192,9 +194,8 @@ export function SearchScreen() {
         }
         ListEmptyComponent={
           !isLoading ? (
-            !debouncedQuery.trim() ? (
+              !debouncedQuery.trim() ? (
               <View className="mt-2 items-center rounded-2xl border border-border-default bg-bg-surface px-4 py-8">
-                <Text className="text-6xl mb-3">🎬</Text>
                 <Text className="text-base font-semibold text-text-primary">Search for anything</Text>
                 <Text className="mt-1 text-sm text-text-secondary text-center">
                   Try "The Last of Us", "Frieren", "Oppenheimer"

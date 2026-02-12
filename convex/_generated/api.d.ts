@@ -10,7 +10,10 @@
 
 import type * as auth from "../auth.js";
 import type * as http from "../http.js";
+import type * as lists from "../lists.js";
+import type * as schedule from "../schedule.js";
 import type * as shows from "../shows.js";
+import type * as stats from "../stats.js";
 
 import type {
   ApiFromModules,
@@ -21,7 +24,10 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   http: typeof http;
+  lists: typeof lists;
+  schedule: typeof schedule;
   shows: typeof shows;
+  stats: typeof stats;
 }>;
 
 /**

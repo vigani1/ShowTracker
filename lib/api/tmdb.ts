@@ -204,15 +204,17 @@ export async function searchTmdb(
 
 export async function getTrendingTmdb(
   mediaType: "all" | "tv" | "movie" = "all",
-  timeWindow: "day" | "week" = "week"
+  timeWindow: "day" | "week" = "week",
+  page = 1
 ) {
-  const cacheKey = `tmdb-trending:${mediaType}:${timeWindow}`;
+  const cacheKey = `tmdb-trending:${mediaType}:${timeWindow}:${page}`;
   const cached = getCached<TmdbSearchResult>(cacheKey);
   if (cached) {
     return cached;
   }
   const data = await request<TmdbSearchResult>(
-    `/trending/${mediaType}/${timeWindow}`
+    `/trending/${mediaType}/${timeWindow}`,
+    { page }
   );
   setCached(cacheKey, data, cacheTtlMs);
   return data;

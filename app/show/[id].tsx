@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   Platform,
   Pressable,
   ScrollView,
@@ -8,11 +9,9 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
-import { Image } from "expo-image";
 import { useLocalSearchParams } from "expo-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { PageBackButton } from "@/components/PageBackButton";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Badge } from "@/components/Badge";
 import { ProgressBar } from "@/components/ProgressBar";
@@ -31,6 +30,7 @@ import type {
   NormalizedShow,
 } from "@/lib/api/types";
 import { parseShowRouteId } from "@/lib/show-route";
+import { toHttpsImageUrl } from "@/lib/image-url";
 
 type SeasonLoadState = Record<number, boolean>;
 type SeasonErrorState = Record<number, string | null>;
@@ -205,8 +205,8 @@ function getEpisodeAvailabilityLabel(airDate?: string | null, now = new Date()) 
 function formatTrackingStatus(status?: string | null) {
   if (!status) return null;
   return status
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter: string) => letter.toUpperCase());
 }
 
 const NAMED_HTML_ENTITIES: Record<string, string> = {
@@ -509,6 +509,7 @@ export function ShowDetailScreen() {
         season: episode.seasonNumber,
         episode: episode.episodeNumber,
         runtime: episode.runtime,
+        action: "toggle",
       });
     } catch (mutationError) {
       console.error("Failed to toggle episode", mutationError);
@@ -753,11 +754,11 @@ export function ShowDetailScreen() {
   const cleanedShowTitle = cleanRichText(show?.title) || show?.title || "";
   const cleanedShowOverview =
     cleanRichText(show?.overview) || "No overview available yet.";
+  const showPosterUrl = toHttpsImageUrl(show?.posterUrl);
 
   if (isLoading) {
     return (
       <ScreenWrapper contentClassName="px-0 py-0">
-        <PageBackButton fallbackHref="/" />
         <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color="#ef4444" />
           <Text className="mt-4 text-sm text-text-secondary">Loading show details...</Text>
@@ -769,7 +770,6 @@ export function ShowDetailScreen() {
   if (error) {
     return (
       <ScreenWrapper contentClassName="px-4 py-6">
-        <PageBackButton fallbackHref="/" />
         <View className="rounded-2xl border border-primary/30 bg-primary/10 p-6">
           <Text className="text-lg font-semibold text-primary">Error</Text>
           <Text className="mt-2 text-sm text-text-secondary">{error}</Text>
@@ -781,7 +781,6 @@ export function ShowDetailScreen() {
   if (!show) {
     return (
       <ScreenWrapper contentClassName="px-4 py-6">
-        <PageBackButton fallbackHref="/" />
         <View className="items-center py-12">
           <Text className="text-text-secondary">Show not found.</Text>
         </View>
@@ -791,8 +790,6 @@ export function ShowDetailScreen() {
 
   return (
     <ScreenWrapper contentClassName="px-0 py-0">
-      <PageBackButton fallbackHref="/" />
-
       <ScrollView
         className="flex-1"
         showsVerticalScrollIndicator={false}
@@ -815,16 +812,15 @@ export function ShowDetailScreen() {
           {/* Overview & Poster Row (Mobile Only) */}
           {!isDesktop && (
             <View className="mb-6 flex-row gap-4">
-              {show.posterUrl && (
+              {showPosterUrl && (
                 <View
                   className="overflow-hidden rounded-xl border border-border-default shadow-lg"
                   style={{ width: 100, height: 150 }}
                 >
                   <Image
-                    source={{ uri: show.posterUrl }}
+                    source={{ uri: showPosterUrl }}
                     className="h-full w-full"
-                    contentFit="cover"
-                    transition={300}
+                    resizeMode="cover"
                   />
                 </View>
               )}

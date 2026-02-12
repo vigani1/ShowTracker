@@ -1,5 +1,5 @@
-import { Pressable, View, Text, ActivityIndicator } from "react-native";
-import { Image } from "expo-image";
+import { Pressable, View, Text, ActivityIndicator, Image } from "react-native";
+import { toHttpsImageUrl } from "@/lib/image-url";
 
 interface EpisodeAvailability {
   isReleased: boolean;
@@ -55,14 +55,13 @@ export function EpisodeCard({
       <View className="relative h-32 w-full overflow-hidden">
         {stillUrl ? (
           <Image
-            source={{ uri: stillUrl }}
+            source={{ uri: toHttpsImageUrl(stillUrl) }}
             className="h-full w-full"
-            contentFit="cover"
-            transition={300}
+            resizeMode="cover"
           />
         ) : (
           <View className="h-full w-full items-center justify-center bg-bg-elevated">
-            <Text className="text-4xl font-black text-text-muted/30">
+            <Text className="text-4xl font-black text-text-secondary/30">
               E{String(episodeNumber).padStart(2, "0")}
             </Text>
           </View>
@@ -107,10 +106,10 @@ export function EpisodeCard({
             <View
               className={`absolute h-6 w-6 rounded-full border-2 ${
                 watched
-                  ? "border-success"
-                  : !availability.isReleased
-                    ? "border-text-muted"
-                    : "border-text-secondary"
+                    ? "border-success"
+                    : !availability.isReleased
+                      ? "border-border-default"
+                      : "border-border-bright"
               }`}
             />
 
@@ -148,7 +147,7 @@ export function EpisodeCard({
         {/* Meta Row */}
         <View className="flex-row items-center justify-between">
           <Text
-            className={`text-xs ${availability.isReleased ? "text-text-muted" : "text-warning"}`}
+            className={`text-xs ${availability.isReleased ? "text-text-secondary" : "text-warning"}`}
           >
             {availability.dateLabel}
           </Text>

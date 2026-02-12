@@ -5,6 +5,8 @@ import type { NormalizedShow } from "@/lib/api/types";
 const anilistUrl =
   process.env.EXPO_PUBLIC_ANILIST_URL ?? "https://graphql.anilist.co";
 
+const anilistScheduleCacheVersion = "v2";
+
 const cacheTtlMs = 15 * 60 * 1000;
 
 export type AniListMedia = {
@@ -37,6 +39,10 @@ export type AniListSearchResult = {
 export type AniListScheduleResult = {
   data: {
     Page: {
+      pageInfo?: {
+        currentPage?: number;
+        hasNextPage?: boolean;
+      };
       airingSchedules: AniListAiringSchedule[];
     };
   };
@@ -175,7 +181,7 @@ export async function getAniListAiringSchedule(
   fromTimestamp?: number,
   toTimestamp?: number
 ) {
-  const cacheKey = `anilist-schedule:${page}:${perPage}:${fromTimestamp}:${toTimestamp}`;
+  const cacheKey = `anilist-schedule:${anilistScheduleCacheVersion}:${page}:${perPage}:${fromTimestamp}:${toTimestamp}`;
   const cached = getCached<AniListScheduleResult>(cacheKey);
   if (cached) {
     return cached;
@@ -184,8 +190,8 @@ export async function getAniListAiringSchedule(
   const data = await request<AniListScheduleResult>(
     `query ($page: Int, $perPage: Int, $airingAt_greater: Int, $airingAt_lesser: Int) {
       Page(page: $page, perPage: $perPage) {
+        pageInfo { currentPage hasNextPage }
         airingSchedules(
-          notYetAired: true
           airingAt_greater: $airingAt_greater
           airingAt_lesser: $airingAt_lesser
         ) {

@@ -7,11 +7,29 @@ export default defineSchema({
   userProfiles: defineTable({
     userId: v.id("users"),
     avatarUrl: v.optional(v.string()),
+    bannerUrl: v.optional(v.string()),
+    username: v.optional(v.string()),
+    bio: v.optional(v.string()),
     tokenIdentifier: v.optional(v.string()),
     createdAt: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
     .index("by_tokenIdentifier", ["tokenIdentifier"]),
+  userFavorites: defineTable({
+    userId: v.id("users"),
+    showId: v.id("shows"),
+    mediaType: v.union(v.literal("tv"), v.literal("anime"), v.literal("movie")),
+    addedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_show", ["userId", "showId"])
+    .index("by_user_mediaType", ["userId", "mediaType"]),
+  userSocial: defineTable({
+    userId: v.id("users"),
+    followingCount: v.optional(v.number()),
+    followersCount: v.optional(v.number()),
+    commentsCount: v.optional(v.number()),
+  }).index("by_user", ["userId"]),
   shows: defineTable({
     tmdbId: v.optional(v.number()),
     anilistId: v.optional(v.number()),
@@ -58,10 +76,13 @@ export default defineSchema({
     episode: v.number(),
     watchedAt: v.number(),
     runtime: v.optional(v.number()),
+    watchCount: v.optional(v.number()),
+    watchHistory: v.optional(v.array(v.number())),
   })
     .index("by_user_show", ["userId", "showId"])
     .index("by_user", ["userId"])
-    .index("by_watchedAt", ["userId", "watchedAt"]),
+    .index("by_watchedAt", ["userId", "watchedAt"])
+    .index("by_user_show_season_episode", ["userId", "showId", "season", "episode"]),
   customLists: defineTable({
     userId: v.id("users"),
     name: v.string(),
@@ -77,5 +98,6 @@ export default defineSchema({
     lastUpdated: v.number(),
   })
     .index("by_date", ["date"])
-    .index("by_date_type", ["date", "mediaType"]),
+    .index("by_date_type", ["date", "mediaType"])
+    .index("by_type_date", ["mediaType", "date"]),
 });

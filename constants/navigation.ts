@@ -4,8 +4,8 @@ export const DESKTOP_SIDEBAR_BREAKPOINT = 1024;
 /** Sidebar width when expanded */
 export const SIDEBAR_WIDTH_EXPANDED = 240;
 
-/** Sidebar width when collapsed (icon rail) */
-export const SIDEBAR_WIDTH_COLLAPSED = 72;
+/** Sidebar width when collapsed (icon rail with labels) */
+export const SIDEBAR_WIDTH_COLLAPSED = 84;
 
 /** Gap between sidebar and main content */
 export const SIDEBAR_CONTENT_GAP = 0;

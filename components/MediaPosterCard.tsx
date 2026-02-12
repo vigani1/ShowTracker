@@ -1,7 +1,7 @@
 import type { Href } from "expo-router";
-import { Image } from "expo-image";
 import { Link } from "expo-router";
 import {
+  Image,
   Pressable,
   Text,
   View,
@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import type { NormalizedShow } from "@/lib/api/types";
 import { Badge } from "@/components/Badge";
+import { toHttpsImageUrl } from "@/lib/image-url";
 
 interface MediaPosterCardProps {
   show: NormalizedShow;
@@ -56,9 +57,9 @@ export function MediaPosterCard({
         >
           {show.posterUrl ? (
             <Image
-              source={{ uri: show.posterUrl }}
+              source={{ uri: toHttpsImageUrl(show.posterUrl) }}
               className="h-full w-full"
-              contentFit="cover"
+              resizeMode="cover"
             />
           ) : (
             <View className="h-full w-full items-center justify-center bg-bg-surface px-3">
