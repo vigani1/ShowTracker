@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
-  ScrollView,
   Text,
   View,
   useWindowDimensions,
   type LayoutChangeEvent,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SegmentedControl } from "@/components/SegmentedControl";
@@ -16,28 +16,24 @@ import { Button } from "@/components/Button";
 import { PageIntro } from "@/components/PageIntro";
 import { getTrendingAniList } from "@/lib/api/anilist";
 import { normalizeAniListMedia, normalizeTmdbMedia } from "@/lib/api/normalize";
-import { getTrendingTmdb, type TmdbMedia, type TmdbSearchResult } from "@/lib/api/tmdb";
+import { getTrendingTmdb } from "@/lib/api/tmdb";
 import type { NormalizedShow } from "@/lib/api/types";
 import { createShowRouteId } from "@/lib/show-route";
 import { Link } from "expo-router";
 
 type DiscoverTab = "tv" | "anime" | "movie";
 
-type SectionState = {
-  isLoading: boolean;
-  error: string | null;
+type TabState = {
   items: NormalizedShow[];
+  isLoading: boolean;
+  isLoadingMore: boolean;
+  error: string | null;
+  currentPage: number;
+  hasMore: boolean;
 };
 
-const initialSectionState: SectionState = { isLoading: true, error: null, items: [] };
-
-function getSectionError(reason: unknown, fallback: string) {
-  if (reason instanceof Error) return reason.message;
-  if (typeof reason === "object" && reason !== null && "status" in reason) {
-    return `${fallback} (API ${(reason as { status: number }).status})`;
-  }
-  return fallback;
-}
+const INITIAL_ITEMS_PER_PAGE = 20;
+const LOAD_MORE_THRESHOLD = 0.5;
 
 const tabOptions = [
   { value: "tv" as const, label: "TV Shows" },
@@ -56,137 +52,62 @@ function getGridColumnCount(width: number, isWeb: boolean) {
 }
 
 const GRID_GAP = 12;
-const DISCOVER_MAX_ITEMS = 60;
-const TMDB_DISCOVER_PAGES = [1, 2, 3] as const;
 
-function flattenTmdbTrendingPages(results: PromiseSettledResult<TmdbSearchResult>[]) {
-  const deduped = new Map<number, TmdbMedia>();
-
-  results.forEach((result) => {
-    if (result.status !== "fulfilled") {
-      return;
-    }
-    result.value.results.forEach((item) => {
-      if (!deduped.has(item.id)) {
-        deduped.set(item.id, item);
-      }
-    });
-  });
-
-  return Array.from(deduped.values()).slice(0, DISCOVER_MAX_ITEMS);
-}
-
-function getFirstRejectedReason(results: PromiseSettledResult<unknown>[]) {
-  const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-  return rejected?.reason;
+function getSectionError(reason: unknown, fallback: string) {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "object" && reason !== null && "status" in reason) {
+    return `${fallback} (API ${(reason as { status: number }).status})`;
+  }
+  return fallback;
 }
 
 function SectionHeader({ title, count }: { title: string; count: number }) {
   return (
     <View className="mb-3 flex-row items-center justify-between">
-      <Text className="text-lg font-bold text-text-primary">
+      <Text
+        className="text-lg text-text-primary"
+        style={{ fontFamily: "Courier New", fontWeight: "900" }}
+      >
         {title}
       </Text>
-      <View className="rounded-full border border-border-default bg-bg-surface px-3 py-1">
-        <Text className="text-xs font-semibold text-text-secondary">{count} titles</Text>
+      <View className="rounded-md border-2 border-border-bright bg-bg-surface px-3 py-1">
+        <Text className="text-[11px] font-black uppercase tracking-wide text-text-secondary">{count} titles</Text>
       </View>
     </View>
   );
 }
 
-export default function DiscoverScreen() {
+export function DiscoverScreen() {
   const [activeTab, setActiveTab] = useState<DiscoverTab>("tv");
-  const [visibleCountByTab, setVisibleCountByTab] = useState<Record<DiscoverTab, number>>({
-    tv: 0,
-    anime: 0,
-    movie: 0,
-  });
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
   const [gridWidth, setGridWidth] = useState(0);
-  const [tvState, setTvState] = useState<SectionState>(initialSectionState);
-  const [animeState, setAnimeState] = useState<SectionState>(initialSectionState);
-  const [movieState, setMovieState] = useState<SectionState>(initialSectionState);
-  const canLoadMoreFromEdgeRef = useRef(true);
-  const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const onGridLayout = useCallback((e: LayoutChangeEvent) => {
-    setGridWidth(e.nativeEvent.layout.width);
-  }, []);
-
-  useEffect(() => {
-    let isCancelled = false;
-
-    const loadDiscovery = async () => {
-      setTvState(initialSectionState);
-      setAnimeState(initialSectionState);
-      setMovieState(initialSectionState);
-
-      const [tvBatch, animeResult, movieBatch] = await Promise.allSettled([
-        Promise.allSettled(TMDB_DISCOVER_PAGES.map((page) => getTrendingTmdb("tv", "week", page))),
-        getTrendingAniList(1, 50),
-        Promise.allSettled(TMDB_DISCOVER_PAGES.map((page) => getTrendingTmdb("movie", "week", page))),
-      ]);
-
-      if (isCancelled) return;
-
-      if (tvBatch.status === "fulfilled") {
-        const mergedTv = flattenTmdbTrendingPages(tvBatch.value);
-        if (mergedTv.length > 0) {
-          setTvState({ isLoading: false, error: null, items: mergedTv.map(normalizeTmdbMedia) });
-        } else {
-          setTvState({
-            isLoading: false,
-            error: getSectionError(getFirstRejectedReason(tvBatch.value), "Could not load trending TV shows."),
-            items: [],
-          });
-        }
-      } else {
-        setTvState({
-          isLoading: false,
-          error: getSectionError(tvBatch.reason, "Could not load trending TV shows."),
-          items: [],
-        });
-      }
-
-      if (animeResult.status === "fulfilled") {
-        setAnimeState({
-          isLoading: false,
-          error: null,
-          items: animeResult.value.data.Page.media.slice(0, DISCOVER_MAX_ITEMS).map(normalizeAniListMedia),
-        });
-      } else {
-        setAnimeState({
-          isLoading: false,
-          error: getSectionError(animeResult.reason, "Could not load trending anime."),
-          items: [],
-        });
-      }
-
-      if (movieBatch.status === "fulfilled") {
-        const mergedMovies = flattenTmdbTrendingPages(movieBatch.value);
-        if (mergedMovies.length > 0) {
-          setMovieState({ isLoading: false, error: null, items: mergedMovies.map(normalizeTmdbMedia) });
-        } else {
-          setMovieState({
-            isLoading: false,
-            error: getSectionError(getFirstRejectedReason(movieBatch.value), "Could not load popular movies."),
-            items: [],
-          });
-        }
-      } else {
-        setMovieState({
-          isLoading: false,
-          error: getSectionError(movieBatch.reason, "Could not load popular movies."),
-          items: [],
-        });
-      }
-    };
-
-    void loadDiscovery();
-    return () => { isCancelled = true; };
-  }, []);
+  // Tab states
+  const [tvState, setTvState] = useState<TabState>({
+    items: [],
+    isLoading: true,
+    isLoadingMore: false,
+    error: null,
+    currentPage: 0,
+    hasMore: true,
+  });
+  const [animeState, setAnimeState] = useState<TabState>({
+    items: [],
+    isLoading: true,
+    isLoadingMore: false,
+    error: null,
+    currentPage: 0,
+    hasMore: true,
+  });
+  const [movieState, setMovieState] = useState<TabState>({
+    items: [],
+    isLoading: true,
+    isLoadingMore: false,
+    error: null,
+    currentPage: 0,
+    hasMore: true,
+  });
 
   const activeState = useMemo(() => {
     if (activeTab === "anime") return animeState;
@@ -194,169 +115,293 @@ export default function DiscoverScreen() {
     return tvState;
   }, [activeTab, animeState, movieState, tvState]);
 
-  const heroShow = activeState.items[0] ?? null;
-  // Use measured grid width when available.
-  // On first render, approximate by removing ScreenWrapper horizontal padding.
+  const setActiveState = useCallback(
+    (updater: (prev: TabState) => TabState) => {
+      if (activeTab === "anime") {
+        setAnimeState(updater);
+      } else if (activeTab === "movie") {
+        setMovieState(updater);
+      } else {
+        setTvState(updater);
+      }
+    },
+    [activeTab]
+  );
+
+  const onGridLayout = useCallback((e: LayoutChangeEvent) => {
+    setGridWidth(e.nativeEvent.layout.width);
+  }, []);
+
+  // Calculate grid dimensions
   const effectiveWidth = gridWidth || Math.max(width - 40, 0);
   const columns = getGridColumnCount(effectiveWidth, isWeb);
   const gridItemWidth = (effectiveWidth - (columns - 1) * GRID_GAP) / columns;
-  const pageSize = Math.max(columns * 3, 6);
-  const activeVisibleCount = visibleCountByTab[activeTab] ?? 0;
-  const visibleDiscoverItems = activeState.items.slice(0, activeVisibleCount);
-  const hasMoreItems = activeVisibleCount < activeState.items.length;
 
+  // Load initial data for all tabs
   useEffect(() => {
-    setVisibleCountByTab((previous) => {
-      const current = previous[activeTab] ?? 0;
-      const next = Math.min(activeState.items.length, Math.max(current, pageSize));
-      if (next === current) return previous;
-      return { ...previous, [activeTab]: next };
-    });
-    setIsLoadingMore(false);
-    canLoadMoreFromEdgeRef.current = true;
-  }, [activeState.items.length, activeTab, pageSize]);
+    let isCancelled = false;
 
-  useEffect(() => {
-    return () => {
-      if (loadMoreTimerRef.current) {
-        clearTimeout(loadMoreTimerRef.current);
+    const loadInitialData = async () => {
+      // Load TV Shows
+      try {
+        const tvResult = await getTrendingTmdb("tv", "week", 1);
+        if (!isCancelled) {
+          setTvState({
+            items: tvResult.results.map(normalizeTmdbMedia),
+            isLoading: false,
+            isLoadingMore: false,
+            error: null,
+            currentPage: 1,
+            hasMore: tvResult.page < tvResult.total_pages,
+          });
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setTvState({
+            items: [],
+            isLoading: false,
+            isLoadingMore: false,
+            error: getSectionError(error, "Could not load trending TV shows."),
+            currentPage: 0,
+            hasMore: true,
+          });
+        }
       }
+
+      // Load Anime
+      try {
+        const animeResult = await getTrendingAniList(1, INITIAL_ITEMS_PER_PAGE);
+        if (!isCancelled) {
+          setAnimeState({
+            items: animeResult.data.Page.media.map(normalizeAniListMedia),
+            isLoading: false,
+            isLoadingMore: false,
+            error: null,
+            currentPage: 1,
+            hasMore: animeResult.data.Page.pageInfo.currentPage < animeResult.data.Page.pageInfo.lastPage,
+          });
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setAnimeState({
+            items: [],
+            isLoading: false,
+            isLoadingMore: false,
+            error: getSectionError(error, "Could not load trending anime."),
+            currentPage: 0,
+            hasMore: true,
+          });
+        }
+      }
+
+      // Load Movies
+      try {
+        const movieResult = await getTrendingTmdb("movie", "week", 1);
+        if (!isCancelled) {
+          setMovieState({
+            items: movieResult.results.map(normalizeTmdbMedia),
+            isLoading: false,
+            isLoadingMore: false,
+            error: null,
+            currentPage: 1,
+            hasMore: movieResult.page < movieResult.total_pages,
+          });
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setMovieState({
+            items: [],
+            isLoading: false,
+            isLoadingMore: false,
+            error: getSectionError(error, "Could not load popular movies."),
+            currentPage: 0,
+            hasMore: true,
+          });
+        }
+      }
+    };
+
+    void loadInitialData();
+    return () => {
+      isCancelled = true;
     };
   }, []);
 
-  const loadMoreItems = useCallback(() => {
-    if (!hasMoreItems || isLoadingMore || activeState.isLoading) {
+  // Load more items when scrolling
+  const loadMoreItems = useCallback(async () => {
+    if (activeState.isLoading || activeState.isLoadingMore || !activeState.hasMore) {
       return;
     }
 
-    setIsLoadingMore(true);
-    loadMoreTimerRef.current = setTimeout(() => {
-      setVisibleCountByTab((previous) => ({
-        ...previous,
-        [activeTab]: Math.min((previous[activeTab] ?? 0) + pageSize, activeState.items.length),
+    setActiveState((prev) => ({ ...prev, isLoadingMore: true }));
+
+    const nextPage = activeState.currentPage + 1;
+
+    try {
+      if (activeTab === "anime") {
+        const result = await getTrendingAniList(nextPage, INITIAL_ITEMS_PER_PAGE);
+        const newItems = result.data.Page.media.map(normalizeAniListMedia);
+        setAnimeState((prev) => ({
+          ...prev,
+          items: [...prev.items, ...newItems],
+          isLoadingMore: false,
+          currentPage: nextPage,
+          hasMore: result.data.Page.pageInfo.currentPage < result.data.Page.pageInfo.lastPage,
+        }));
+      } else if (activeTab === "movie") {
+        const result = await getTrendingTmdb("movie", "week", nextPage);
+        const newItems = result.results.map(normalizeTmdbMedia);
+        setMovieState((prev) => ({
+          ...prev,
+          items: [...prev.items, ...newItems],
+          isLoadingMore: false,
+          currentPage: nextPage,
+          hasMore: result.page < result.total_pages,
+        }));
+      } else {
+        // TV Shows
+        const result = await getTrendingTmdb("tv", "week", nextPage);
+        const newItems = result.results.map(normalizeTmdbMedia);
+        setTvState((prev) => ({
+          ...prev,
+          items: [...prev.items, ...newItems],
+          isLoadingMore: false,
+          currentPage: nextPage,
+          hasMore: result.page < result.total_pages,
+        }));
+      }
+    } catch (error) {
+      setActiveState((prev) => ({
+        ...prev,
+        isLoadingMore: false,
+        error: getSectionError(error, `Could not load more ${activeTab === "anime" ? "anime" : activeTab === "movie" ? "movies" : "TV shows"}.`),
       }));
-      setIsLoadingMore(false);
-    }, 120);
-  }, [activeState.isLoading, activeState.items.length, activeTab, hasMoreItems, isLoadingMore, pageSize]);
+    }
+  }, [activeState, activeTab, setActiveState]);
 
-  const onScrollDiscover = useCallback(
-    (event: any) => {
-      const y = event.nativeEvent.contentOffset.y;
-      const viewportHeight = event.nativeEvent.layoutMeasurement.height;
-      const contentHeight = event.nativeEvent.contentSize.height;
-      const distanceFromBottom = contentHeight - (y + viewportHeight);
+  // Hero show for active tab
+  const heroShow = activeState.items[0] ?? null;
 
-      if (distanceFromBottom > 320) {
-        canLoadMoreFromEdgeRef.current = true;
-      }
+  // Render grid item
+  const renderItem = useCallback(
+    ({ item, index }: { item: NormalizedShow; index: number }) => (
+      <View
+        style={{
+          width: gridItemWidth,
+          marginRight: index % columns === columns - 1 ? 0 : GRID_GAP,
+          marginBottom: GRID_GAP,
+        }}
+      >
+        <MediaPosterCard
+          show={item}
+          href={{ pathname: "/show/[id]", params: { id: createShowRouteId(item) } }}
+          rank={index < 3 ? index + 1 : undefined}
+          className="w-full"
+          posterClassName={isWeb ? "h-56" : "h-64"}
+        />
+      </View>
+    ),
+    [gridItemWidth, columns, isWeb]
+  );
 
-      if (
-        distanceFromBottom <= 200 &&
-        canLoadMoreFromEdgeRef.current &&
-        !activeState.isLoading &&
-        !isLoadingMore
-      ) {
-        canLoadMoreFromEdgeRef.current = false;
-        loadMoreItems();
-      }
-    },
-    [activeState.isLoading, isLoadingMore, loadMoreItems]
+  // Render footer loader
+  const renderFooter = useCallback(() => {
+    if (!activeState.isLoadingMore) return null;
+    return (
+      <View className="items-center py-4">
+        <ActivityIndicator size="small" color="#ef4444" />
+      </View>
+    );
+  }, [activeState.isLoadingMore]);
+
+  // Empty state
+  const renderEmpty = useCallback(() => {
+    if (activeState.isLoading) {
+      return (
+        <View className="items-center gap-2 rounded-xl border-2 border-border-default bg-bg-surface py-8">
+          <ActivityIndicator size="small" color="#ef4444" />
+          <Text className="text-sm text-text-secondary">Loading trending titles</Text>
+        </View>
+      );
+    }
+
+    if (activeState.error) {
+      return (
+        <View className="mb-4 rounded-xl border-2 border-primary/30 bg-primary/10 p-4">
+          <Text className="text-sm text-primary">{activeState.error}</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View className="mt-5 rounded-xl border-2 border-border-default bg-bg-surface px-4 py-5">
+        <Text className="text-sm text-text-secondary">No discovery data available right now.</Text>
+      </View>
+    );
+  }, [activeState.isLoading, activeState.error]);
+
+  // List header component
+  const ListHeader = useCallback(
+    () => (
+      <View>
+        <PageIntro
+          title="Discover"
+          subtitle="Trending across TV, anime, and movies"
+          eyebrow="Fresh picks"
+          icon="compass-outline"
+          rightLabel={activeState.items.length > 0 ? `${activeState.items.length} live` : undefined}
+          className="mb-4"
+        />
+
+        {/* Hero banner */}
+        {heroShow ? (
+          <View className="mb-5 overflow-hidden rounded-xl border-2 border-border-default">
+            <HeroSection
+              imageUrl={heroShow.backdropUrl ?? heroShow.posterUrl}
+              title={heroShow.title}
+              subtitle={heroShow.overview ?? undefined}
+              mobileHeight={180}
+            >
+              <Link href={{ pathname: "/show/[id]", params: { id: createShowRouteId(heroShow) } }} asChild>
+                <Button label="View Details" variant="primary" className="self-start" />
+              </Link>
+            </HeroSection>
+          </View>
+        ) : null}
+
+        <SegmentedControl options={tabOptions} value={activeTab} onValueChange={setActiveTab} className="mb-5" />
+
+        {activeState.items.length > 0 && (
+          <SectionHeader
+            title={`Trending ${activeTab === "anime" ? "Anime" : activeTab === "movie" ? "Movies" : "TV Shows"}`}
+            count={activeState.items.length}
+          />
+        )}
+      </View>
+    ),
+    [heroShow, activeTab, activeState.items.length]
   );
 
   return (
     <ScreenWrapper>
-      <ScrollView showsVerticalScrollIndicator={false} onScroll={onScrollDiscover} scrollEventThrottle={16}>
-        <View>
-          <PageIntro
-            title="Discover"
-            subtitle="Trending across TV, anime, and movies"
-            eyebrow="Fresh picks"
-            icon="compass-outline"
-            rightLabel={activeState.items.length > 0 ? `${activeState.items.length} live` : undefined}
-            className="mb-4"
-          />
-
-          {/* Hero banner */}
-          {heroShow ? (
-            <View className="mb-5 overflow-hidden rounded-2xl border border-border-default">
-              <HeroSection
-                imageUrl={heroShow.backdropUrl ?? heroShow.posterUrl}
-                title={heroShow.title}
-                subtitle={heroShow.overview ?? undefined}
-                mobileHeight={180}
-              >
-                <Link
-                  href={{ pathname: "/show/[id]", params: { id: createShowRouteId(heroShow) } }}
-                  asChild
-                >
-                  <Button label="View Details" variant="primary" className="self-start" />
-                </Link>
-              </HeroSection>
-            </View>
-          ) : null}
-
-          <SegmentedControl options={tabOptions} value={activeTab} onValueChange={setActiveTab} className="mb-5" />
-
-          {activeState.isLoading ? (
-            <View className="items-center gap-2 rounded-2xl border border-border-default bg-bg-surface py-8">
-              <ActivityIndicator size="small" color="#ef4444" />
-              <Text className="text-sm text-text-secondary">Loading trending titles</Text>
-            </View>
-          ) : null}
-
-          {activeState.error ? (
-            <View className="mb-4 rounded-2xl border border-primary/30 bg-primary/10 p-4">
-              <Text className="text-sm text-primary">{activeState.error}</Text>
-            </View>
-          ) : null}
-
-          {!activeState.isLoading && activeState.items.length > 0 ? (
-            <>
-              <SectionHeader
-                title={`Trending ${activeTab === "anime" ? "Anime" : activeTab === "movie" ? "Movies" : "TV Shows"}`}
-                count={activeState.items.length}
-              />
-              <View className="flex-row flex-wrap" onLayout={onGridLayout}>
-                {visibleDiscoverItems.map((item, index) => (
-                  <View
-                    key={`${item.id}-${activeTab}-${index}`}
-                    style={{
-                      width: gridItemWidth,
-                      marginRight:
-                        index % columns === columns - 1 || index === visibleDiscoverItems.length - 1
-                          ? 0
-                          : GRID_GAP,
-                      marginBottom: GRID_GAP,
-                    }}
-                  >
-                    <MediaPosterCard
-                      show={item}
-                      href={{ pathname: "/show/[id]", params: { id: createShowRouteId(item) } }}
-                      rank={index < 3 ? index + 1 : undefined}
-                      className="w-full"
-                      posterClassName={isWeb ? "h-56" : "h-64"}
-                    />
-                  </View>
-                ))}
-              </View>
-
-              {hasMoreItems ? (
-                <View className="items-center py-3">
-                  <ActivityIndicator size="small" color={isLoadingMore ? "#ef4444" : "#52525b"} />
-                </View>
-              ) : null}
-            </>
-          ) : null}
-
-          {!activeState.isLoading && !activeState.error && !activeState.items.length ? (
-            <View className="mt-5 rounded-2xl border border-border-default bg-bg-surface px-4 py-5">
-              <Text className="text-sm text-text-secondary">No discovery data available right now.</Text>
-            </View>
-          ) : null}
-
-          <View className="h-8" />
-        </View>
-      </ScrollView>
+      <View className="flex-1" onLayout={onGridLayout}>
+        <FlashList
+          data={activeState.items}
+          renderItem={renderItem}
+          keyExtractor={(item, index) => `${item.id}-${activeTab}-${index}`}
+          key={`discover-grid-${columns}`}
+          numColumns={columns}
+          showsVerticalScrollIndicator={false}
+          onEndReached={loadMoreItems}
+          onEndReachedThreshold={LOAD_MORE_THRESHOLD}
+          ListHeaderComponent={ListHeader}
+          ListFooterComponent={renderFooter}
+          ListEmptyComponent={renderEmpty}
+          contentContainerStyle={{ paddingBottom: 32 }}
+        />
+      </View>
     </ScreenWrapper>
   );
 }
+
+export default DiscoverScreen;

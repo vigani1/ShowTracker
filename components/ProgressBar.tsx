@@ -22,11 +22,11 @@ export function ProgressBar({
 
   return (
     <View
-      className={`overflow-hidden rounded-full bg-bg-hover/50 ${className ?? ""}`.trim()}
+      className={`overflow-hidden bg-bg-hover/50 ${className ?? ""}`.trim()}
       style={{ height }}
     >
       <View
-        className="h-full rounded-full bg-primary"
+        className="h-full bg-primary"
         style={{
           width: widthPercent,
           ...(animated && Platform.OS === "web"

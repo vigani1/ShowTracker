@@ -38,7 +38,7 @@ export function ShowHeader({
   return (
     <View
       style={{ height: heroHeight }}
-      className="relative overflow-hidden rounded-3xl border border-border-default"
+      className="relative overflow-hidden rounded-xl border-2 border-border-default"
     >
       {/* Backdrop Image */}
       {backdropUrl ? (
@@ -86,7 +86,7 @@ export function ShowHeader({
           {/* Poster - Only visible on desktop, floating over the hero */}
           {isDesktop && posterUrl && (
             <View
-              className="overflow-hidden rounded-2xl border border-border-default shadow-2xl"
+              className="overflow-hidden rounded-lg border-2 border-border-default shadow-2xl"
               style={{
                 width: 160,
                 height: 240,
@@ -116,9 +116,9 @@ export function ShowHeader({
               />
               {firstAired && <Badge label={firstAired} variant="default" />}
               {rating && rating > 0 && (
-                <View className="flex-row items-center gap-1 rounded-full bg-warning/20 px-2.5 py-1">
+                <View className="flex-row items-center gap-1 rounded-md border border-warning/40 bg-warning/20 px-2.5 py-1">
                   <Text className="text-sm text-warning">★</Text>
-                  <Text className="text-xs font-semibold text-warning">
+                  <Text className="text-[11px] font-black text-warning">
                     {rating.toFixed(1)}
                   </Text>
                 </View>
@@ -127,9 +127,10 @@ export function ShowHeader({
 
             {/* Title */}
             <Text
-              className={`font-black text-text-primary ${isDesktop ? "text-5xl" : "text-3xl"}`}
+              className={`text-text-primary ${isDesktop ? "text-5xl" : "text-3xl"}`}
               style={{
-                letterSpacing: -0.02,
+                fontFamily: "Courier New",
+                fontWeight: "900",
                 textShadowColor: "rgba(0,0,0,0.5)",
                 textShadowOffset: { width: 0, height: 2 },
                 textShadowRadius: 20,

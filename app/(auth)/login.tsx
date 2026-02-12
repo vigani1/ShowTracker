@@ -23,7 +23,7 @@ const gradientDivider = "h-1 w-full";
 const gradientButton = "items-center justify-center py-3";
 
 const fieldBase =
-  "flex-row items-center gap-2 rounded-2xl border border-border-default bg-bg-base/70 px-3 py-2.5";
+  "flex-row items-center gap-2 rounded-lg border-2 border-border-default bg-bg-base/70 px-3 py-2.5";
 
 function FeatureRow({
   icon,
@@ -165,10 +165,16 @@ export function LoginScreen() {
                   </Text>
                 </View>
 
-                <Text className="text-5xl font-black tracking-tight text-text-primary">
+                <Text
+                  className="text-5xl text-text-primary"
+                  style={{ fontFamily: "Courier New", fontWeight: "900" }}
+                >
                   Track everything.
                 </Text>
-                <Text className="mt-2 text-5xl font-black tracking-tight text-primary">
+                <Text
+                  className="mt-2 text-5xl text-primary"
+                  style={{ fontFamily: "Courier New", fontWeight: "900" }}
+                >
                   Miss nothing.
                 </Text>
 
@@ -198,7 +204,7 @@ export function LoginScreen() {
               }`}
             >
               {!isDesktopAuth ? (
-                <View className="mb-4 rounded-2xl border border-border-default bg-bg-surface/80 p-4">
+                <View className="mb-4 rounded-xl border-2 border-border-default bg-bg-surface/80 p-4">
                   <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
                     Welcome back
                   </Text>
@@ -211,7 +217,7 @@ export function LoginScreen() {
               <View
                 className={`w-full overflow-hidden bg-bg-surface/95 ${
                   isDesktopAuth
-                    ? "max-w-md rounded-3xl border border-border-default"
+                    ? "max-w-md rounded-xl border-2 border-border-default"
                     : "rounded-none"
                 }`}
               >
@@ -226,7 +232,10 @@ export function LoginScreen() {
                   <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
                     Sign in
                   </Text>
-                  <Text className="mt-1 text-3xl font-black tracking-tight text-text-primary">
+                  <Text
+                    className="mt-1 text-3xl text-text-primary"
+                    style={{ fontFamily: "Courier New", fontWeight: "900" }}
+                  >
                     Welcome back
                   </Text>
                   <Text className="mt-1 text-sm text-text-secondary">
@@ -293,26 +302,19 @@ export function LoginScreen() {
                   <Pressable
                     onPress={handleSignIn}
                     disabled={isPending}
-                    className="mt-4 overflow-hidden rounded-xl active:opacity-90"
+                    className="mt-4 items-center justify-center border-2 border-primary bg-primary py-3 active:opacity-90"
                   >
-                    <LinearGradient
-                      colors={["#ef4444", "#f97316"]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      className={gradientButton}
-                    >
-                      {isPending ? (
-                        <ActivityIndicator size="small" color="#fff" />
-                      ) : (
-                        <Text className="text-sm font-bold uppercase tracking-wide text-white">Sign In</Text>
-                      )}
-                    </LinearGradient>
+                    {isPending ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text className="text-sm font-black uppercase tracking-wide text-white">Sign In</Text>
+                    )}
                   </Pressable>
 
                   <Pressable
                     onPress={handleAnonymousSignIn}
                     disabled={isPending}
-                    className="mt-2 flex-row items-center justify-center gap-2 rounded-xl border border-border-default bg-bg-elevated/70 py-3 active:opacity-90"
+                    className="mt-2 flex-row items-center justify-center gap-2 rounded-lg border-2 border-border-bright bg-bg-elevated/70 py-3 active:opacity-90"
                   >
                     <Ionicons name="person-outline" size={15} color="#a1a1aa" />
                     <Text className="text-sm font-semibold text-text-primary">Continue as guest</Text>

@@ -27,6 +27,7 @@ interface SeasonAccordionProps {
   onToggle: () => void;
   onMarkSeason: () => void;
   onToggleEpisode: (episode: NormalizedEpisode) => void;
+  episodeWatchCounts?: Record<string, number>;
 }
 
 export function SeasonAccordion({
@@ -46,6 +47,7 @@ export function SeasonAccordion({
   onToggle,
   onMarkSeason,
   onToggleEpisode,
+  episodeWatchCounts,
 }: SeasonAccordionProps) {
   const rotationAnim = useRef(new Animated.Value(0)).current;
 
@@ -75,7 +77,7 @@ export function SeasonAccordion({
   });
 
   return (
-    <View className="overflow-hidden rounded-2xl border border-border-default bg-bg-surface">
+    <View className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface">
       {/* Header */}
       <Pressable
         onPress={onToggle}
@@ -86,7 +88,7 @@ export function SeasonAccordion({
       >
         <View className="flex-row items-center gap-4">
           {/* Season Number Circle */}
-          <View className="h-12 w-12 items-center justify-center rounded-full bg-bg-elevated">
+          <View className="h-12 w-12 items-center justify-center rounded-md border-2 border-primary/40 bg-primary/15">
             <Text className="text-lg font-black text-primary">
               {seasonNumber}
             </Text>
@@ -108,7 +110,10 @@ export function SeasonAccordion({
           <View className="flex-row items-center gap-3">
             {/* Mark All Radio Button */}
             <Pressable
-              onPress={onMarkSeason}
+              onPress={(event) => {
+                event.stopPropagation();
+                onMarkSeason();
+              }}
               disabled={isMarking || isLoading || !canMarkSeason}
               className="relative h-7 w-7 items-center justify-center"
               style={({ pressed }) => ({
@@ -178,12 +183,13 @@ export function SeasonAccordion({
                 </Text>
               </View>
             ) : (
-              <View className="gap-3">
+                <View className="gap-3">
                 {episodes.map((episode) => {
                   const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
                   const watched = watchedEpisodeKeys.has(key);
                   const isUpdating = pendingEpisodeKeys[key] || false;
                   const availability = getEpisodeAvailability(episode.airDate);
+                  const watchCount = episodeWatchCounts?.[key];
 
                   return (
                     <EpisodeCard
@@ -199,6 +205,7 @@ export function SeasonAccordion({
                       isUpdating={isUpdating}
                       availability={availability}
                       onToggle={() => onToggleEpisode(episode)}
+                      watchCount={watchCount}
                     />
                   );
                 })}

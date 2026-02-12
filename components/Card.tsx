@@ -7,7 +7,7 @@ interface CardProps extends PropsWithChildren {
 }
 
 export function Card({ children, className, onPress }: CardProps) {
-  const base = "rounded-2xl border border-border-default bg-bg-elevated overflow-hidden";
+  const base = "rounded-xl border-2 border-border-default bg-bg-elevated overflow-hidden";
 
   if (onPress) {
     return (

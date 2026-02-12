@@ -90,7 +90,7 @@ function StatCard({
 
   return (
     <View
-      className="overflow-hidden rounded-2xl border border-border-default bg-bg-surface"
+      className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface"
       style={{ flexBasis: isDesktop ? "23.5%" : "48%", flexGrow: 1, minWidth: 160 }}
     >
       <View style={{ height: 3, backgroundColor: accent }} />
@@ -137,7 +137,7 @@ function QuickMetric({
   accent: string;
 }) {
   return (
-    <View className="flex-1 rounded-xl border border-border-default bg-bg-surface px-3 py-3">
+    <View className="flex-1 rounded-xl border-2 border-border-default bg-bg-surface px-3 py-3">
       <View className="flex-row items-center gap-2">
         <Ionicons name={icon} size={14} color={accent} />
         <Text className="text-[11px] text-text-secondary">{label}</Text>
@@ -160,9 +160,18 @@ function SectionHeader({
     <View className="mb-3 flex-row items-center justify-between">
       <View className="flex-row items-center gap-2">
         <Ionicons name={icon} size={18} color="#ef4444" />
-        <Text className="text-xl font-extrabold text-text-primary">{title}</Text>
+        <Text
+          className="text-xl text-text-primary"
+          style={{ fontFamily: "Courier New", fontWeight: "900" }}
+        >
+          {title}
+        </Text>
       </View>
-      {rightLabel ? <Text className="text-xs text-text-secondary">{rightLabel}</Text> : null}
+      {rightLabel ? (
+        <Text className="text-[11px] font-black uppercase tracking-wide text-text-secondary">
+          {rightLabel}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -178,7 +187,7 @@ function PosterRail({
 }) {
   if (items.length === 0) {
     return (
-      <View className="items-center justify-center rounded-2xl border border-border-default bg-bg-surface py-8">
+      <View className="items-center justify-center rounded-xl border-2 border-border-default bg-bg-surface py-8">
         <Text className="text-sm text-text-secondary">{emptyMessage}</Text>
       </View>
     );
@@ -197,7 +206,7 @@ function PosterRail({
       {items.map((item) => {
         const card = (
           <Pressable
-            className="overflow-hidden rounded-xl border border-border-default bg-bg-surface"
+            className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface"
             style={({ pressed }) => (pressed && item.routeId ? { opacity: 0.92 } : undefined)}
             disabled={!item.routeId}
           >
@@ -229,8 +238,8 @@ function PosterRail({
               </View>
 
               {item.badge ? (
-                <View className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-1">
-                  <Text className="text-[10px] font-semibold text-white">{item.badge}</Text>
+                <View className="absolute left-2 top-2 rounded-md border border-white/20 bg-black/70 px-2 py-1">
+                  <Text className="text-[10px] font-black uppercase tracking-wide text-white">{item.badge}</Text>
                 </View>
               ) : null}
             </View>
@@ -326,7 +335,7 @@ export default function ProfileScreen() {
         title: entry.title,
         posterUrl: entry.posterUrl,
         meta:
-          typeof entry.remainingEpisodes === "number"
+          typeof entry.remainingEpisodes === "number" && entry.remainingEpisodes > 0
             ? `${entry.remainingEpisodes} left`
             : formatStatus(entry.status),
         badge: entry.mediaType === "anime" ? "Anime" : "TV",
@@ -353,8 +362,8 @@ export default function ProfileScreen() {
     (lists?.length ?? 0) > visibleRailCount ||
     favoriteShowRailItems.length > visibleRailCount ||
     activeShowRailItems.length > visibleRailCount ||
-    (favoriteMovieRailItems.length > 0 ? favoriteMovieRailItems.length : activeMovieRailItems.length) >
-      visibleRailCount;
+    favoriteMovieRailItems.length > visibleRailCount ||
+    activeMovieRailItems.length > visibleRailCount;
 
   const visibleLists = useMemo(
     () => (lists ?? []).slice(0, visibleRailCount),
@@ -368,10 +377,13 @@ export default function ProfileScreen() {
     () => activeShowRailItems.slice(0, visibleRailCount),
     [activeShowRailItems, visibleRailCount]
   );
-  const movieRailItems = favoriteMovieRailItems.length > 0 ? favoriteMovieRailItems : activeMovieRailItems;
+  const visibleFavoriteMovieRailItems = useMemo(
+    () => favoriteMovieRailItems.slice(0, visibleRailCount),
+    [favoriteMovieRailItems, visibleRailCount]
+  );
   const visibleMovieRailItems = useMemo(
-    () => movieRailItems.slice(0, visibleRailCount),
-    [movieRailItems, visibleRailCount]
+    () => activeMovieRailItems.slice(0, visibleRailCount),
+    [activeMovieRailItems, visibleRailCount]
   );
 
   useEffect(() => {
@@ -474,6 +486,8 @@ export default function ProfileScreen() {
     }
   };
 
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
+
   const handleSignOut = async () => {
     setSignOutError(null);
     setIsSigningOut(true);
@@ -505,7 +519,7 @@ export default function ProfileScreen() {
         onScroll={onProfileScroll}
         scrollEventThrottle={16}
       >
-        <View className="overflow-hidden rounded-3xl border border-border-default bg-bg-surface">
+        <View className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface">
           <View className="relative" style={{ height: isDesktop ? 250 : 220 }}>
             {heroBackdropUrl ? (
               <Image source={{ uri: heroBackdropUrl }} className="h-full w-full" resizeMode="cover" />
@@ -534,12 +548,29 @@ export default function ProfileScreen() {
                   {stats?.currentStreak ?? 0} day streak
                 </Text>
               </View>
-              <Pressable
-                onPress={openProfileEditor}
-                className="rounded-full border border-white/20 bg-black/35 px-3 py-1.5"
-              >
-                <Text className="text-[11px] font-semibold text-white">EDIT</Text>
-              </Pressable>
+              <View className="flex-row items-center gap-3">
+                <Pressable
+                  onPress={openProfileEditor}
+                  className="rounded-full border border-white/40 bg-black/70 px-4 py-2 shadow-lg"
+                >
+                  <Text className="text-xs font-bold tracking-wide text-white">EDIT</Text>
+                </Pressable>
+                {isDesktop && (
+                  <Pressable
+                    onPress={() => setShowSignOutConfirm(true)}
+                    disabled={!isAuthenticated || isSigningOut}
+                    className="rounded-full border border-primary/50 bg-black/70 px-4 py-2 shadow-lg"
+                    style={{ opacity: !isAuthenticated || isSigningOut ? 0.5 : 1 }}
+                  >
+                    <View className="flex-row items-center gap-2">
+                      <Ionicons name="log-out-outline" size={14} color="#ef4444" />
+                      <Text className="text-xs font-bold tracking-wide text-primary">
+                        {isSigningOut ? "..." : "LOGOUT"}
+                      </Text>
+                    </View>
+                  </Pressable>
+                )}
+              </View>
             </View>
 
             <View className="absolute bottom-4 left-4 right-4 flex-row items-end justify-between">
@@ -639,7 +670,7 @@ export default function ProfileScreen() {
           <SectionHeader title="Lists" icon="list-outline" rightLabel={`${lists?.length ?? 0} TOTAL`} />
 
           <Link href="/list/create" asChild>
-            <Pressable className="overflow-hidden rounded-2xl border border-border-default bg-bg-surface">
+            <Pressable className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface">
               <LinearGradient
                 colors={["rgba(239,68,68,0.18)", "rgba(239,68,68,0.02)"]}
                 start={{ x: 0, y: 0 }}
@@ -663,7 +694,7 @@ export default function ProfileScreen() {
             >
               {visibleLists.map((list) => (
                 <Link key={String(list.id)} href={`/list/${list.id}`} asChild>
-                  <Pressable className="w-44 overflow-hidden rounded-xl border border-border-default bg-bg-surface">
+                  <Pressable className="w-44 overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface">
                     <View className="h-1 w-full bg-primary" />
                     <View className="p-3">
                       <Text className="text-sm font-bold text-text-primary" numberOfLines={1}>
@@ -690,6 +721,21 @@ export default function ProfileScreen() {
             <PosterRail
               items={visibleFavoriteShowRailItems}
               emptyMessage="No favorite shows yet"
+              isDesktop={isDesktop}
+            />
+          </View>
+        ) : null}
+
+        {favoriteMovieRailItems.length > 0 ? (
+          <View className="mt-8">
+            <SectionHeader
+              title="Favorite Movies"
+              icon="heart"
+              rightLabel={`${favoriteMovieRailItems.length} FAVORITES`}
+            />
+            <PosterRail
+              items={visibleFavoriteMovieRailItems}
+              emptyMessage="No favorite movies yet"
               isDesktop={isDesktop}
             />
           </View>
@@ -727,21 +773,23 @@ export default function ProfileScreen() {
           </View>
         ) : null}
 
-        <View className="mt-8 pb-8">
-          <SectionHeader title="Account" icon="person-outline" />
-          <Pressable
-            onPress={handleSignOut}
-            disabled={!isAuthenticated || isSigningOut}
-            className="flex-row items-center justify-center gap-2 rounded-xl border border-primary/40 bg-primary/10 py-3.5"
-            style={{ opacity: !isAuthenticated || isSigningOut ? 0.5 : 1 }}
-          >
-            <Ionicons name="log-out-outline" size={18} color="#ef4444" />
-            <Text className="font-semibold text-primary">
-              {isSigningOut ? "Signing out..." : "Sign out"}
-            </Text>
-          </Pressable>
-          {signOutError ? <Text className="mt-2 text-sm text-primary">{signOutError}</Text> : null}
-        </View>
+        {!isDesktop && (
+          <View className="mt-8 pb-8">
+            <SectionHeader title="Account" icon="person-outline" />
+            <Pressable
+              onPress={() => setShowSignOutConfirm(true)}
+              disabled={!isAuthenticated || isSigningOut}
+              className="flex-row items-center justify-center gap-2 rounded-xl border border-primary/40 bg-primary/10 py-3.5"
+              style={{ opacity: !isAuthenticated || isSigningOut ? 0.5 : 1 }}
+            >
+              <Ionicons name="log-out-outline" size={18} color="#ef4444" />
+              <Text className="font-semibold text-primary">
+                {isSigningOut ? "Signing out..." : "Sign out"}
+              </Text>
+            </Pressable>
+            {signOutError ? <Text className="mt-2 text-sm text-primary">{signOutError}</Text> : null}
+          </View>
+        )}
       </ScrollView>
 
       <Modal
@@ -761,7 +809,7 @@ export default function ProfileScreen() {
             behavior={Platform.OS === "ios" ? "padding" : undefined}
             className={`w-full ${isDesktop ? "max-w-xl" : ""}`}
           >
-            <View className="overflow-hidden rounded-3xl border border-border-bright bg-bg-surface">
+            <View className="overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
               <LinearGradient
                 colors={["rgba(239,68,68,0.2)", "rgba(56,189,248,0.06)", "transparent"]}
                 start={{ x: 0, y: 0 }}
@@ -802,7 +850,7 @@ export default function ProfileScreen() {
                       maxLength={32}
                       placeholder="Your username"
                       placeholderTextColor="#52525b"
-                      className="rounded-xl border border-border-default bg-bg-base px-3 py-2.5 text-text-primary"
+                      className="rounded-lg border-2 border-border-default bg-bg-base px-3 py-2.5 text-text-primary"
                     />
                   </View>
 
@@ -824,7 +872,7 @@ export default function ProfileScreen() {
                       placeholderTextColor="#52525b"
                       multiline
                       textAlignVertical="top"
-                      className="min-h-[90px] rounded-xl border border-border-default bg-bg-base px-3 py-2.5 text-text-primary"
+                      className="min-h-[90px] rounded-lg border-2 border-border-default bg-bg-base px-3 py-2.5 text-text-primary"
                     />
                   </View>
 
@@ -839,7 +887,7 @@ export default function ProfileScreen() {
                       placeholder="https://..."
                       placeholderTextColor="#52525b"
                       autoCapitalize="none"
-                      className="rounded-xl border border-border-default bg-bg-base px-3 py-2.5 text-text-primary"
+                      className="rounded-lg border-2 border-border-default bg-bg-base px-3 py-2.5 text-text-primary"
                     />
                   </View>
 
@@ -854,7 +902,7 @@ export default function ProfileScreen() {
                       placeholder="https://..."
                       placeholderTextColor="#52525b"
                       autoCapitalize="none"
-                      className="rounded-xl border border-border-default bg-bg-base px-3 py-2.5 text-text-primary"
+                      className="rounded-lg border-2 border-border-default bg-bg-base px-3 py-2.5 text-text-primary"
                     />
                   </View>
 
@@ -864,20 +912,20 @@ export default function ProfileScreen() {
                     <Pressable
                       onPress={closeProfileEditor}
                       disabled={isSavingProfile}
-                      className="flex-1 items-center justify-center rounded-xl border border-border-default bg-bg-elevated py-3"
+                      className="flex-1 items-center justify-center rounded-lg border-2 border-border-default bg-bg-elevated py-3"
                     >
-                      <Text className="text-sm font-semibold text-text-primary">Cancel</Text>
+                      <Text className="text-sm font-bold text-text-primary">Cancel</Text>
                     </Pressable>
                     <Pressable
                       onPress={handleSaveProfile}
                       disabled={isSavingProfile}
-                      className="flex-1 items-center justify-center rounded-xl bg-primary py-3"
+                      className="flex-1 items-center justify-center border-2 border-primary bg-primary py-3"
                       style={{ opacity: isSavingProfile ? 0.6 : 1 }}
                     >
                       {isSavingProfile ? (
                         <ActivityIndicator size="small" color="#fff" />
                       ) : (
-                        <Text className="text-sm font-semibold text-white">Save Profile</Text>
+                        <Text className="text-sm font-black uppercase tracking-wide text-white">Save</Text>
                       )}
                     </Pressable>
                   </View>
@@ -885,6 +933,67 @@ export default function ProfileScreen() {
               </ScrollView>
             </View>
           </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showSignOutConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !isSigningOut && setShowSignOutConfirm(false)}
+      >
+        <View className="flex-1 items-center justify-center bg-black/70 px-5">
+          <Pressable
+            className="absolute inset-0"
+            onPress={() => !isSigningOut && setShowSignOutConfirm(false)}
+            disabled={isSigningOut}
+          />
+
+          <View className={`w-full overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface ${isDesktop ? "max-w-md" : ""}`}>
+            <LinearGradient
+              colors={["rgba(239,68,68,0.2)", "transparent"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{ height: 4, width: "100%" }}
+            />
+
+            <View className="items-center px-6 py-8">
+              <View className="mb-4 h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+                <Ionicons name="log-out-outline" size={32} color="#ef4444" />
+              </View>
+
+              <Text className="text-xl font-black text-text-primary">Sign Out?</Text>
+              <Text className="mt-2 text-center text-sm text-text-secondary">
+                Are you sure you want to sign out of your account?
+              </Text>
+
+              {signOutError ? (
+                <Text className="mt-4 text-center text-sm text-primary">{signOutError}</Text>
+              ) : null}
+
+              <View className="mt-6 w-full flex-row gap-3">
+                <Pressable
+                  onPress={() => setShowSignOutConfirm(false)}
+                  disabled={isSigningOut}
+                  className="flex-1 items-center justify-center rounded-lg border-2 border-border-default bg-bg-elevated py-3.5"
+                >
+                  <Text className="text-sm font-bold text-text-primary">Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleSignOut}
+                  disabled={isSigningOut}
+                  className="flex-1 items-center justify-center border-2 border-primary bg-primary py-3.5"
+                  style={{ opacity: isSigningOut ? 0.6 : 1 }}
+                >
+                  {isSigningOut ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text className="text-sm font-black uppercase tracking-wide text-white">Sign Out</Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          </View>
         </View>
       </Modal>
     </ScreenWrapper>

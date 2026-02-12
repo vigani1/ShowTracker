@@ -20,7 +20,7 @@ export function SegmentedControl<T extends string>({
 }: SegmentedControlProps<T>) {
   return (
     <View
-      className={`flex-row rounded-2xl border border-border-default bg-bg-surface/85 p-1.5 ${className ?? ""}`.trim()}
+      className={`flex-row rounded-lg border-2 border-border-default bg-bg-surface/85 p-1.5 ${className ?? ""}`.trim()}
     >
       {options.map((opt) => {
         const isActive = opt.value === value;
@@ -28,18 +28,18 @@ export function SegmentedControl<T extends string>({
           <Pressable
             key={opt.value}
             onPress={() => onValueChange(opt.value)}
-            className={`flex-1 items-center justify-center rounded-xl py-2.5 ${
-              isActive ? "border border-primary/40 bg-primary/15" : ""
+            className={`flex-1 items-center justify-center rounded-md py-2.5 ${
+              isActive ? "border-2 border-primary/40 bg-primary/15" : ""
             }`}
             style={({ pressed }) =>
               pressed && !isActive ? { opacity: 0.8 } : undefined
             }
           >
             <Text
-              className={`text-sm ${
+              className={`text-xs uppercase tracking-wide ${
                 isActive
-                  ? "font-bold text-text-primary"
-                  : "font-medium text-text-secondary"
+                  ? "font-black text-text-primary"
+                  : "font-bold text-text-secondary"
               }`}
             >
               {opt.label}

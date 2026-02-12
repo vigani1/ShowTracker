@@ -5,7 +5,7 @@ globs: app/**/*.tsx, components/**/*.tsx
 
 # Expo & React Native Patterns
 - Use Expo Router for all navigation (never import from @react-navigation directly)
-- Use `expo-image` for all images (not React Native Image)
+- Use React Native `Image` from `react-native` for all images (never `expo-image`)
 - Use FlashList from @shopify/flash-list for long lists
 - Use NativeWind className for styling, never StyleSheet.create
 - Screens go in app/, reusable components in components/

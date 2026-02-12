@@ -17,7 +17,7 @@ import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const fieldBase =
-  "flex-row items-center gap-2 rounded-2xl border border-border-default bg-bg-base/70 px-3 py-2.5";
+  "flex-row items-center gap-2 rounded-lg border-2 border-border-default bg-bg-base/70 px-3 py-2.5";
 
 function BenefitRow({
   icon,
@@ -152,10 +152,16 @@ export function RegisterScreen() {
                   </Text>
                 </View>
 
-                <Text className="text-5xl font-black tracking-tight text-text-primary">
+                <Text
+                  className="text-5xl text-text-primary"
+                  style={{ fontFamily: "Courier New", fontWeight: "900" }}
+                >
                   Build your
                 </Text>
-                <Text className="mt-2 text-5xl font-black tracking-tight text-primary">
+                <Text
+                  className="mt-2 text-5xl text-primary"
+                  style={{ fontFamily: "Courier New", fontWeight: "900" }}
+                >
                   watch command center
                 </Text>
 
@@ -171,7 +177,7 @@ export function RegisterScreen() {
                 </View>
               </View>
 
-              <View className="rounded-2xl border border-border-default bg-bg-surface/85 p-4">
+              <View className="rounded-xl border-2 border-border-default bg-bg-surface/85 p-4">
                 <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   Why create an account
                 </Text>
@@ -195,7 +201,7 @@ export function RegisterScreen() {
               }`}
             >
               {!isDesktopAuth ? (
-                <View className="mb-4 rounded-2xl border border-border-default bg-bg-surface/80 p-4">
+                <View className="mb-4 rounded-xl border-2 border-border-default bg-bg-surface/80 p-4">
                   <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
                     Join ShowTracker
                   </Text>
@@ -208,7 +214,7 @@ export function RegisterScreen() {
               <View
                 className={`w-full overflow-hidden bg-bg-surface/95 ${
                   isDesktopAuth
-                    ? "max-w-md rounded-3xl border border-border-default"
+                    ? "max-w-md rounded-xl border-2 border-border-default"
                     : "rounded-none"
                 }`}
               >
@@ -230,7 +236,10 @@ export function RegisterScreen() {
                   <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
                     Register
                   </Text>
-                  <Text className="mt-1 text-3xl font-black tracking-tight text-text-primary">
+                  <Text
+                    className="mt-1 text-3xl text-text-primary"
+                    style={{ fontFamily: "Courier New", fontWeight: "900" }}
+                  >
                     Create your account
                   </Text>
                   <Text className="mt-1 text-sm text-text-secondary">
@@ -322,21 +331,13 @@ export function RegisterScreen() {
                   <Pressable
                     onPress={handleRegister}
                     disabled={isPending}
-                    className="mt-4 overflow-hidden rounded-xl"
-                    style={({ pressed }) => (pressed && !isPending ? { opacity: 0.9 } : undefined)}
+                    className="mt-4 items-center justify-center border-2 border-primary bg-primary py-3 active:opacity-90"
                   >
-                    <LinearGradient
-                      colors={["#ef4444", "#f97316"]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={{ alignItems: "center", justifyContent: "center", paddingVertical: 12 }}
-                    >
-                      {isPending ? (
-                        <ActivityIndicator size="small" color="#fff" />
-                      ) : (
-                        <Text className="text-sm font-bold uppercase tracking-wide text-white">Create Account</Text>
-                      )}
-                    </LinearGradient>
+                    {isPending ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text className="text-sm font-black uppercase tracking-wide text-white">Create Account</Text>
+                    )}
                   </Pressable>
 
                   <View className="mt-4 flex-row items-center justify-center gap-1">

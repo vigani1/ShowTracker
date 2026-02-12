@@ -18,7 +18,7 @@ export function SearchInput({
 
   return (
     <View
-      className={`flex-row items-center gap-2 rounded-2xl border px-3 py-2.5 ${
+      className={`flex-row items-center gap-2 rounded-lg border-2 px-3 py-2.5 ${
         hasValue
           ? "border-border-bright bg-bg-elevated/70"
           : "border-border-default bg-bg-surface"

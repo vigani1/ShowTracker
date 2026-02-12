@@ -1,9 +1,11 @@
 # ShowTracker Progress
 
 ## Current Phase
-Phase 4: Tracking Features (in progress)
+
+Phase 8: Polish and validation (in progress)
 
 ## Completed
+
 - [x] Project planning and research (docs/PLAN.md)
 - [x] Tech stack selection
 - [x] API selection and evaluation
@@ -35,7 +37,7 @@ Phase 4: Tracking Features (in progress)
   - [x] Desktop sidebar visibility scoped to app-shell routes (hidden on auth/landing)
   - [x] Responsive TV frame layout tuning for desktop and mobile
 - [x] Theme system hardening
-  - [x] Simplified to dark-only (Midnight Pulse); removed light mode toggle, localStorage persistence, and all light-* color tokens
+  - [x] Simplified to dark-only (Midnight Pulse); removed light mode toggle, localStorage persistence, and all light-\* color tokens
   - [x] Theme-consistent background/shell rendering across routes
 - [x] Home feed density + scroll behavior updates
   - [x] More efficient card density on desktop and mobile
@@ -98,36 +100,70 @@ Phase 4: Tracking Features (in progress)
   - [x] Mobile bottom bar uses five visible tabs (Home, Discover, Search, Library, Profile)
   - [x] List and Show detail routes are hidden from tabs and rendered as stack screens
   - [x] Removed in-screen back buttons in favor of native gesture/back navigation
+- [x] Phase 4: Tracking Features
+  - [x] Watchlist add/status flows for shows, anime, and movies
+  - [x] Episode/season/full-show watched toggles with optimistic updates
+  - [x] Rewatch support for episodes, seasons, full shows, and movies
+  - [x] Batch rewatch and full-clear mutations for faster bulk actions
+- [x] Phase 5: Schedule View
+  - [x] Schedule data integration and grouped timeline rendering
+  - [x] Infinite loading behavior for earlier/later windows
+  - [x] Tracked-show filtering and media-type coverage (TV + anime)
+- [x] Phase 6: Custom Lists
+  - [x] Create/edit/delete list flows
+  - [x] Add-to-list from show details and list page
+  - [x] Reorder and remove list items in edit mode
+- [x] Phase 7: Statistics
+  - [x] Dashboard/profile rails for active/favorite shows and movies
+  - [x] Watch-time and progress aggregation hooks in Convex queries
+  - [x] Cross-media tracking visibility for watching/completed/plan states
+- [x] Discover/List UX expansion
+  - [x] Discover infinite scroll for TV/anime/movies
+  - [x] Browser swipe-back restoration on web (`overscroll-behavior-y` fix)
+  - [x] List-page card consistency and add-show watchlist picker
 
 ## PR Readiness Snapshot (current branch)
+
 - [x] `npx expo lint` passes
 - [x] `npx tsc --noEmit` passes
 
 ## Pending
-- [ ] Phase 4: Tracking Features (Watchlist, Episode marking) - remaining polish and edge cases
-- [ ] Phase 5: Schedule View
-- [ ] Phase 6: Custom Lists
-- [ ] Phase 7: Statistics
-- [ ] Phase 8: Polish
+
+- [ ] Phase 8: Polish and validation
+  - [ ] API normalization parity check: ensure TV/anime/movie adapters return equivalent required fields where possible
+  - [ ] Cross-source deduplication pass: resolve duplicates where TMDB TV/discovery already includes anime that also appears from AniList/Jikan
+  - [ ] Anime season canonicalization: normalize franchises so season-based entries are grouped correctly (avoid split rows like "Title Season 1" + "Title Season 2" unless intended)
+  - [ ] Anime season/episode completeness audit: patch cases where one source lacks seasons/episode structure but another source provides it
+  - [ ] Missing metadata fallback pass: handle absent air dates, runtimes, season/episode totals, and status values safely
+  - [ ] End-to-end QA on mobile image rendering, watch actions, and list edit flows
+  - [ ] Final UX sweep for loading/error states and microcopy consistency
 
 ## Known Issues
+
 - React Native Web emits `props.pointerEvents is deprecated. Use style.pointerEvents` warning from upstream internals.
+- Some API records still arrive without complete metadata (air dates, runtimes, or totals), requiring additional fallback validation.
+- Duplicate anime entries can appear when TMDB show feeds overlap with AniList/Jikan results.
+- Anime source mismatch: TMDB can return anime without season structure while AniList can expose seasonized entries as separate shows, causing split titles.
 - Continue UX QA pass for non-tab/detail screens on very small mobile heights.
-- `app/show/[id].tsx` has an `exhaustive-deps` lint warning for the auto-expand season effect.
 
-## Future Ideas / Backlog
-- Notifications for new episodes (push notifications)
-- Import from TVTime/Trakt
-- Recommendations based on watch history
+## Future Phases (Post-Polish)
 
-## Planned Later (Requested)
-- [ ] Upgrade project from Expo SDK 54 to SDK 55
-  - [x] Confirm version availability (as of 2026-02-12 only `55.0.0-preview.x` exists on npm; no stable `55.x`)
-  - [x] Keep project on latest stable SDK 54 (`expo@54.0.33`) and run alignment/doctor checks
-  - [ ] Upgrade to SDK 55 once stable is published
-  - [ ] Resolve SDK 55 breaking changes (if any) and re-run lint/typecheck
-  - [ ] Validate iOS, Android, and web smoke flows after upgrade
-- [ ] Keep desktop sidebar persistent across authenticated app routes
-  - [x] Move sidebar shell to a shared authenticated desktop layout (not tabs-only)
-  - [x] Ensure detail routes (show/list/create) render inside same desktop shell
-  - [x] Preserve current mobile tab navigation behavior
+### Phase 9: Data Canonicalization & Source Harmonization
+
+- [ ] Cross-source deduplication policy and implementation (TMDB vs AniList/Jikan overlap)
+- [ ] Anime franchise season canonicalization (group seasonized entries into a single title flow where appropriate)
+- [ ] Source merge strategy for incomplete records (prefer richer season/episode payloads)
+- [ ] Backfill/reconciliation pass for previously cached inconsistent records
+
+### Phase 10: Reliability & Quality Hardening
+
+- [ ] Metadata completeness hardening (air dates/runtime/season totals/status fallbacks)
+- [ ] Regression checklist for watch actions (mark watched/unwatched/rewatch across TV/anime/movies)
+- [ ] End-to-end QA matrix (web/iOS/Android) for list editing, discovery pagination, and profile rails
+- [ ] Performance tuning pass on long lists and high-volume watch histories
+
+### Phase 11: Platform Upgrade & Expansion
+
+- [ ] Notifications for new episodes (push notifications)
+- [ ] Import from TVTime/Trakt
+- [ ] Recommendations based on watch history

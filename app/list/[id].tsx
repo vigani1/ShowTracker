@@ -1,14 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   Text,
   TextInput,
   View,
   useWindowDimensions,
 } from "react-native";
-import { Image } from "expo-image";
 import { FlashList } from "@shopify/flash-list";
 import { useLocalSearchParams, router } from "expo-router";
 import { useMutation, useQuery } from "convex/react";
@@ -16,8 +16,10 @@ import { api } from "@/convex/_generated/api";
 import { Ionicons } from "@expo/vector-icons";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { SearchShowsModal } from "@/components/SearchShowsModal";
+import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { toHttpsImageUrl } from "@/lib/image-url";
-import type { MediaType } from "@/lib/api/types";
+import type { MediaType, NormalizedShow } from "@/lib/api/types";
 
 type ShowItem = {
   id: any;
@@ -38,8 +40,6 @@ function ListShowCard({
   onRemove,
   index,
   totalCount,
-  posterWidth,
-  posterHeight,
 }: {
   show: ShowItem;
   isEditing: boolean;
@@ -48,62 +48,54 @@ function ListShowCard({
   onRemove: () => void;
   index: number;
   totalCount: number;
-  posterWidth: number;
-  posterHeight: number;
 }) {
   if (isEditing) {
     return (
-      <View
-        className="flex-row items-center gap-3 rounded-xl bg-bg-surface p-3"
-        style={{ width: posterWidth }}
-      >
+      <View className="flex-row items-center gap-3 rounded-xl border-2 border-border-default bg-bg-surface p-3">
         {/* Poster */}
-        <View
-          className="overflow-hidden rounded-lg bg-bg-elevated"
-          style={{ width: posterWidth * 0.3, height: posterHeight * 0.3 }}
-        >
+        <View className="h-20 w-14 overflow-hidden rounded-lg bg-bg-elevated shrink-0">
           {show.posterUrl ? (
             <Image
               source={{ uri: toHttpsImageUrl(show.posterUrl) }}
-              style={{ width: posterWidth * 0.3, height: posterHeight * 0.3 }}
-              contentFit="cover"
+              className="h-full w-full"
+              resizeMode="cover"
             />
           ) : (
             <View className="h-full w-full items-center justify-center bg-bg-elevated">
-              <Text className="text-xs text-text-secondary">No Image</Text>
+              <Ionicons name="tv-outline" size={24} color="#52525b" />
             </View>
           )}
         </View>
 
         {/* Info */}
-        <View className="flex-1">
-          <Text className="text-sm font-semibold text-text-primary" numberOfLines={2}>
+        <View className="flex-1 min-w-0">
+          <Text className="text-base font-semibold text-text-primary" numberOfLines={1}>
             {show.title}
           </Text>
-          <Text className="text-xs text-text-secondary">
+          <Text className="text-sm text-text-secondary mt-0.5">
             {show.mediaType === "tv" ? "TV Show" : show.mediaType === "anime" ? "Anime" : "Movie"}
           </Text>
         </View>
 
         {/* Actions */}
-        <View className="flex-row gap-1">
+        <View className="flex-row items-center gap-1">
           <Pressable
             onPress={onMoveUp}
             disabled={index === 0}
-            className={`rounded-lg p-2 ${index === 0 ? 'opacity-30' : 'bg-bg-elevated'}`}
+            className={`rounded-lg p-2.5 ${index === 0 ? 'opacity-30' : 'bg-bg-elevated active:bg-bg-base'}`}
           >
             <Ionicons name="arrow-up" size={20} color="#a1a1aa" />
           </Pressable>
           <Pressable
             onPress={onMoveDown}
             disabled={index === totalCount - 1}
-            className={`rounded-lg p-2 ${index === totalCount - 1 ? 'opacity-30' : 'bg-bg-elevated'}`}
+            className={`rounded-lg p-2.5 ${index === totalCount - 1 ? 'opacity-30' : 'bg-bg-elevated active:bg-bg-base'}`}
           >
             <Ionicons name="arrow-down" size={20} color="#a1a1aa" />
           </Pressable>
           <Pressable
             onPress={onRemove}
-            className="rounded-lg bg-primary/10 p-2"
+            className="rounded-lg bg-primary/10 p-2.5 active:bg-primary/20"
           >
             <Ionicons name="trash-outline" size={20} color="#ef4444" />
           </Pressable>
@@ -117,16 +109,16 @@ function ListShowCard({
       onPress={() => router.push(`/show/${encodeURIComponent(show.externalId)}`)}
       className="overflow-hidden rounded-xl bg-bg-surface"
     >
-      <View style={{ width: posterWidth }}>
+      <View style={{ width: 180 }}>
         <View
           className="relative overflow-hidden rounded-xl bg-bg-elevated"
-          style={{ width: posterWidth, height: posterHeight }}
+          style={{ width: 180, height: 270 }}
         >
           {show.posterUrl ? (
             <Image
               source={{ uri: toHttpsImageUrl(show.posterUrl) }}
-              style={{ width: posterWidth, height: posterHeight }}
-              contentFit="cover"
+              style={{ width: 180, height: 270 }}
+              resizeMode="cover"
             />
           ) : (
             <View className="h-full w-full items-center justify-center bg-bg-elevated">
@@ -157,7 +149,77 @@ function ListShowCard({
   );
 }
 
-export default function ListDetailScreen() {
+// Edit mode header component
+function EditModeHeader({
+  editedName,
+  setEditedName,
+  editedDescription,
+  setEditedDescription,
+  isSaving,
+  onSave,
+  onCancel,
+}: {
+  editedName: string;
+  setEditedName: (name: string) => void;
+  editedDescription: string;
+  setEditedDescription: (desc: string) => void;
+  isSaving: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <View className="gap-4">
+      <View>
+        <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary mb-2">
+          List Name
+        </Text>
+        <TextInput
+          value={editedName}
+          onChangeText={setEditedName}
+          className="text-lg font-semibold text-text-primary bg-bg-base border border-border-default rounded-xl px-4 py-3"
+          placeholder="Enter list name"
+          placeholderTextColor="#71717a"
+        />
+      </View>
+      <View>
+        <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary mb-2">
+          Description
+        </Text>
+        <TextInput
+          value={editedDescription}
+          onChangeText={setEditedDescription}
+          className="text-sm text-text-primary bg-bg-base border border-border-default rounded-xl px-4 py-3 min-h-[80px]"
+          placeholder="Add a description (optional)"
+          placeholderTextColor="#71717a"
+          multiline
+          textAlignVertical="top"
+        />
+      </View>
+      <View className="flex-row gap-3 pt-2">
+        <Pressable
+          onPress={onSave}
+          disabled={isSaving}
+          className="flex-1 items-center justify-center rounded-xl bg-primary py-3.5 active:bg-primary/90"
+        >
+          {isSaving ? (
+            <ActivityIndicator size="small" color="#ffffff" />
+          ) : (
+            <Text className="font-semibold text-white">Save Changes</Text>
+          )}
+        </Pressable>
+        <Pressable
+          onPress={onCancel}
+          disabled={isSaving}
+          className="flex-1 items-center justify-center rounded-xl border border-border-default bg-bg-surface py-3.5 active:bg-bg-elevated"
+        >
+          <Text className="font-semibold text-text-primary">Cancel</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+export function ListDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const listId = id ? (Array.isArray(id) ? id[0] : id) : undefined;
   const [isEditing, setIsEditing] = useState(false);
@@ -166,6 +228,7 @@ export default function ListDetailScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [localShows, setLocalShows] = useState<ShowItem[]>([]);
   const [gridWidth, setGridWidth] = useState(0);
+  const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
   const { width: windowWidth } = useWindowDimensions();
 
   const list = useQuery(api.lists.getListDetail, listId ? { listId } : "skip");
@@ -190,8 +253,6 @@ export default function ListDetailScreen() {
     const availableWidth = gridWidth - (columns - 1) * GRID_GAP;
     return Math.floor(availableWidth / columns);
   }, [gridWidth, columns, isDesktop]);
-
-  const posterHeight = Math.floor(posterWidth * 1.5);
 
   // Initialize local state when entering edit mode
   const startEditing = () => {
@@ -245,19 +306,23 @@ export default function ListDetailScreen() {
     }
   };
 
-  const handleMoveUp = (index: number) => {
+  const handleMoveUp = useCallback((index: number) => {
     if (index === 0) return;
-    const newShows = [...localShows];
-    [newShows[index], newShows[index - 1]] = [newShows[index - 1], newShows[index]];
-    setLocalShows(newShows);
-  };
+    setLocalShows((prev) => {
+      const newShows = [...prev];
+      [newShows[index], newShows[index - 1]] = [newShows[index - 1], newShows[index]];
+      return newShows;
+    });
+  }, []);
 
-  const handleMoveDown = (index: number) => {
-    if (index >= localShows.length - 1) return;
-    const newShows = [...localShows];
-    [newShows[index], newShows[index + 1]] = [newShows[index + 1], newShows[index]];
-    setLocalShows(newShows);
-  };
+  const handleMoveDown = useCallback((index: number) => {
+    setLocalShows((prev) => {
+      if (index >= prev.length - 1) return prev;
+      const newShows = [...prev];
+      [newShows[index], newShows[index + 1]] = [newShows[index + 1], newShows[index]];
+      return newShows;
+    });
+  }, []);
 
   const handleRemove = async (showId: string) => {
     Alert.alert(
@@ -315,43 +380,15 @@ export default function ListDetailScreen() {
       <View className="gap-3">
         {isEditing ? (
           // Edit Mode Header
-          <>
-            <TextInput
-              value={editedName}
-              onChangeText={setEditedName}
-              className="text-2xl font-bold text-text-primary"
-              placeholder="List name"
-              placeholderTextColor="#71717a"
-            />
-            <TextInput
-              value={editedDescription}
-              onChangeText={setEditedDescription}
-              className="text-sm text-text-secondary"
-              placeholder="Add a description..."
-              placeholderTextColor="#71717a"
-              multiline
-            />
-            <View className="mt-4 flex-row gap-2">
-              <Pressable
-                onPress={saveChanges}
-                disabled={isSaving}
-                className="flex-1 items-center justify-center rounded-xl bg-primary py-3"
-              >
-                {isSaving ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <Text className="font-semibold text-white">Save</Text>
-                )}
-              </Pressable>
-              <Pressable
-                onPress={cancelEditing}
-                disabled={isSaving}
-                className="flex-1 items-center justify-center rounded-xl border border-border-default bg-bg-surface py-3"
-              >
-                <Text className="font-semibold text-text-primary">Cancel</Text>
-              </Pressable>
-            </View>
-          </>
+          <EditModeHeader
+            editedName={editedName}
+            setEditedName={setEditedName}
+            editedDescription={editedDescription}
+            setEditedDescription={setEditedDescription}
+            isSaving={isSaving}
+            onSave={saveChanges}
+            onCancel={cancelEditing}
+          />
         ) : (
           // View Mode Header
           <>
@@ -363,6 +400,13 @@ export default function ListDetailScreen() {
               rightLabel={`${list.shows.length} ${list.shows.length === 1 ? "show" : "shows"}`}
             />
             <View className="-mt-1 mb-1 flex-row justify-end gap-2">
+              <Pressable
+                onPress={() => setIsSearchModalVisible(true)}
+                className="flex-row items-center gap-2 rounded-xl border border-border-default bg-bg-surface px-3 py-2"
+              >
+                <Ionicons name="add" size={20} color="#a1a1aa" />
+                <Text className="text-sm font-medium text-text-primary">Add Shows</Text>
+              </Pressable>
               <Pressable
                 onPress={startEditing}
                 className="rounded-xl border border-border-default bg-bg-surface p-3"
@@ -428,7 +472,7 @@ export default function ListDetailScreen() {
   return (
     <ScreenWrapper>
       {isEditing ? (
-        // Edit Mode - List view with reorder controls (uses FlashList for consistency)
+        // Edit Mode - List view with reorder controls
         <FlashList
           data={shows}
           keyExtractor={(item) => item.id}
@@ -444,8 +488,6 @@ export default function ListDetailScreen() {
               onRemove={() => handleRemove(item.id)}
               index={index}
               totalCount={shows.length}
-              posterWidth={posterWidth}
-              posterHeight={posterHeight}
             />
           )}
           contentContainerStyle={{
@@ -463,33 +505,57 @@ export default function ListDetailScreen() {
           ItemSeparatorComponent={() => <View style={{ height: GRID_GAP }} />}
           ListHeaderComponent={renderHeader}
           ListEmptyComponent={renderEmptyList}
-          renderItem={({ item, index }) => (
-            <View
-              style={{
-                width: posterWidth,
-                marginRight: GRID_GAP,
-                marginBottom: GRID_GAP,
-              }}
-            >
-              <ListShowCard
-                show={item as ShowItem}
-                isEditing={false}
-                onMoveUp={() => {}}
-                onMoveDown={() => {}}
-                onRemove={() => {}}
-                index={index}
-                totalCount={shows.length}
-                posterWidth={posterWidth}
-                posterHeight={posterHeight}
-              />
-            </View>
-          )}
+          renderItem={({ item }) => {
+            const show: NormalizedShow = {
+              id: item.externalId,
+              tmdbId: item.externalId.startsWith("tmdb:")
+                ? Number(item.externalId.split(":")[2])
+                : undefined,
+              anilistId: item.externalId.startsWith("anilist:")
+                ? Number(item.externalId.split(":")[2])
+                : undefined,
+              title: item.title,
+              mediaType: item.mediaType,
+              posterUrl: item.posterUrl,
+              backdropUrl: item.backdropUrl,
+              overview: item.overview,
+              rating: item.rating,
+            };
+            return (
+              <View
+                style={{
+                  width: posterWidth,
+                  marginRight: GRID_GAP,
+                  marginBottom: GRID_GAP,
+                }}
+              >
+                <MediaPosterCard
+                  show={show}
+                  href={{ pathname: "/show/[id]", params: { id: item.externalId } }}
+                  className="w-full"
+                  posterClassName={isDesktop ? "h-56" : "h-48"}
+                />
+              </View>
+            );
+          }}
           contentContainerStyle={{
             paddingHorizontal: containerPadding,
             paddingBottom: containerPadding,
           }}
         />
       )}
+
+      {/* Search Shows Modal */}
+      {listId && (
+        <SearchShowsModal
+          visible={isSearchModalVisible}
+          onClose={() => setIsSearchModalVisible(false)}
+          listId={listId}
+          existingShowIds={shows.map((s) => s.id)}
+        />
+      )}
     </ScreenWrapper>
   );
 }
+
+export default ListDetailScreen;

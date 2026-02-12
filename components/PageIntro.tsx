@@ -20,7 +20,7 @@ export function PageIntro({
 }: PageIntroProps) {
   return (
     <View
-      className={`relative overflow-hidden rounded-2xl border border-border-default bg-bg-surface ${className ?? ""}`.trim()}
+      className={`relative overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface ${className ?? ""}`.trim()}
     >
       <LinearGradient
         colors={["rgba(239,68,68,0.16)", "rgba(56,189,248,0.08)", "rgba(24,24,27,0.7)"]}
@@ -49,7 +49,10 @@ export function PageIntro({
             </View>
           ) : null}
 
-          <Text className="text-[30px] font-black tracking-tight text-text-primary">
+          <Text
+            className="text-[30px] text-text-primary"
+            style={{ fontFamily: "Courier New", fontWeight: "900" }}
+          >
             {title}
           </Text>
           <Text className="mt-1 text-sm text-text-secondary">{subtitle}</Text>

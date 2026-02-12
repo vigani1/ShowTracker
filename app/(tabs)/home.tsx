@@ -175,7 +175,7 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
       : 0;
 
   const card = (
-    <View className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+    <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
       <View className="relative overflow-hidden" style={{ height: posterHeight }}>
         {item.posterUrl ? (
           <Image
@@ -195,8 +195,8 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
           end={{ x: 0.5, y: 1 }}
           style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 96 }}
         />
-        <View className="absolute right-2 top-2 rounded-full border border-white/20 bg-black/80 px-2.5 py-1.5">
-          <Text className="text-[11px] font-extrabold tracking-wide text-white">
+        <View className="absolute right-2 top-2 rounded-md border-2 border-white/20 bg-black/80 px-2.5 py-1.5">
+          <Text className="text-[11px] font-black uppercase tracking-wide text-white">
             {item.remainingEpisodes} left
           </Text>
         </View>
@@ -205,10 +205,10 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
           <Text className="text-xs text-zinc-400" numberOfLines={1}>
             {item.watchedEpisodes}/{item.totalEpisodes} episodes
           </Text>
-          <View className="mt-1.5 h-0.5 overflow-hidden rounded-sm bg-white/15">
-            <View 
-              className="h-full rounded-sm bg-red-500" 
-              style={{ width: `${watchedPercent}%` }} 
+          <View className="mt-1.5 h-1 overflow-hidden bg-white/15">
+            <View
+              className="h-full bg-red-500"
+              style={{ width: `${watchedPercent}%` }}
             />
           </View>
         </View>
@@ -234,7 +234,7 @@ function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boo
   const hasEpisodeName = episode.episode.name && episode.episode.name !== episode.showTitle;
 
   const card = (
-    <View className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+    <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
       <View className="relative overflow-hidden" style={{ height: posterHeight }}>
         {episode.posterUrl ? (
           <Image
@@ -254,7 +254,7 @@ function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boo
           end={{ x: 0.5, y: 1 }}
           style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 110 }}
         />
-        <View className="absolute left-2 top-2 rounded-lg bg-black/70 px-2 py-1 flex-row items-center">
+        <View className="absolute left-2 top-2 rounded-md border-2 border-white/20 bg-black/70 px-2 py-1 flex-row items-center">
           <Text className="text-sm font-bold text-white">{episode.daysUntil}</Text>
           <Text className="text-[10px] font-semibold text-zinc-200 ml-1">
             {episode.daysUntil === 1 ? "DAY" : "DAYS"}
@@ -555,11 +555,11 @@ export default function HomeScreen() {
         return (
           <View className="mb-3">
             <View
-              className={`self-start rounded-full px-3 py-1 ${
-                item.isToday ? "bg-red-500" : "bg-zinc-700/70"
+              className={`self-start rounded-md border-2 px-3 py-1 ${
+                item.isToday ? "border-red-500 bg-red-500" : "border-zinc-600 bg-zinc-700/70"
               }`}
             >
-              <Text className="text-xs font-bold text-zinc-100">
+              <Text className="text-[11px] font-black uppercase tracking-wide text-zinc-100">
                 {getDayLabel(item.date)} · {getDateLabel(item.date)}
               </Text>
             </View>
@@ -697,7 +697,7 @@ export default function HomeScreen() {
                   ) : null}
 
                   {!isWatchlistLoading && filteredWatchlist.length === 0 ? (
-                    <View className="mt-6 items-center rounded-2xl border border-border-default bg-bg-surface px-6 py-12">
+                    <View className="mt-6 items-center rounded-xl border-2 border-border-default bg-bg-surface px-6 py-12">
                       <Text className="text-lg font-semibold text-text-primary">Nothing in watch list</Text>
                       <Text className="mt-1 text-center text-sm text-text-secondary">
                         Track shows and they will appear here with unwatched episode counts.
@@ -768,7 +768,7 @@ export default function HomeScreen() {
                   ) : null}
 
                   {!isUpcomingLoading && upcomingGroups.length === 0 ? (
-                    <View className="items-center rounded-2xl border border-border-default bg-bg-surface px-6 py-12">
+                    <View className="items-center rounded-xl border-2 border-border-default bg-bg-surface px-6 py-12">
                       <Text className="text-lg font-semibold text-text-primary">No upcoming episodes</Text>
                       <Text className="mt-1 text-center text-sm text-text-secondary">
                         Shows with future episodes will appear here.

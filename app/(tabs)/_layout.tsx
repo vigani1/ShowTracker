@@ -20,21 +20,19 @@ export default function TabsLayout() {
               ? { display: "none" }
               : {
                   backgroundColor: "rgba(9,9,11,0.92)",
-                  borderTopWidth: 0,
+                  borderTopWidth: 2,
+                  borderTopColor: "#27272a",
                   height: mobileTabBarHeight,
                   paddingBottom: mobileTabBarPaddingBottom,
                   paddingTop: mobileTabBarPaddingTop,
-                  elevation: 8,
-                  shadowColor: "#000",
-                  shadowOffset: { width: 0, height: -4 },
-                  shadowOpacity: 0.3,
-                  shadowRadius: 12,
                 },
             tabBarActiveTintColor: "#ef4444",
             tabBarInactiveTintColor: "#a1a1aa",
             tabBarLabelStyle: {
-              fontSize: 11,
-              fontWeight: "600",
+              fontSize: 10,
+              fontWeight: "900",
+              textTransform: "uppercase" as const,
+              letterSpacing: 0.5,
             },
             tabBarShowLabel: true,
           }}

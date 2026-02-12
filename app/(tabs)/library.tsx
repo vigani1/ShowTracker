@@ -96,7 +96,7 @@ function LibraryCard({
   const posterHeight = isWeb ? 280 : 240;
 
   const card = (
-    <View className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+    <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
       <View className="relative overflow-hidden" style={{ height: posterHeight }}>
         {item.posterUrl ? (
           <Image
@@ -117,8 +117,8 @@ function LibraryCard({
           style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 96 }}
         />
         {typeof item.remainingEpisodes === "number" && item.remainingEpisodes > 0 ? (
-          <View className="absolute right-2 top-2 rounded-full border border-white/20 bg-black/80 px-2.5 py-1.5">
-            <Text className="text-[11px] font-extrabold tracking-wide text-white">
+          <View className="absolute right-2 top-2 rounded-md border-2 border-white/20 bg-black/80 px-2.5 py-1.5">
+            <Text className="text-[11px] font-black uppercase tracking-wide text-white">
               {item.remainingEpisodes} left
             </Text>
           </View>
@@ -129,8 +129,8 @@ function LibraryCard({
             {item.firstAired?.slice(0, 4) ?? "TBA"} · {formatStatus(item.status)}
           </Text>
           {!isMovie && progress > 0 ? (
-            <View className="mt-1.5 h-0.5 overflow-hidden rounded-sm bg-white/15">
-              <View className="h-full rounded-sm bg-red-500" style={{ width: `${Math.round(progress * 100)}%` }} />
+            <View className="mt-1.5 h-1 overflow-hidden bg-white/15">
+              <View className="h-full bg-red-500" style={{ width: `${Math.round(progress * 100)}%` }} />
             </View>
           ) : null}
         </View>
@@ -263,14 +263,14 @@ export default function LibraryScreen() {
               <SegmentedControl options={tabOptions} value={activeTab} onValueChange={setActiveTab} className="mb-4" />
 
               {isLoading ? (
-                <View className="items-center gap-2 rounded-2xl border border-border-default bg-bg-surface py-8">
+                <View className="items-center gap-2 rounded-xl border-2 border-border-default bg-bg-surface py-8">
                   <ActivityIndicator size="small" color="#ef4444" />
                   <Text className="text-sm text-text-secondary">Loading your library</Text>
                 </View>
               ) : null}
 
               {!isLoading && !activeItems.length ? (
-                <View className="rounded-2xl border border-border-default bg-bg-surface px-4 py-6">
+                <View className="rounded-xl border-2 border-border-default bg-bg-surface px-4 py-6">
                   <Text className="text-lg font-bold text-text-primary">
                     {activeTab === "movies" ? "No queued movies yet" : "No active shows yet"}
                   </Text>

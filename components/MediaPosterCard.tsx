@@ -51,7 +51,7 @@ export function MediaPosterCard({
         ]}
       >
         <View
-          className={`relative overflow-hidden rounded-2xl border border-border-default bg-bg-elevated ${
+          className={`relative overflow-hidden rounded-xl border-2 border-border-default bg-bg-elevated ${
             posterClassName ?? "h-56"
           }`.trim()}
         >
@@ -87,22 +87,13 @@ export function MediaPosterCard({
           {/* Progress bar */}
           {typeof progress === "number" && progress > 0 && progress < 1 ? (
             <View className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
-              <View className="h-full rounded-r bg-primary" style={{ width: `${progress * 100}%` }} />
+              <View className="h-full bg-primary" style={{ width: `${progress * 100}%` }} />
             </View>
           ) : null}
 
           {typeof rank === "number" ? (
-            <View
-              className="absolute left-2 top-2 rounded-full bg-bg-base/95 px-2 py-1"
-              style={{
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.3,
-                shadowRadius: 2,
-                elevation: 3,
-              }}
-            >
-              <Text className="text-xs font-bold text-primary">#{rank}</Text>
+            <View className="absolute left-2 top-2 rounded-md border-2 border-primary bg-bg-base/95 px-2 py-1">
+              <Text className="text-[11px] font-black text-primary">#{rank}</Text>
             </View>
           ) : null}
         </View>

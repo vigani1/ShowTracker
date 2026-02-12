@@ -166,9 +166,8 @@ async function ensureShow(
     firstAired?: string;
     lastUpdated: number;
   }
-) {
-  await ensureShowRecordId(ctx, args);
-  return getExternalShowId(args);
+): Promise<Doc<"shows">["_id"]> {
+  return ensureShowRecordId(ctx, args);
 }
 
 export const upsertShow = mutation({
@@ -292,12 +291,7 @@ export const getHomeDashboard = query({
         (
           entry
         ): entry is NonNullable<(typeof hydrated)[number]> =>
-          !!entry &&
-          entry.mediaType !== "movie" &&
-          (entry.status === "watching" ||
-            entry.status === "paused" ||
-            entry.status === "plan_to_watch") &&
-          (entry.remainingEpisodes === null || entry.remainingEpisodes > 0)
+          !!entry && entry.mediaType !== "movie"
       )
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
       .slice(0, 40);
@@ -307,7 +301,7 @@ export const getHomeDashboard = query({
         (
           entry
         ): entry is NonNullable<(typeof hydrated)[number]> =>
-          !!entry && entry.mediaType === "movie" && entry.status !== "completed"
+          !!entry && entry.mediaType === "movie"
       )
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
       .slice(0, 40);
@@ -456,6 +450,106 @@ export const toggleEpisodeWatched = mutation({
   },
 });
 
+export const batchRewatchEpisodes = mutation({
+  args: {
+    show: v.object(showInput),
+    episodes: v.array(
+      v.object({
+        season: v.number(),
+        episode: v.number(),
+        runtime: v.optional(v.number()),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const showId = await ensureShowRecordId(ctx, args.show);
+    const now = Date.now();
+
+    let userShow = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .unique();
+
+    if (!userShow) {
+      const userShowId = await ctx.db.insert("userShows", {
+        userId,
+        showId,
+        status: "watching",
+        addedAt: now,
+        lastWatchedAt: now,
+      });
+      userShow = await ctx.db.get(userShowId);
+    }
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .collect();
+
+    const existingByKey = new Map(
+      watchedEpisodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])
+    );
+
+    const uniqueEpisodes = Array.from(
+      new Map(args.episodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])).values()
+    );
+
+    let updatedCount = 0;
+    let insertedCount = 0;
+
+    for (const entry of uniqueEpisodes) {
+      const key = `${entry.season}:${entry.episode}`;
+      const existing = existingByKey.get(key);
+
+      if (existing) {
+        const currentCount = existing.watchCount ?? 1;
+        const currentHistory = existing.watchHistory ?? [existing.watchedAt];
+
+        await ctx.db.patch(existing._id, {
+          watchCount: currentCount + 1,
+          watchHistory: [...currentHistory, now],
+          watchedAt: now,
+        });
+        updatedCount += 1;
+      } else {
+        await ctx.db.insert("watchedEpisodes", {
+          userId,
+          showId,
+          season: entry.season,
+          episode: entry.episode,
+          watchedAt: now,
+          runtime: entry.runtime,
+          watchCount: 1,
+          watchHistory: [now],
+        });
+        insertedCount += 1;
+      }
+    }
+
+    const totalWatched = watchedEpisodes.length + insertedCount;
+    const nextStatus =
+      args.show.totalEpisodes && totalWatched >= args.show.totalEpisodes
+        ? "completed"
+        : "watching";
+
+    if (userShow) {
+      await ctx.db.patch(userShow._id, {
+        status: nextStatus,
+        lastWatchedAt: now,
+      });
+    }
+
+    return {
+      processedCount: uniqueEpisodes.length,
+      updatedCount,
+      insertedCount,
+      watchedEpisodes: totalWatched,
+      status: nextStatus,
+    };
+  },
+});
+
 export const markSeasonWatched = mutation({
   args: {
     show: v.object(showInput),
@@ -592,6 +686,40 @@ export const unmarkSeasonWatched = mutation({
   },
 });
 
+export const clearShowWatched = mutation({
+  args: {
+    show: v.object(showInput),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const showId = await ensureShowRecordId(ctx, args.show);
+
+    const userShow = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .unique();
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .collect();
+
+    for (const entry of watchedEpisodes) {
+      await ctx.db.delete(entry._id);
+    }
+
+    if (userShow) {
+      await ctx.db.patch(userShow._id, {
+        status: "plan_to_watch",
+      });
+    }
+
+    return {
+      removedCount: watchedEpisodes.length,
+    };
+  },
+});
+
 export const getWatchlist = query({
   args: {},
   handler: async (ctx) => {
@@ -671,6 +799,34 @@ export const getWatchlist = query({
     return watchlistItems
       .filter((item): item is NonNullable<typeof item> => item !== null)
       .sort((a, b) => b.lastWatchedAt - a.lastWatchedAt);
+  },
+});
+
+export const getUserWatchlistShows = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getCurrentUserId(ctx);
+
+    const userShows = await ctx.db
+      .query("userShows")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    const shows = await Promise.all(
+      userShows.map(async (userShow) => {
+        const show = await ctx.db.get(userShow.showId);
+        if (!show) return null;
+        return {
+          id: userShow.showId,
+          title: show.title,
+          mediaType: show.mediaType,
+          posterUrl: show.posterUrl ?? null,
+          status: userShow.status,
+        };
+      })
+    );
+
+    return shows.filter((s): s is NonNullable<typeof s> => s !== null);
   },
 });
 
@@ -770,6 +926,19 @@ export const batchMarkWatched = mutation({
   },
 });
 
+export const getShowIdByExternal = query({
+  args: showLookupInput,
+  handler: async (ctx, args) => {
+    await getCurrentUserId(ctx);
+    if (!hasLookupArgs(args)) {
+      return null;
+    }
+
+    const show = await findShowByLookup(ctx, args);
+    return show?._id ?? null;
+  },
+});
+
 export const getEpisodeWatchHistory = query({
   args: {
     show: v.object(showInput),
@@ -804,5 +973,181 @@ export const getEpisodeWatchHistory = query({
       firstWatchedAt: watchedEntry.watchedAt,
       lastWatchedAt: watchedEntry.watchHistory?.[watchedEntry.watchHistory.length - 1] ?? watchedEntry.watchedAt,
     };
+  },
+});
+
+// Movie-specific tracking (no episodes, just watched status)
+export const toggleMovieWatched = mutation({
+  args: {
+    show: v.object(showInput),
+    action: v.union(v.literal("toggle"), v.literal("rewatch")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const showId = await ensureShowRecordId(ctx, args.show);
+
+    // Only allow for movies
+    if (args.show.mediaType !== "movie") {
+      throw new Error("This mutation is only for movies");
+    }
+
+    let userShow = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .unique();
+
+    // Check if movie already has a watched entry (we use season 0, episode 0 for movies)
+    const watchedEntry = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show_season_episode", (q) =>
+        q.eq("userId", userId)
+          .eq("showId", showId)
+          .eq("season", 0)
+          .eq("episode", 0)
+      )
+      .unique();
+
+    const now = Date.now();
+
+    if (watchedEntry) {
+      if (args.action === "rewatch") {
+        // Add rewatch
+        const currentCount = watchedEntry.watchCount ?? 1;
+        const currentHistory = watchedEntry.watchHistory ?? [watchedEntry.watchedAt];
+        
+        await ctx.db.patch(watchedEntry._id, {
+          watchCount: currentCount + 1,
+          watchHistory: [...currentHistory, now],
+          watchedAt: now,
+        });
+
+        if (userShow) {
+          await ctx.db.patch(userShow._id, {
+            status: "completed",
+            lastWatchedAt: now,
+          });
+        }
+
+        return {
+          watched: true,
+          watchCount: currentCount + 1,
+          isRewatch: true,
+        };
+      } else {
+        // Unwatch - delete the entry
+        await ctx.db.delete(watchedEntry._id);
+
+        if (userShow) {
+          await ctx.db.patch(userShow._id, {
+            status: "plan_to_watch",
+          });
+        }
+
+        return {
+          watched: false,
+          watchCount: 0,
+        };
+      }
+    } else {
+      // First watch
+      await ctx.db.insert("watchedEpisodes", {
+        userId,
+        showId,
+        season: 0,
+        episode: 0,
+        watchedAt: now,
+        runtime: args.show.episodeRuntime,
+        watchCount: 1,
+        watchHistory: [now],
+      });
+
+      if (!userShow) {
+        await ctx.db.insert("userShows", {
+          userId,
+          showId,
+          status: "completed",
+          addedAt: now,
+          lastWatchedAt: now,
+        });
+      } else {
+        await ctx.db.patch(userShow._id, {
+          status: "completed",
+          lastWatchedAt: now,
+        });
+      }
+
+      return {
+        watched: true,
+        watchCount: 1,
+        isRewatch: false,
+      };
+    }
+  },
+});
+
+export const getMovieWatchHistory = query({
+  args: showLookupInput,
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    
+    if (!hasLookupArgs(args)) {
+      return null;
+    }
+
+    const show = await findShowByLookup(ctx, args);
+    if (!show || show.mediaType !== "movie") {
+      return null;
+    }
+
+    const watchedEntry = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show_season_episode", (q) =>
+        q.eq("userId", userId)
+          .eq("showId", show._id)
+          .eq("season", 0)
+          .eq("episode", 0)
+      )
+      .unique();
+
+    if (!watchedEntry) {
+      return null;
+    }
+
+    return {
+      watchCount: watchedEntry.watchCount ?? 1,
+      watchHistory: watchedEntry.watchHistory ?? [watchedEntry.watchedAt],
+      firstWatchedAt: watchedEntry.watchedAt,
+      lastWatchedAt: watchedEntry.watchHistory?.[watchedEntry.watchHistory.length - 1] ?? watchedEntry.watchedAt,
+    };
+  },
+});
+
+// Get all episode watch counts for a show (for displaying rewatch counts)
+export const getEpisodeWatchCounts = query({
+  args: showLookupInput,
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    
+    if (!hasLookupArgs(args)) {
+      return {};
+    }
+
+    const show = await findShowByLookup(ctx, args);
+    if (!show) {
+      return {};
+    }
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", show._id))
+      .collect();
+
+    const counts: Record<string, number> = {};
+    for (const entry of watchedEpisodes) {
+      const key = `${entry.season}:${entry.episode}`;
+      counts[key] = entry.watchCount ?? 1;
+    }
+
+    return counts;
   },
 });

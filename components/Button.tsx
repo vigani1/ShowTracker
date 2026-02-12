@@ -15,15 +15,15 @@ type ButtonProps = {
 };
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: "bg-primary rounded-xl px-5 py-3",
-  secondary: "rounded-xl px-5 py-3 border-2 border-border-bright",
-  ghost: "rounded-xl px-5 py-3",
+  primary: "bg-primary border-2 border-primary px-5 py-3",
+  secondary: "rounded-lg px-5 py-3 border-2 border-border-bright",
+  ghost: "rounded-lg px-5 py-3",
 };
 
 const variantTextClasses: Record<ButtonVariant, string> = {
-  primary: "text-white font-semibold text-sm",
-  secondary: "text-text-primary font-semibold text-sm",
-  ghost: "text-primary font-semibold text-sm",
+  primary: "text-white font-black text-sm uppercase tracking-wide",
+  secondary: "text-text-primary font-bold text-sm",
+  ghost: "text-primary font-bold text-sm",
 };
 
 export function Button({

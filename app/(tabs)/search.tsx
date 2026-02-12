@@ -186,7 +186,7 @@ export function SearchScreen() {
             ) : null}
 
             {error ? (
-              <View className="mb-4 rounded-2xl border border-warning/30 bg-warning/10 p-3">
+              <View className="mb-4 rounded-xl border-2 border-warning/30 bg-warning/10 p-3">
                 <Text className="text-sm text-warning">{error}</Text>
               </View>
             ) : null}
@@ -195,14 +195,14 @@ export function SearchScreen() {
         ListEmptyComponent={
           !isLoading ? (
               !debouncedQuery.trim() ? (
-              <View className="mt-2 items-center rounded-2xl border border-border-default bg-bg-surface px-4 py-8">
+              <View className="mt-2 items-center rounded-xl border-2 border-border-default bg-bg-surface px-4 py-8">
                 <Text className="text-base font-semibold text-text-primary">Search for anything</Text>
                 <Text className="mt-1 text-sm text-text-secondary text-center">
                   Try "The Last of Us", "Frieren", "Oppenheimer"
                 </Text>
               </View>
             ) : (
-              <View className="mt-2 rounded-2xl border border-border-default bg-bg-surface px-4 py-5">
+              <View className="mt-2 rounded-xl border-2 border-border-default bg-bg-surface px-4 py-5">
                 <Text className="text-sm text-text-secondary">
                   Try a broader keyword or switch the filter.
                 </Text>

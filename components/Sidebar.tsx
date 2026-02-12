@@ -23,12 +23,15 @@ export function Sidebar() {
       className="border-r border-border-default bg-bg-surface/95"
       style={{ width: sidebarWidth, minWidth: sidebarWidth }}
     >
+      {/* Red accent bar at top */}
+      <View style={{ height: 3, backgroundColor: "#ef4444" }} />
+
       <View className="flex-1 px-2 py-4">
         {/* Logo */}
         <View className="mb-6 items-center justify-center">
           <Link href="/home" asChild>
-            <Pressable className="items-center justify-center">
-              <Text className="text-lg font-extrabold tracking-tight text-text-primary">ST</Text>
+            <Pressable className="h-10 w-10 items-center justify-center rounded-md border-2 border-primary bg-primary/20">
+              <Text className="text-sm font-black text-primary">ST</Text>
             </Pressable>
           </Link>
         </View>
@@ -40,22 +43,8 @@ export function Sidebar() {
             return (
               <Link key={item.href} href={item.href as any} asChild>
                 <Pressable
-                  className={`items-center justify-center rounded-lg px-2 py-3 ${isActive ? "bg-primary/15" : ""}`}
-                  style={{ position: "relative" }}
+                  className={`items-center justify-center rounded-lg px-2 py-3 ${isActive ? "border-l-2 border-primary bg-primary/15" : ""}`}
                 >
-                  {isActive ? (
-                    <View
-                      style={{
-                        position: "absolute",
-                        left: 0,
-                        top: "25%",
-                        bottom: "25%",
-                        width: 3,
-                        borderRadius: 2,
-                        backgroundColor: "#ef4444",
-                      }}
-                    />
-                  ) : null}
                   <Ionicons
                     name={(isActive ? item.icon : item.iconOutline) as keyof typeof Ionicons.glyphMap}
                     size={22}
@@ -79,7 +68,7 @@ export function Sidebar() {
         <View className="border-t border-border-default pt-3">
           {/* Search */}
           <Link href="/search" asChild>
-            <Pressable className={`items-center justify-center rounded-lg px-2 py-3`} style={{ position: "relative" }}>
+            <Pressable className={`items-center justify-center rounded-lg px-2 py-3 ${pathname === "/search" ? "border-l-2 border-primary bg-primary/15" : ""}`}>
               <Feather name="search" size={20} color={pathname === "/search" ? "#ef4444" : "#a1a1aa"} />
               <Text className={`mt-1 text-[10px] font-medium tracking-tight ${pathname === "/search" ? "text-text-primary" : "text-text-secondary"}`} numberOfLines={1}>
                 Search
@@ -90,22 +79,8 @@ export function Sidebar() {
           {/* Profile */}
           <Link href="/profile" asChild>
             <Pressable
-              className={`items-center justify-center rounded-lg px-2 py-3 ${pathname === "/profile" ? "bg-primary/15" : ""}`}
-              style={{ position: "relative" }}
+              className={`items-center justify-center rounded-lg px-2 py-3 ${pathname === "/profile" ? "border-l-2 border-primary bg-primary/15" : ""}`}
             >
-              {pathname === "/profile" ? (
-                <View
-                  style={{
-                    position: "absolute",
-                    left: 0,
-                    top: "25%",
-                    bottom: "25%",
-                    width: 3,
-                    borderRadius: 2,
-                    backgroundColor: "#ef4444",
-                  }}
-                />
-              ) : null}
               <View className="h-7 w-7 items-center justify-center rounded-full bg-bg-elevated">
                 <Ionicons name="person" size={16} color={pathname === "/profile" ? "#ef4444" : "#a1a1aa"} />
               </View>

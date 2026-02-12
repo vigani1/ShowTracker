@@ -81,7 +81,7 @@ reviews:
       instructions: >-
         These are Expo Router screens and layouts. Review for:
         - Use Expo Router for navigation (never @react-navigation directly)
-        - Use expo-image for images (never React Native Image)
+        - Use React Native Image from react-native for images (never expo-image)
         - Use FlashList for long lists (never FlatList)
         - All styling MUST use NativeWind className (never StyleSheet.create)
         - Route params via useLocalSearchParams
@@ -94,7 +94,7 @@ reviews:
         - Functional components only with named exports
         - NativeWind className for all styling (no StyleSheet.create)
         - Components must be platform-agnostic (web + mobile)
-        - Use expo-image for images, FlashList for lists
+        - Use React Native Image from react-native for images, FlashList for lists
         - Props should be typed with TypeScript interfaces
         - No business logic — components should receive data via props or hooks
 

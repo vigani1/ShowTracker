@@ -36,11 +36,17 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 ## Code Conventions
 - Functional components only, prefer named exports
 - Use NativeWind className for all styling (no StyleSheet.create)
+- Use React Native `Image` from `react-native` for all app/component images (never `expo-image`)
 - For any frontend/UI work, always use the `frontend-design` skill as the default design workflow.
 - Convex queries/mutations in `convex/` directory, one file per domain (shows.ts, users.ts, lists.ts)
 - API clients return normalized types defined in `lib/api/types.ts`
 - File naming: kebab-case for files, PascalCase for components
 - Imports: absolute paths via `@/` alias (e.g., `@/components/ShowCard`)
+
+## Documentation Update Rule (Important)
+- If an implementation issue reveals that project docs/rules are outdated or incorrect, the agent must pause and ask the user before changing docs.
+- The agent should propose the exact doc/rule update and only apply it after explicit user confirmation.
+- After confirmation, update all relevant sources of truth consistently (e.g., `AGENTS.md`, rule files, review config, and `PROGRESS.md` when status changes).
 
 ## Git Workflow
 - **Never commit directly to main** — always create a feature branch and open a PR
