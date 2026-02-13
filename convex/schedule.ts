@@ -162,6 +162,9 @@ function getRouteIdForShow(show: Doc<"shows">): string | null {
   if (typeof show.anilistId === "number" && show.mediaType === "anime") {
     return `anilist:anime:${show.anilistId}`;
   }
+  if (typeof show.malId === "number" && show.mediaType === "anime") {
+    return `jikan:anime:${show.malId}`;
+  }
   return null;
 }
 

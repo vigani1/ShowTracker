@@ -22,12 +22,60 @@ function formatAniListDate(date?: {
   month?: number;
   day?: number;
 }) {
-  if (!date?.year || !date?.month || !date?.day) {
+  if (!date?.year) {
     return undefined;
   }
-  const month = String(date.month).padStart(2, "0");
-  const day = String(date.day).padStart(2, "0");
+  const month = String(date.month ?? 1).padStart(2, "0");
+  const day = String(date.day ?? 1).padStart(2, "0");
   return `${date.year}-${month}-${day}`;
+}
+
+function normalizeDateString(value?: string | null) {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const directDate = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (directDate?.[1]) {
+    return directDate[1];
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+export function parseJikanDurationToMinutes(duration?: string | null) {
+  if (!duration) {
+    return undefined;
+  }
+
+  const normalized = duration.toLowerCase().replace(/\./g, " ");
+  if (!normalized.trim() || normalized.includes("unknown")) {
+    return undefined;
+  }
+
+  const hoursMatch = normalized.match(/(\d+)\s*h(?:r|our)?s?/);
+  const minutesMatch = normalized.match(/(\d+)\s*m(?:in|inute)?s?/);
+
+  const hours = hoursMatch ? Number.parseInt(hoursMatch[1], 10) : 0;
+  const minutes = minutesMatch ? Number.parseInt(minutesMatch[1], 10) : 0;
+
+  if (hours > 0 || minutes > 0) {
+    return hours * 60 + minutes;
+  }
+
+  const plainNumberMatch = normalized.match(/(\d+)/);
+  if (plainNumberMatch) {
+    const numeric = Number.parseInt(plainNumberMatch[1], 10);
+    return Number.isFinite(numeric) ? numeric : undefined;
+  }
+
+  return undefined;
 }
 
 export function normalizeTmdbMedia(media: TmdbMedia): NormalizedShow {
@@ -60,6 +108,13 @@ export function normalizeTmdbShowDetails(
   mediaType: "tv" | "movie",
   details: TmdbShowDetails
 ): NormalizedShow {
+  const runtimeMinutes =
+    mediaType === "movie"
+      ? details.runtime ?? details.episode_run_time?.[0]
+      : details.episode_run_time?.[0] ?? details.runtime;
+  const normalizedRuntime =
+    typeof runtimeMinutes === "number" ? runtimeMinutes : undefined;
+
   return {
     id: `tmdb:${details.id}`,
     mediaType,
@@ -75,7 +130,7 @@ export function normalizeTmdbShowDetails(
     status: details.status,
     totalEpisodes: details.number_of_episodes,
     totalSeasons: details.number_of_seasons,
-    episodeRuntime: details.episode_run_time?.[0],
+    episodeRuntime: normalizedRuntime,
     rating: details.vote_average,
     firstAired: details.first_air_date ?? details.release_date,
     tmdbId: details.id,
@@ -126,6 +181,10 @@ export function normalizeAniListMedia(media: AniListMedia): NormalizedShow {
     rating: media.averageScore ? media.averageScore / 10 : undefined,
     firstAired: formatAniListDate(media.startDate),
     anilistId: media.id,
+    malId: media.idMal ?? undefined,
+    anilistFormat: media.format ?? undefined,
+    animeSeason: media.season ?? undefined,
+    animeSeasonYear: media.seasonYear ?? undefined,
   };
 }
 
@@ -184,8 +243,10 @@ export function normalizeJikanAnime(anime: JikanAnime): NormalizedShow {
     genres: anime.genres?.map((genre) => genre.name),
     status: anime.status ?? undefined,
     totalEpisodes: anime.episodes ?? undefined,
+    episodeRuntime: parseJikanDurationToMinutes(anime.duration),
     rating: anime.score ?? undefined,
-    firstAired: anime.aired?.from ?? undefined,
+    firstAired: normalizeDateString(anime.aired?.from),
     anilistId: undefined,
+    malId: anime.mal_id,
   };
 }

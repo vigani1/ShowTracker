@@ -39,6 +39,11 @@ export type TvMazeScheduleEntry = {
   image?: { medium?: string; original?: string } | null;
 };
 
+export type TvMazeSearchResult = {
+  score: number;
+  show: TvMazeShow;
+};
+
 async function request<T>(path: string, params?: Record<string, string>) {
   const url = new URL(path, tvmazeBaseUrl);
   if (params) {
@@ -121,6 +126,32 @@ export async function getTvMazeScheduleByDate(
 
 export async function getTvMazeShow(id: number) {
   return request<TvMazeShow>(`/shows/${id}`);
+}
+
+export async function lookupTvMazeShowByImdb(imdbId: string) {
+  const normalizedImdbId = imdbId.trim();
+  const cacheKey = `tvmaze-lookup-imdb:${normalizedImdbId}`;
+  const cached = getCached<TvMazeShow>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const data = await request<TvMazeShow>("/lookup/shows", { imdb: normalizedImdbId });
+  setCached(cacheKey, data, cacheTtlMs);
+  return data;
+}
+
+export async function searchTvMazeShows(query: string) {
+  const normalizedQuery = query.trim();
+  const cacheKey = `tvmaze-search:${normalizedQuery}`;
+  const cached = getCached<TvMazeSearchResult[]>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const data = await request<TvMazeSearchResult[]>("/search/shows", {
+    q: normalizedQuery,
+  });
+  setCached(cacheKey, data, cacheTtlMs);
+  return data;
 }
 
 export async function getTvMazeEpisode(id: number) {

@@ -16,8 +16,15 @@ export type NormalizedShow = {
   firstAired?: string;
   tmdbId?: number;
   anilistId?: number;
+  malId?: number;
   tvmazeId?: number;
   imdbId?: string;
+  anilistFormat?: string;
+  animeSeason?: string;
+  animeSeasonYear?: number;
+  rootAnilistId?: number;
+  relatedAnilistIds?: number[];
+  lastRelationSyncAt?: number;
 };
 
 export type NormalizedSeason = {

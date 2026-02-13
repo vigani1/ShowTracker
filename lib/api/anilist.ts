@@ -1,16 +1,46 @@
 import { getCached, setCached } from "@/lib/api/cache";
 import { normalizeAniListMedia } from "@/lib/api/normalize";
+import { getJikanAnime } from "@/lib/api/jikan";
 import type { NormalizedShow } from "@/lib/api/types";
 
 const anilistUrl =
   process.env.EXPO_PUBLIC_ANILIST_URL ?? "https://graphql.anilist.co";
 
-const anilistScheduleCacheVersion = "v2";
+const anilistScheduleCacheVersion = "v3";
+const anilistRelationsCacheVersion = "v1";
 
 const cacheTtlMs = 15 * 60 * 1000;
 
+const anilistMediaSelection = `
+  id
+  idMal
+  type
+  title { romaji english native }
+  description
+  coverImage { large extraLarge }
+  bannerImage
+  genres
+  status
+  episodes
+  duration
+  averageScore
+  startDate { year month day }
+  format
+  season
+  seasonYear
+`;
+
+type AniListMediaType = "ANIME" | "MANGA";
+
+export type AniListRelationEdge = {
+  relationType?: string | null;
+  node?: AniListMedia | null;
+};
+
 export type AniListMedia = {
   id: number;
+  idMal?: number | null;
+  type?: AniListMediaType;
   title: {
     romaji?: string;
     english?: string;
@@ -25,6 +55,12 @@ export type AniListMedia = {
   duration?: number;
   averageScore?: number;
   startDate?: { year?: number; month?: number; day?: number };
+  format?: string | null;
+  season?: string | null;
+  seasonYear?: number | null;
+  relations?: {
+    edges?: AniListRelationEdge[] | null;
+  } | null;
 };
 
 export type AniListSearchResult = {
@@ -54,12 +90,72 @@ export type AniListMediaByIdResult = {
   };
 };
 
+export type AniListMediaByMalIdResult = {
+  data: {
+    Media: AniListMedia | null;
+  };
+};
+
+export type AniListMediaRelationsResult = {
+  data: {
+    Media: AniListMedia | null;
+  };
+};
+
 export type AniListAiringSchedule = {
   id: number;
   airingAt: number;
   episode: number;
   media: AniListMedia;
 };
+
+export type AniListRelatedShow = {
+  relationType: string;
+  anilistId: number;
+  show: NormalizedShow;
+};
+
+export type AniListAnimeRelations = {
+  root: NormalizedShow;
+  relations: AniListRelatedShow[];
+};
+
+function hasRequiredAnimeFields(show: NormalizedShow) {
+  return (
+    !!show.firstAired &&
+    typeof show.totalEpisodes === "number" &&
+    typeof show.episodeRuntime === "number"
+  );
+}
+
+async function patchAniListWithJikanFallback(
+  show: NormalizedShow,
+  malId?: number
+) {
+  const resolvedMalId = show.malId ?? malId;
+  if (!resolvedMalId || hasRequiredAnimeFields(show)) {
+    return show;
+  }
+
+  try {
+    const jikanShow = await getJikanAnime(resolvedMalId);
+    return {
+      ...show,
+      malId: show.malId ?? jikanShow.malId,
+      firstAired: show.firstAired ?? jikanShow.firstAired,
+      totalEpisodes: show.totalEpisodes ?? jikanShow.totalEpisodes,
+      episodeRuntime: show.episodeRuntime ?? jikanShow.episodeRuntime,
+      status: show.status ?? jikanShow.status,
+    };
+  } catch {
+    return show;
+  }
+}
+
+async function normalizeAniListMediaWithFallback(media: AniListMedia) {
+  const normalized = normalizeAniListMedia(media);
+  return patchAniListWithJikanFallback(normalized, media.idMal ?? undefined);
+}
 
 async function request<T>(query: string, variables: Record<string, unknown>) {
   const maxAttempts = 4;
@@ -121,17 +217,7 @@ export async function searchAniList(query: string, page = 1, perPage = 20) {
       Page(page: $page, perPage: $perPage) {
         pageInfo { total currentPage lastPage }
         media(search: $search, type: ANIME, sort: POPULARITY_DESC) {
-          id
-          title { romaji english native }
-          description
-          coverImage { large extraLarge }
-          bannerImage
-          genres
-          status
-          episodes
-          duration
-          averageScore
-          startDate { year month day }
+          ${anilistMediaSelection}
         }
       }
     }`,
@@ -154,17 +240,7 @@ export async function getTrendingAniList(page = 1, perPage = 20) {
       Page(page: $page, perPage: $perPage) {
         pageInfo { total currentPage lastPage }
         media(type: ANIME, sort: TRENDING_DESC) {
-          id
-          title { romaji english native }
-          description
-          coverImage { large extraLarge }
-          bannerImage
-          genres
-          status
-          episodes
-          duration
-          averageScore
-          startDate { year month day }
+          ${anilistMediaSelection}
         }
       }
     }`,
@@ -199,17 +275,7 @@ export async function getAniListAiringSchedule(
           airingAt
           episode
           media {
-            id
-            title { romaji english native }
-            description
-            coverImage { large extraLarge }
-            bannerImage
-            genres
-            status
-            episodes
-            duration
-            averageScore
-            startDate { year month day }
+            ${anilistMediaSelection}
           }
         }
       }
@@ -238,17 +304,7 @@ export async function getAniListMediaById(
   const data = await request<AniListMediaByIdResult>(
     `query ($id: Int) {
       Media(id: $id, type: ANIME) {
-        id
-        title { romaji english native }
-        description
-        coverImage { large extraLarge }
-        bannerImage
-        genres
-        status
-        episodes
-        duration
-        averageScore
-        startDate { year month day }
+        ${anilistMediaSelection}
       }
     }`,
     { id }
@@ -259,7 +315,105 @@ export async function getAniListMediaById(
     return null;
   }
 
-  const normalized = normalizeAniListMedia(media);
+  const normalized = await normalizeAniListMediaWithFallback(media);
   setCached(cacheKey, normalized, cacheTtlMs);
   return normalized;
+}
+
+export async function getAniListMediaByMalId(
+  malId: number
+): Promise<NormalizedShow | null> {
+  const cacheKey = `anilist-media-by-mal:${malId}`;
+  const cached = getCached<NormalizedShow>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const data = await request<AniListMediaByMalIdResult>(
+    `query ($idMal: Int) {
+      Media(idMal: $idMal, type: ANIME) {
+        ${anilistMediaSelection}
+      }
+    }`,
+    { idMal: malId }
+  );
+
+  const media = data.data.Media;
+  if (!media) {
+    return null;
+  }
+
+  const normalized = await normalizeAniListMediaWithFallback(media);
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
+}
+
+export async function getAniListAnimeRelations(
+  anilistId: number
+): Promise<AniListAnimeRelations | null> {
+  const cacheKey = `anilist-relations:${anilistRelationsCacheVersion}:${anilistId}`;
+  const cached = getCached<AniListAnimeRelations>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const data = await request<AniListMediaRelationsResult>(
+    `query ($id: Int) {
+      Media(id: $id, type: ANIME) {
+        ${anilistMediaSelection}
+        relations {
+          edges {
+            relationType
+            node {
+              ${anilistMediaSelection}
+            }
+          }
+        }
+      }
+    }`,
+    { id: anilistId }
+  );
+
+  const media = data.data.Media;
+  if (!media) {
+    return null;
+  }
+
+  const rootShowBase = await normalizeAniListMediaWithFallback(media);
+  const relatedShows: AniListRelatedShow[] = [];
+  const seen = new Set<number>();
+
+  for (const edge of media.relations?.edges ?? []) {
+    const node = edge?.node;
+    const relationType = edge?.relationType ?? "UNKNOWN";
+    if (!node || node.type !== "ANIME") {
+      continue;
+    }
+
+    if (seen.has(node.id)) {
+      continue;
+    }
+    seen.add(node.id);
+
+    const normalizedNode = await normalizeAniListMediaWithFallback(node);
+    relatedShows.push({
+      relationType,
+      anilistId: node.id,
+      show: normalizedNode,
+    });
+  }
+
+  const rootShow: NormalizedShow = {
+    ...rootShowBase,
+    rootAnilistId: rootShowBase.anilistId ?? media.id,
+    relatedAnilistIds: relatedShows.map((entry) => entry.anilistId),
+  };
+
+  const result: AniListAnimeRelations = {
+    root: rootShow,
+    relations: relatedShows,
+  };
+
+  setCached(cacheKey, result, cacheTtlMs);
+  return result;
 }

@@ -2,7 +2,11 @@
 
 ## Current Phase
 
-Phase 8: Polish and validation (in progress)
+Phase 8b: Polish and validation - remaining items (in progress)
+
+## Next Up
+
+Phase 9: UI Polish - filters, stats redesign, watchlist removal, scroll fixes
 
 ## Completed
 
@@ -121,6 +125,29 @@ Phase 8: Polish and validation (in progress)
   - [x] Discover infinite scroll for TV/anime/movies
   - [x] Browser swipe-back restoration on web (`overscroll-behavior-y` fix)
   - [x] List-page card consistency and add-show watchlist picker
+- [x] Phase 8a: Data quality + anime franchise continuity (completed)
+  - [x] API/normalization hardening across TMDB/AniList/Jikan/TVMaze
+    - [x] TMDB runtime normalization fixes (movies + TV fallback via TVMaze lookup/search)
+    - [x] AniList metadata expansion (`idMal`, format/season/year, relation graph access)
+    - [x] Jikan integration hardening (episode feed, relations, duration parsing, robust `/v4` URL handling)
+  - [x] Anime relation auto-follow + sync in Convex
+    - [x] Add anime with relation auto-follow (`addAnimeToWatchlistWithRelations`)
+    - [x] Periodic relation sync for tracked franchises (`syncTrackedAnimeRelations`)
+    - [x] Schema and query support for `rootAnilistId`/related relation metadata
+  - [x] Watchlist relation UX (single-entry franchise representation)
+    - [x] Show one anime entry per franchise group instead of all related seasons at once
+    - [x] Select oldest sensible unwatched entry for progression
+    - [x] Advance visible watchlist entry to next season after completion
+  - [x] Anime detail UX improvements
+    - [x] Related Anime section with chronology-aware ordering and deep links
+    - [x] Season-complete modal prompting user to continue to next season (with redirect)
+    - [x] Episode date/image reliability for anime (Jikan episode dates + poster/backdrop fallback art)
+  - [x] Library/Profile dedupe alignment
+    - [x] Reused grouped anime logic so library/profile rails avoid duplicate franchise entries
+  - [x] Validation + audits
+    - [x] Added `scripts/data-quality-audit.mjs`
+    - [x] Added `scripts/anime-relations-audit.mjs`
+    - [x] Added browser smoke checks and screenshot artifacts for relation + season flows
 
 ## PR Readiness Snapshot (current branch)
 
@@ -129,7 +156,7 @@ Phase 8: Polish and validation (in progress)
 
 ## Pending
 
-- [ ] Phase 8: Polish and validation
+- [ ] Phase 8b: Polish and validation (remaining items)
   - [ ] API normalization parity check: ensure TV/anime/movie adapters return equivalent required fields where possible
   - [ ] Cross-source deduplication pass: resolve duplicates where TMDB TV/discovery already includes anime that also appears from AniList/Jikan
   - [ ] Anime season canonicalization: normalize franchises so season-based entries are grouped correctly (avoid split rows like "Title Season 1" + "Title Season 2" unless intended)
@@ -137,6 +164,15 @@ Phase 8: Polish and validation (in progress)
   - [ ] Missing metadata fallback pass: handle absent air dates, runtimes, season/episode totals, and status values safely
   - [ ] End-to-end QA on mobile image rendering, watch actions, and list edit flows
   - [ ] Final UX sweep for loading/error states and microcopy consistency
+
+- [ ] Phase 9: UI Polish
+  - [ ] Profile page stats redesign - improve visual layout and design of stats section
+  - [ ] Add category filters to Home page (TV, Anime, Movies)
+  - [ ] Add category filters to Library page
+  - [ ] Add category filters to Schedule page
+  - [ ] Add category filters to Discover page
+  - [ ] Schedule/Upcoming page scroll optimization - fix initial load scroll position and jarring scroll behavior
+  - [ ] Add watchlist removal - implement ability to remove shows/movies/anime from watchlist (currently only supports adding)
 
 ## Known Issues
 
@@ -148,21 +184,22 @@ Phase 8: Polish and validation (in progress)
 
 ## Future Phases (Post-Polish)
 
-### Phase 9: Data Canonicalization & Source Harmonization
+### Phase 10: Data Canonicalization & Source Harmonization
 
 - [ ] Cross-source deduplication policy and implementation (TMDB vs AniList/Jikan overlap)
 - [ ] Anime franchise season canonicalization (group seasonized entries into a single title flow where appropriate)
 - [ ] Source merge strategy for incomplete records (prefer richer season/episode payloads)
 - [ ] Backfill/reconciliation pass for previously cached inconsistent records
 
-### Phase 10: Reliability & Quality Hardening
+### Phase 11: Reliability & Quality Hardening
 
 - [ ] Metadata completeness hardening (air dates/runtime/season totals/status fallbacks)
+- [ ] Validate anime episode-image coverage/fallback behavior so episode cards never render blank
 - [ ] Regression checklist for watch actions (mark watched/unwatched/rewatch across TV/anime/movies)
 - [ ] End-to-end QA matrix (web/iOS/Android) for list editing, discovery pagination, and profile rails
 - [ ] Performance tuning pass on long lists and high-volume watch histories
 
-### Phase 11: Platform Upgrade & Expansion
+### Phase 12: Platform Upgrade & Expansion
 
 - [ ] Notifications for new episodes (push notifications)
 - [ ] Import from TVTime/Trakt

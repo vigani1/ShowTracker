@@ -33,6 +33,7 @@ export default defineSchema({
   shows: defineTable({
     tmdbId: v.optional(v.number()),
     anilistId: v.optional(v.number()),
+    malId: v.optional(v.number()),
     tvmazeId: v.optional(v.number()),
     imdbId: v.optional(v.string()),
     mediaType: v.union(v.literal("tv"), v.literal("anime"), v.literal("movie")),
@@ -47,10 +48,18 @@ export default defineSchema({
     episodeRuntime: v.optional(v.number()),
     rating: v.optional(v.number()),
     firstAired: v.optional(v.string()),
+    anilistFormat: v.optional(v.string()),
+    animeSeason: v.optional(v.string()),
+    animeSeasonYear: v.optional(v.number()),
+    rootAnilistId: v.optional(v.number()),
+    relatedAnilistIds: v.optional(v.array(v.number())),
+    lastRelationSyncAt: v.optional(v.number()),
     lastUpdated: v.number(),
   })
     .index("by_tmdbId", ["tmdbId"])
     .index("by_anilistId", ["anilistId"])
+    .index("by_malId", ["malId"])
+    .index("by_rootAnilistId", ["rootAnilistId"])
     .index("by_tvmazeId", ["tvmazeId"])
     .index("by_mediaType", ["mediaType"]),
   userShows: defineTable({
@@ -63,11 +72,15 @@ export default defineSchema({
       v.literal("completed"),
       v.literal("plan_to_watch")
     ),
+    isAutoTracked: v.optional(v.boolean()),
+    relationRootAnilistId: v.optional(v.number()),
+    lastRelationSyncAt: v.optional(v.number()),
     addedAt: v.number(),
     lastWatchedAt: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
     .index("by_user_status", ["userId", "status"])
+    .index("by_user_relation_root", ["userId", "relationRootAnilistId"])
     .index("by_user_show", ["userId", "showId"]),
   watchedEpisodes: defineTable({
     userId: v.id("users"),

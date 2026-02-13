@@ -29,9 +29,13 @@ type WatchlistItem = {
   posterUrl: string | null;
   tmdbId: number | null;
   anilistId: number | null;
-  remainingEpisodes: number;
+  malId: number | null;
+  status: "watching" | "paused" | "dropped" | "completed" | "plan_to_watch";
+  isAutoTracked: boolean;
+  trackingState: "not_started" | "in_progress" | "upcoming" | "tba";
+  remainingEpisodes: number | null;
   watchedEpisodes: number;
-  totalEpisodes: number;
+  totalEpisodes: number | null;
 };
 
 type UpcomingEpisode = {
@@ -163,6 +167,9 @@ function getWatchlistRouteId(item: WatchlistItem) {
   if (typeof item.anilistId === "number" && item.mediaType === "anime") {
     return `anilist:anime:${item.anilistId}`;
   }
+  if (typeof item.malId === "number" && item.mediaType === "anime") {
+    return `jikan:anime:${item.malId}`;
+  }
   return null;
 }
 
@@ -170,9 +177,24 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
   const routeId = getWatchlistRouteId(item);
   const posterHeight = isWeb ? 280 : 240;
   const watchedPercent =
-    item.totalEpisodes > 0
+    item.totalEpisodes && item.totalEpisodes > 0
       ? Math.round((item.watchedEpisodes / item.totalEpisodes) * 100)
-      : 0;
+      : null;
+  const cornerLabel =
+    item.remainingEpisodes === null
+      ? item.trackingState === "tba"
+        ? "TBA"
+        : "Upcoming"
+      : `${item.remainingEpisodes} left`;
+  const progressLabel =
+    item.totalEpisodes === null
+      ? item.watchedEpisodes > 0
+        ? `${item.watchedEpisodes} watched`
+        : "Not started"
+      : `${item.watchedEpisodes}/${item.totalEpisodes} episodes`;
+  const statusLabel = item.status
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 
   const card = (
     <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
@@ -197,20 +219,30 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
         />
         <View className="absolute right-2 top-2 rounded-md border-2 border-white/20 bg-black/80 px-2.5 py-1.5">
           <Text className="text-[11px] font-black uppercase tracking-wide text-white">
-            {item.remainingEpisodes} left
+            {cornerLabel}
           </Text>
         </View>
         <View className="absolute bottom-0 left-0 right-0 px-2.5 pb-2.5">
           <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>{item.title}</Text>
           <Text className="text-xs text-zinc-400" numberOfLines={1}>
-            {item.watchedEpisodes}/{item.totalEpisodes} episodes
+            {progressLabel}
           </Text>
-          <View className="mt-1.5 h-1 overflow-hidden bg-white/15">
-            <View
-              className="h-full bg-red-500"
-              style={{ width: `${watchedPercent}%` }}
-            />
+          <View className="mt-1 flex-row items-center gap-2">
+            <Text className="text-[10px] uppercase tracking-wide text-zinc-300">{statusLabel}</Text>
+            {item.isAutoTracked ? (
+              <Text className="rounded-sm border border-red-400/40 bg-red-500/20 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-red-100">
+                Auto
+              </Text>
+            ) : null}
           </View>
+          {watchedPercent !== null ? (
+            <View className="mt-1.5 h-1 overflow-hidden bg-white/15">
+              <View
+                className="h-full bg-red-500"
+                style={{ width: `${watchedPercent}%` }}
+              />
+            </View>
+          ) : null}
         </View>
       </View>
     </View>
@@ -319,6 +351,7 @@ export default function HomeScreen() {
   const canLoadPastFromEdgeRef = useRef(true);
   const canLoadFutureFromEdgeRef = useRef(true);
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const relationSyncTriggeredRef = useRef(false);
   const [upcomingSnapshot, setUpcomingSnapshot] = useState<UpcomingGroup[]>([]);
 
   const watchlist = useQuery(api.shows.getWatchlist, {});
@@ -333,6 +366,7 @@ export default function HomeScreen() {
       : "skip"
   );
   const hydrateScheduleRange = useAction(api.schedule.hydrateScheduleRange);
+  const syncTrackedAnimeRelations = useAction(api.shows.syncTrackedAnimeRelations);
 
   const hydrateRange = useCallback(
     async (startDate: string, days: number) => {
@@ -375,6 +409,19 @@ export default function HomeScreen() {
       setIsHydratingInitialUpcoming(false);
     });
   }, [activeTab, hydrateRange, rangeEndDate, rangeStartDate]);
+
+  useEffect(() => {
+    if (relationSyncTriggeredRef.current) {
+      return;
+    }
+
+    relationSyncTriggeredRef.current = true;
+    void syncTrackedAnimeRelations({ force: false }).catch((error) => {
+      console.warn("Background anime relation sync failed", error);
+      // Reset the trigger so subsequent attempts can retry
+      relationSyncTriggeredRef.current = false;
+    });
+  }, [syncTrackedAnimeRelations]);
 
   const loadPastWeek = useCallback(async () => {
     if (activeTab !== "upcoming" || isLoadingPast) {

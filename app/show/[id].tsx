@@ -10,8 +10,8 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
-import { useMutation, useQuery } from "convex/react";
+import { Link, useLocalSearchParams, useRouter } from "expo-router";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Badge } from "@/components/Badge";
@@ -19,8 +19,13 @@ import { ProgressBar } from "@/components/ProgressBar";
 import { ShowHeader } from "@/components/ShowHeader";
 import { SeasonAccordion } from "@/components/SeasonAccordion";
 import { AddToListModal } from "@/components/AddToListModal";
-import { getAniListMediaById } from "@/lib/api/anilist";
-import { getJikanAnime } from "@/lib/api/jikan";
+import {
+  getAniListAnimeRelations,
+  getAniListMediaById,
+  getAniListMediaByMalId,
+  type AniListRelatedShow,
+} from "@/lib/api/anilist";
+import { getJikanAnime, getJikanAnimeEpisodes } from "@/lib/api/jikan";
 import {
   normalizeTmdbSeason,
   normalizeTmdbShowDetails,
@@ -31,7 +36,7 @@ import type {
   NormalizedSeason,
   NormalizedShow,
 } from "@/lib/api/types";
-import { parseShowRouteId } from "@/lib/show-route";
+import { createShowRouteId, parseShowRouteId } from "@/lib/show-route";
 import { toHttpsImageUrl } from "@/lib/image-url";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -39,6 +44,28 @@ type SeasonLoadState = Record<number, boolean>;
 type SeasonErrorState = Record<number, string | null>;
 type EpisodePendingState = Record<string, boolean>;
 type SeasonActionState = Record<number, boolean>;
+
+type RelatedAnimeEntry = {
+  title: string;
+  posterUrl: string | null;
+  firstAired: string | null;
+  anilistId: number | null;
+  malId: number | null;
+  anilistFormat: string | null;
+  status: "watching" | "paused" | "dropped" | "completed" | "plan_to_watch" | null;
+  isInWatchlist: boolean;
+  isAutoTracked: boolean;
+  animeSeason: string | null;
+  animeSeasonYear: number | null;
+  relationType: string | null;
+};
+
+type NextSeasonPrompt = {
+  completedSeasonNumber: number;
+  completedSeasonName: string;
+  nextTitle: string;
+  nextRouteId: string;
+};
 
 type WatchActionTarget =
   | { kind: "movie"; title: string; subtitle: string }
@@ -86,8 +113,26 @@ function createSeasonPlaceholders(
   })) as NormalizedSeason[];
 }
 
-function createAnimeSeason(totalEpisodes?: number) {
-  const episodeCount = Math.max(1, Math.min(totalEpisodes ?? 12, 80));
+function createAnimeSeason(
+  totalEpisodes?: number,
+  episodes?: NormalizedEpisode[],
+  fallbackStillUrl?: string
+) {
+  if (episodes?.length) {
+    return [
+      {
+        seasonNumber: 1,
+        name: "Episodes",
+        episodeCount: episodes.length,
+        episodes: episodes.map((episode) => ({
+          ...episode,
+          stillUrl: episode.stillUrl ?? fallbackStillUrl,
+        })),
+      },
+    ] as NormalizedSeason[];
+  }
+
+  const episodeCount = Math.max(1, Math.min(totalEpisodes ?? 12, 120));
   return [
     {
       seasonNumber: 1,
@@ -98,6 +143,7 @@ function createAnimeSeason(totalEpisodes?: number) {
         seasonNumber: 1,
         episodeNumber: index + 1,
         name: `Episode ${index + 1}`,
+        stillUrl: fallbackStillUrl,
       })),
     },
   ] as NormalizedSeason[];
@@ -107,6 +153,7 @@ function buildShowPayload(show: NormalizedShow) {
   return {
     tmdbId: show.tmdbId,
     anilistId: show.anilistId,
+    malId: show.malId,
     tvmazeId: show.tvmazeId,
     imdbId: show.imdbId,
     mediaType: show.mediaType,
@@ -121,6 +168,12 @@ function buildShowPayload(show: NormalizedShow) {
     episodeRuntime: show.episodeRuntime,
     rating: show.rating,
     firstAired: show.firstAired,
+    anilistFormat: show.anilistFormat,
+    animeSeason: show.animeSeason,
+    animeSeasonYear: show.animeSeasonYear,
+    rootAnilistId: show.rootAnilistId,
+    relatedAnilistIds: show.relatedAnilistIds,
+    lastRelationSyncAt: show.lastRelationSyncAt,
     lastUpdated: Date.now(),
   };
 }
@@ -129,8 +182,218 @@ function buildTrackingArgs(show: NormalizedShow | null) {
   if (!show) return "skip" as const;
   if (typeof show.tmdbId === "number") return { tmdbId: show.tmdbId };
   if (typeof show.anilistId === "number") return { anilistId: show.anilistId };
+  if (typeof show.malId === "number") return { malId: show.malId };
   if (typeof show.tvmazeId === "number") return { tvmazeId: show.tvmazeId };
   return "skip" as const;
+}
+
+function buildRelatedAnimeKey(entry: {
+  anilistId: number | null;
+  malId: number | null;
+  title: string;
+}) {
+  if (typeof entry.anilistId === "number") {
+    return `anilist:${entry.anilistId}`;
+  }
+  if (typeof entry.malId === "number") {
+    return `jikan:${entry.malId}`;
+  }
+  return `title:${entry.title.toLowerCase()}`;
+}
+
+function getRelatedAnimeRouteId(entry: RelatedAnimeEntry) {
+  if (typeof entry.anilistId === "number") {
+    return createShowRouteId({
+      id: `anilist:${entry.anilistId}`,
+      mediaType: "anime",
+      title: entry.title,
+      anilistId: entry.anilistId,
+      malId: entry.malId ?? undefined,
+      firstAired: entry.firstAired ?? undefined,
+      posterUrl: entry.posterUrl ?? undefined,
+    });
+  }
+  if (typeof entry.malId === "number") {
+    return `jikan:anime:${entry.malId}`;
+  }
+  return null;
+}
+
+function formatRelationTypeLabel(relationType?: string | null) {
+  if (!relationType) {
+    return null;
+  }
+  return relationType
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter: string) => letter.toUpperCase());
+}
+
+function formatAnimeSeasonLabel(season?: string | null, year?: number | null) {
+  if (!season && !year) {
+    return null;
+  }
+  const formattedSeason = season
+    ? season.charAt(0).toUpperCase() + season.slice(1).toLowerCase()
+    : null;
+  if (formattedSeason && year) {
+    return `${formattedSeason} ${year}`;
+  }
+  if (formattedSeason) {
+    return formattedSeason;
+  }
+  return year ? String(year) : null;
+}
+
+const SIDE_RELATION_TYPES = new Set([
+  "SIDE_STORY",
+  "SPIN_OFF",
+  "ALTERNATIVE",
+  "SUMMARY",
+  "CHARACTER",
+  "ADAPTATION",
+  "CONTAINS",
+  "OTHER",
+]);
+
+const PREQUEL_RELATION_TYPES = new Set(["PREQUEL", "PARENT"]);
+const SEQUEL_RELATION_TYPES = new Set(["SEQUEL"]);
+const CORE_STORY_FORMATS = new Set(["TV", "TV_SHORT"]);
+
+const ANIME_FORMAT_WEIGHT: Record<string, number> = {
+  TV: 0,
+  TV_SHORT: 1,
+  MOVIE: 2,
+  ONA: 3,
+  OVA: 4,
+  SPECIAL: 5,
+  MUSIC: 6,
+};
+
+const ANIME_SEASON_TO_MONTH: Record<string, number> = {
+  WINTER: 0,
+  SPRING: 3,
+  SUMMER: 6,
+  FALL: 9,
+};
+
+function normalizeRelationType(value?: string | null) {
+  return value?.toUpperCase() ?? null;
+}
+
+function normalizeAnimeFormat(value?: string | null) {
+  return value?.toUpperCase() ?? null;
+}
+
+function getRelatedTimelineBucket(entry: RelatedAnimeEntry) {
+  const relationType = normalizeRelationType(entry.relationType);
+  if (!relationType) {
+    return 1;
+  }
+  if (PREQUEL_RELATION_TYPES.has(relationType)) {
+    return 0;
+  }
+  if (SEQUEL_RELATION_TYPES.has(relationType)) {
+    return 2;
+  }
+  if (SIDE_RELATION_TYPES.has(relationType)) {
+    return 4;
+  }
+  return 3;
+}
+
+function isMainlineRelatedEntry(entry: RelatedAnimeEntry) {
+  const relationType = normalizeRelationType(entry.relationType);
+  if (relationType && SIDE_RELATION_TYPES.has(relationType)) {
+    return false;
+  }
+  if (
+    relationType &&
+    (PREQUEL_RELATION_TYPES.has(relationType) || SEQUEL_RELATION_TYPES.has(relationType))
+  ) {
+    return true;
+  }
+
+  const format = normalizeAnimeFormat(entry.anilistFormat);
+  return !format || CORE_STORY_FORMATS.has(format);
+}
+
+function isSeasonProgressionCandidate(entry: RelatedAnimeEntry) {
+  const format = normalizeAnimeFormat(entry.anilistFormat);
+  if (!format) {
+    return true;
+  }
+  return format === "TV" || format === "TV_SHORT";
+}
+
+function getRelatedChronologyValue(entry: RelatedAnimeEntry) {
+  const firstAired = entry.firstAired?.trim();
+  if (firstAired) {
+    const directDateMatch = firstAired.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (directDateMatch) {
+      const year = Number.parseInt(directDateMatch[1], 10);
+      const month = Number.parseInt(directDateMatch[2], 10) - 1;
+      const day = Number.parseInt(directDateMatch[3], 10);
+      const asDate = Date.UTC(year, month, day);
+      if (Number.isFinite(asDate)) {
+        return asDate;
+      }
+    }
+
+    const parsed = new Date(firstAired).getTime();
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  if (typeof entry.animeSeasonYear === "number") {
+    const season = entry.animeSeason?.toUpperCase() ?? "";
+    const monthOffset = ANIME_SEASON_TO_MONTH[season] ?? 0;
+    return Date.UTC(entry.animeSeasonYear, monthOffset, 1);
+  }
+
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function getRelatedFormatWeight(entry: RelatedAnimeEntry) {
+  const format = normalizeAnimeFormat(entry.anilistFormat);
+  if (!format) {
+    return 99;
+  }
+  return ANIME_FORMAT_WEIGHT[format] ?? 99;
+}
+
+function compareRelatedAnimeEntries(a: RelatedAnimeEntry, b: RelatedAnimeEntry) {
+  const laneA = isMainlineRelatedEntry(a) ? 0 : 1;
+  const laneB = isMainlineRelatedEntry(b) ? 0 : 1;
+  if (laneA !== laneB) {
+    return laneA - laneB;
+  }
+
+  const chronologyA = getRelatedChronologyValue(a);
+  const chronologyB = getRelatedChronologyValue(b);
+  if (chronologyA !== chronologyB) {
+    return chronologyA - chronologyB;
+  }
+
+  const bucketA = getRelatedTimelineBucket(a);
+  const bucketB = getRelatedTimelineBucket(b);
+  if (bucketA !== bucketB) {
+    return bucketA - bucketB;
+  }
+
+  const formatA = getRelatedFormatWeight(a);
+  const formatB = getRelatedFormatWeight(b);
+  if (formatA !== formatB) {
+    return formatA - formatB;
+  }
+
+  if (a.title !== b.title) {
+    return a.title.localeCompare(b.title);
+  }
+
+  const idA = a.anilistId ?? a.malId ?? Number.MAX_SAFE_INTEGER;
+  const idB = b.anilistId ?? b.malId ?? Number.MAX_SAFE_INTEGER;
+  return idA - idB;
 }
 
 function countWatchedEpisodesForSeason(
@@ -274,6 +537,7 @@ function cleanRichText(value?: string | null) {
 }
 
 export function ShowDetailScreen() {
+  const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const parsedId = useMemo(() => parseShowRouteId(id), [id]);
   const { width } = useWindowDimensions();
@@ -299,8 +563,15 @@ export function ShowDetailScreen() {
   const [episodeWatchCounts, setEpisodeWatchCounts] = useState<Record<string, number>>({});
   const [watchActionTarget, setWatchActionTarget] = useState<WatchActionTarget | null>(null);
   const [isWatchActionRunning, setIsWatchActionRunning] = useState(false);
+  const [nextSeasonPrompt, setNextSeasonPrompt] = useState<NextSeasonPrompt | null>(null);
+  const [isNavigatingToNextSeason, setIsNavigatingToNextSeason] = useState(false);
+  const [apiRelatedAnime, setApiRelatedAnime] = useState<AniListRelatedShow[]>([]);
+  const [isLoadingRelatedAnime, setIsLoadingRelatedAnime] = useState(false);
 
   const addToWatchlist = useMutation(api.shows.addToWatchlist);
+  const addAnimeToWatchlistWithRelations = useAction(
+    api.shows.addAnimeToWatchlistWithRelations
+  );
   const toggleEpisodeWatched = useMutation(api.shows.toggleEpisodeWatched);
   const batchRewatchEpisodes = useMutation(api.shows.batchRewatchEpisodes);
   const markSeasonWatched = useMutation(api.shows.markSeasonWatched);
@@ -311,6 +582,29 @@ export function ShowDetailScreen() {
   const trackingArgs = useMemo(() => buildTrackingArgs(show), [show]);
   const tracking = useQuery(api.shows.getUserShowTracking, trackingArgs);
   const canTrackShow = trackingArgs !== "skip";
+
+  const relatedAnimeTrackingArgs = useMemo(() => {
+    if (!show || show.mediaType !== "anime") {
+      return "skip" as const;
+    }
+    if (typeof show.anilistId === "number") {
+      return { anilistId: show.anilistId };
+    }
+    if (typeof show.malId === "number") {
+      return { malId: show.malId };
+    }
+    return "skip" as const;
+  }, [show]);
+
+  const trackedRelatedAnime = useQuery(
+    api.shows.getRelatedAnimeForShow,
+    relatedAnimeTrackingArgs
+  );
+
+  const relatedAnimeLookupId =
+    show?.mediaType === "anime" && typeof show.anilistId === "number"
+      ? show.anilistId
+      : null;
   
   // Fetch movie watch history for movies
   const movieWatchHistory = useQuery(
@@ -367,6 +661,230 @@ export function ShowDetailScreen() {
       setEpisodeWatchCounts(episodeWatchCountsData);
     }
   }, [episodeWatchCountsData]);
+
+  useEffect(() => {
+    if (typeof relatedAnimeLookupId !== "number") {
+      setApiRelatedAnime([]);
+      setIsLoadingRelatedAnime(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsLoadingRelatedAnime(true);
+
+    void getAniListAnimeRelations(relatedAnimeLookupId)
+      .then((graph) => {
+        if (isCancelled) return;
+        setApiRelatedAnime(graph?.relations ?? []);
+      })
+      .catch((relationError) => {
+        if (isCancelled) return;
+        console.warn("Failed to load related anime", relationError);
+        setApiRelatedAnime([]);
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsLoadingRelatedAnime(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [relatedAnimeLookupId]);
+
+  const relatedAnime = useMemo(() => {
+    if (!show || show.mediaType !== "anime") {
+      return [] as RelatedAnimeEntry[];
+    }
+
+    const currentKeys = new Set<string>();
+    if (typeof show.anilistId === "number") {
+      currentKeys.add(`anilist:${show.anilistId}`);
+    }
+    if (typeof show.malId === "number") {
+      currentKeys.add(`jikan:${show.malId}`);
+    }
+
+    const combined = new Map<string, RelatedAnimeEntry>();
+
+    for (const trackedEntry of trackedRelatedAnime ?? []) {
+      const key = buildRelatedAnimeKey({
+        anilistId: trackedEntry.anilistId,
+        malId: trackedEntry.malId,
+        title: trackedEntry.title,
+      });
+      if (currentKeys.has(key)) {
+        continue;
+      }
+
+      combined.set(key, {
+        title: trackedEntry.title,
+        posterUrl: trackedEntry.posterUrl,
+        firstAired: trackedEntry.firstAired,
+        anilistId: trackedEntry.anilistId,
+        malId: trackedEntry.malId,
+        anilistFormat: trackedEntry.anilistFormat,
+        status: trackedEntry.status,
+        isInWatchlist: trackedEntry.isInWatchlist,
+        isAutoTracked: trackedEntry.isAutoTracked,
+        animeSeason: trackedEntry.animeSeason,
+        animeSeasonYear: trackedEntry.animeSeasonYear,
+        relationType: null,
+      });
+    }
+
+    for (const relation of apiRelatedAnime) {
+      const key = buildRelatedAnimeKey({
+        anilistId: relation.anilistId ?? null,
+        malId: relation.show.malId ?? null,
+        title: relation.show.title,
+      });
+      if (currentKeys.has(key)) {
+        continue;
+      }
+
+      const existing = combined.get(key);
+      combined.set(key, {
+        title: existing?.title ?? relation.show.title,
+        posterUrl: existing?.posterUrl ?? relation.show.posterUrl ?? null,
+        firstAired: existing?.firstAired ?? relation.show.firstAired ?? null,
+        anilistId:
+          existing?.anilistId ??
+          relation.anilistId ??
+          relation.show.anilistId ??
+          null,
+        malId: existing?.malId ?? relation.show.malId ?? null,
+        anilistFormat:
+          existing?.anilistFormat ?? relation.show.anilistFormat ?? null,
+        status: existing?.status ?? null,
+        isInWatchlist: existing?.isInWatchlist ?? false,
+        isAutoTracked: existing?.isAutoTracked ?? false,
+        animeSeason: existing?.animeSeason ?? relation.show.animeSeason ?? null,
+        animeSeasonYear: existing?.animeSeasonYear ?? relation.show.animeSeasonYear ?? null,
+        relationType: relation.relationType ?? existing?.relationType ?? null,
+      });
+    }
+
+    return Array.from(combined.values()).sort(compareRelatedAnimeEntries);
+  }, [apiRelatedAnime, show, trackedRelatedAnime]);
+
+  const currentAnimeEntry = useMemo<RelatedAnimeEntry | null>(() => {
+    if (!show || show.mediaType !== "anime") {
+      return null;
+    }
+
+    return {
+      title: show.title,
+      posterUrl: show.posterUrl ?? null,
+      firstAired: show.firstAired ?? null,
+      anilistId: show.anilistId ?? null,
+      malId: show.malId ?? null,
+      anilistFormat: show.anilistFormat ?? null,
+      status: tracking?.status ?? null,
+      isInWatchlist: tracking?.inWatchlist ?? false,
+      isAutoTracked: false,
+      animeSeason: show.animeSeason ?? null,
+      animeSeasonYear: show.animeSeasonYear ?? null,
+      relationType: null,
+    };
+  }, [show, tracking?.inWatchlist, tracking?.status]);
+
+  const franchiseTimeline = useMemo(() => {
+    if (!currentAnimeEntry) {
+      return [] as RelatedAnimeEntry[];
+    }
+
+    const entries = new Map<string, RelatedAnimeEntry>();
+    entries.set(buildRelatedAnimeKey(currentAnimeEntry), currentAnimeEntry);
+
+    for (const entry of relatedAnime) {
+      entries.set(buildRelatedAnimeKey(entry), entry);
+    }
+
+    return Array.from(entries.values()).sort(compareRelatedAnimeEntries);
+  }, [currentAnimeEntry, relatedAnime]);
+
+  const nextMainlineRelatedEntry = useMemo(() => {
+    if (!currentAnimeEntry || franchiseTimeline.length === 0) {
+      return null;
+    }
+
+    const currentKey = buildRelatedAnimeKey(currentAnimeEntry);
+    const mainlineEntries = franchiseTimeline.filter((entry) =>
+      isMainlineRelatedEntry(entry)
+    );
+
+    const seasonEntries = mainlineEntries.filter((entry) =>
+      isSeasonProgressionCandidate(entry)
+    );
+
+    const orderedEntries = seasonEntries.length > 0 ? seasonEntries : mainlineEntries;
+
+    const currentIndex = orderedEntries.findIndex(
+      (entry) => buildRelatedAnimeKey(entry) === currentKey
+    );
+
+    if (currentIndex >= 0) {
+      return orderedEntries[currentIndex + 1] ?? null;
+    }
+
+    const currentChronology = getRelatedChronologyValue(currentAnimeEntry);
+    return (
+      orderedEntries.find(
+        (entry) => getRelatedChronologyValue(entry) > currentChronology
+      ) ?? null
+    );
+  }, [currentAnimeEntry, franchiseTimeline]);
+
+  const getSeasonByNumber = useCallback(
+    (seasonNumber: number) =>
+      seasons.find((season) => season.seasonNumber === seasonNumber) ?? null,
+    [seasons]
+  );
+
+  const getReleasedEpisodesForSeason = useCallback(
+    (seasonNumber: number) => {
+      const season = getSeasonByNumber(seasonNumber);
+      if (!season) {
+        return [] as NormalizedEpisode[];
+      }
+      return (season.episodes ?? []).filter((episode) =>
+        isEpisodeReleased(episode.airDate)
+      );
+    },
+    [getSeasonByNumber]
+  );
+
+  const maybePromptMoveToNextSeason = useCallback(
+    (seasonNumber: number, seasonName?: string) => {
+      if (!show || show.mediaType !== "anime") {
+        return;
+      }
+
+      if (!nextMainlineRelatedEntry) {
+        return;
+      }
+
+      const nextRouteId = getRelatedAnimeRouteId(nextMainlineRelatedEntry);
+      if (!nextRouteId) {
+        return;
+      }
+
+      const completedSeasonName =
+        seasonName?.trim() ||
+        getSeasonByNumber(seasonNumber)?.name?.trim() ||
+        `Season ${seasonNumber}`;
+
+      setNextSeasonPrompt({
+        completedSeasonNumber: seasonNumber,
+        completedSeasonName,
+        nextTitle: nextMainlineRelatedEntry.title,
+        nextRouteId,
+      });
+    },
+    [getSeasonByNumber, nextMainlineRelatedEntry, show]
+  );
 
   const resolveSeasonEpisodes = useCallback(async (season: NormalizedSeason) => {
     if (season.episodes?.length) return season.episodes;
@@ -482,6 +1000,8 @@ export function ShowDetailScreen() {
       setMovieWatchCount(null);
       setWatchActionTarget(null);
       setIsWatchActionRunning(false);
+      setNextSeasonPrompt(null);
+      setIsNavigatingToNextSeason(false);
 
       try {
         if (parsedId.source === "tmdb") {
@@ -509,15 +1029,62 @@ export function ShowDetailScreen() {
           const normalized = await getAniListMediaById(parsedId.externalId);
           if (isCancelled) return;
           if (!normalized) throw new Error("Anime not found.");
+
+          let animeEpisodes: NormalizedEpisode[] = [];
+          if (typeof normalized.malId === "number") {
+            try {
+              animeEpisodes = await getJikanAnimeEpisodes(normalized.malId);
+            } catch (episodeError) {
+              console.warn("Could not load Jikan episodes for AniList anime", episodeError);
+            }
+          }
+
           setShow(normalized);
-          setSeasons(createAnimeSeason(normalized.totalEpisodes));
+          setSeasons(
+            createAnimeSeason(
+              normalized.totalEpisodes,
+              animeEpisodes,
+              normalized.backdropUrl ?? normalized.posterUrl
+            )
+          );
           return;
         }
 
-        const jikanShow = await getJikanAnime(parsedId.externalId);
+        const [jikanShow, jikanEpisodes] = await Promise.all([
+          getJikanAnime(parsedId.externalId),
+          getJikanAnimeEpisodes(parsedId.externalId).catch(() => [] as NormalizedEpisode[]),
+        ]);
         if (isCancelled) return;
-        setShow(jikanShow);
-        setSeasons(createAnimeSeason(jikanShow.totalEpisodes));
+
+        let resolvedShow = jikanShow;
+        try {
+          const mappedAniList = await getAniListMediaByMalId(parsedId.externalId);
+          if (mappedAniList) {
+            resolvedShow = {
+              ...jikanShow,
+              ...mappedAniList,
+              malId: parsedId.externalId,
+              title: mappedAniList.title ?? jikanShow.title,
+              overview: mappedAniList.overview ?? jikanShow.overview,
+              posterUrl: mappedAniList.posterUrl ?? jikanShow.posterUrl,
+              backdropUrl: mappedAniList.backdropUrl ?? jikanShow.backdropUrl,
+              firstAired: mappedAniList.firstAired ?? jikanShow.firstAired,
+              totalEpisodes: mappedAniList.totalEpisodes ?? jikanShow.totalEpisodes,
+              episodeRuntime: mappedAniList.episodeRuntime ?? jikanShow.episodeRuntime,
+            };
+          }
+        } catch (mappingError) {
+          console.warn("Could not map Jikan anime to AniList", mappingError);
+        }
+
+        setShow(resolvedShow);
+        setSeasons(
+          createAnimeSeason(
+            resolvedShow.totalEpisodes,
+            jikanEpisodes,
+            resolvedShow.backdropUrl ?? resolvedShow.posterUrl
+          )
+        );
       } catch (loadError) {
         if (isCancelled) return;
         console.error("Failed to load show detail", loadError);
@@ -541,7 +1108,12 @@ export function ShowDetailScreen() {
     setIsAddingToWatchlist(true);
     setTrackingError(null);
     try {
-      await addToWatchlist(buildShowPayload(show));
+      const payload = buildShowPayload(show);
+      if (show.mediaType === "anime") {
+        await addAnimeToWatchlistWithRelations(payload);
+      } else {
+        await addToWatchlist(payload);
+      }
     } catch (mutationError) {
       console.error("Failed to add show to watchlist", mutationError);
       setTrackingError("Could not add this show to watchlist.");
@@ -621,6 +1193,11 @@ export function ShowDetailScreen() {
   const handleToggleEpisodeWatched = async (episode: NormalizedEpisode) => {
     const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
     const wasWatched = watchedEpisodeKeys.has(key);
+    const seasonEntry = getSeasonByNumber(episode.seasonNumber);
+    const releasedEpisodes = getReleasedEpisodesForSeason(episode.seasonNumber);
+    const watchedBefore = releasedEpisodes.filter((entry) =>
+      watchedEpisodeKeys.has(`${entry.seasonNumber}:${entry.episodeNumber}`)
+    ).length;
 
     if (wasWatched) {
       setWatchActionTarget({
@@ -634,6 +1211,18 @@ export function ShowDetailScreen() {
 
     try {
       await runEpisodeToggle(episode, "toggle");
+
+      const seasonJustCompleted =
+        releasedEpisodes.length > 0 &&
+        watchedBefore < releasedEpisodes.length &&
+        watchedBefore + 1 >= releasedEpisodes.length;
+
+      if (seasonJustCompleted) {
+        maybePromptMoveToNextSeason(
+          episode.seasonNumber,
+          seasonEntry?.name ?? `Season ${episode.seasonNumber}`
+        );
+      }
     } catch {
       // Error already handled in runEpisodeToggle.
     }
@@ -701,6 +1290,11 @@ export function ShowDetailScreen() {
           runtime: episode.runtime,
         })),
       });
+
+      maybePromptMoveToNextSeason(
+        season.seasonNumber,
+        season.name || `Season ${season.seasonNumber}`
+      );
     } catch (mutationError) {
       console.error("Failed to toggle season watched", mutationError);
       setPendingOverrides((prev) => {
@@ -827,6 +1421,17 @@ export function ShowDetailScreen() {
         setTrackingError(
           `Could not update ${failedIndices.length} season${failedIndices.length > 1 ? "s" : ""}. Please try again.`
         );
+      } else if (!isFullyWatched && show.mediaType === "anime") {
+        const firstPayload = seasonPayloads[0];
+        if (firstPayload) {
+          const season = seasons.find(
+            (entry) => entry.seasonNumber === firstPayload.seasonNumber
+          );
+          maybePromptMoveToNextSeason(
+            firstPayload.seasonNumber,
+            season?.name || `Season ${firstPayload.seasonNumber}`
+          );
+        }
       }
     } finally {
       setSeasonActionLoading((prev) => {
@@ -1176,6 +1781,25 @@ export function ShowDetailScreen() {
     }
   };
 
+  const handleNavigateToNextSeason = () => {
+    if (!nextSeasonPrompt || isNavigatingToNextSeason) {
+      return;
+    }
+
+    const routeId = nextSeasonPrompt.nextRouteId;
+    setIsNavigatingToNextSeason(true);
+    setNextSeasonPrompt(null);
+
+    try {
+      router.push({ pathname: "/show/[id]", params: { id: routeId } });
+    } catch (navigationError) {
+      console.error("Failed to navigate to next season", navigationError);
+      setTrackingError("Could not open the next season.");
+    } finally {
+      setIsNavigatingToNextSeason(false);
+    }
+  };
+
   // Stats
   const watchedEpisodesCount = watchedEpisodeKeys.size;
   const totalEpisodesCount = useMemo(() => {
@@ -1464,6 +2088,125 @@ export function ShowDetailScreen() {
             </View>
           )}
 
+          {/* Related Anime */}
+          {show.mediaType === "anime" && (relatedAnime.length > 0 || isLoadingRelatedAnime) && (
+            <View className="mb-6 rounded-xl border-2 border-border-default bg-bg-surface p-4">
+              <View className="mb-3 flex-row items-center justify-between">
+                <Text
+                  className="text-lg text-text-primary"
+                  style={{ fontFamily: "Courier New", fontWeight: "900" }}
+                >
+                  Related Anime
+                </Text>
+                <Text className="text-xs text-text-secondary">
+                  {relatedAnime.length} linked
+                </Text>
+              </View>
+
+              {isLoadingRelatedAnime && relatedAnime.length === 0 ? (
+                <View className="items-center py-5">
+                  <ActivityIndicator size="small" color="#ef4444" />
+                  <Text className="mt-2 text-xs text-text-secondary">
+                    Loading franchise links...
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ gap: 12, paddingRight: 4 }}
+                >
+                  {relatedAnime.map((entry) => {
+                    const routeId = getRelatedAnimeRouteId(entry);
+                    const relationLabel = formatRelationTypeLabel(entry.relationType);
+                    const seasonLabel = formatAnimeSeasonLabel(
+                      entry.animeSeason,
+                      entry.animeSeasonYear
+                    );
+                    const statusLabel = formatTrackingStatus(entry.status);
+                    const yearLabel = entry.firstAired?.slice(0, 4) ?? "TBA";
+                    const posterUrl = toHttpsImageUrl(entry.posterUrl);
+
+                    const cardContent = (
+                      <View className="w-36 gap-2">
+                        <View className="relative h-52 overflow-hidden rounded-lg border-2 border-border-default bg-bg-elevated">
+                          {posterUrl ? (
+                            <Image
+                              source={{ uri: posterUrl }}
+                              className="h-full w-full"
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <View className="h-full items-center justify-center px-2">
+                              <Text
+                                className="text-center text-xs font-semibold text-text-secondary"
+                                numberOfLines={3}
+                              >
+                                {entry.title}
+                              </Text>
+                            </View>
+                          )}
+                          {entry.isAutoTracked && (
+                            <View className="absolute left-2 top-2 rounded-md border border-primary/40 bg-primary/20 px-1.5 py-0.5">
+                              <Text className="text-[10px] font-black uppercase tracking-wide text-primary">
+                                Auto
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+
+                        <View className="gap-1 px-0.5">
+                          <Text className="text-xs font-semibold text-text-primary" numberOfLines={2}>
+                            {entry.title}
+                          </Text>
+                          <Text className="text-[11px] text-text-secondary" numberOfLines={1}>
+                            {seasonLabel ? `${seasonLabel} · ${yearLabel}` : yearLabel}
+                          </Text>
+                          <View className="flex-row flex-wrap gap-1">
+                            {relationLabel ? (
+                              <Badge label={relationLabel} variant="accent" />
+                            ) : null}
+                            {statusLabel ? <Badge label={statusLabel} variant="default" /> : null}
+                          </View>
+                        </View>
+                      </View>
+                    );
+
+                    if (!routeId) {
+                      return (
+                        <View key={buildRelatedAnimeKey(entry)} className="opacity-80">
+                          {cardContent}
+                        </View>
+                      );
+                    }
+
+                    return (
+                      <Link
+                        key={buildRelatedAnimeKey(entry)}
+                        href={{ pathname: "/show/[id]", params: { id: routeId } }}
+                        asChild
+                      >
+                        <Pressable
+                          className="active:opacity-80"
+                          style={({ pressed }) =>
+                            pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined
+                          }
+                        >
+                          {cardContent}
+                        </Pressable>
+                      </Link>
+                    );
+                  })}
+                </ScrollView>
+              )}
+
+              <Text className="mt-3 text-xs text-text-muted">
+                Ordered by franchise chronology (main story first, side stories after). Auto-
+                followed entries show the Auto label.
+              </Text>
+            </View>
+          )}
+
           {/* Seasons Section */}
           {seasons.length > 0 && (
             <View>
@@ -1584,6 +2327,62 @@ export function ShowDetailScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={!!nextSeasonPrompt}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !isNavigatingToNextSeason && setNextSeasonPrompt(null)}
+      >
+        <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
+          <Pressable
+            className="absolute inset-0"
+            onPress={() => !isNavigatingToNextSeason && setNextSeasonPrompt(null)}
+          />
+
+          <View className="w-full max-w-sm overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
+            <View className="border-b border-border-default px-4 pb-3 pt-4">
+              <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                Season Complete
+              </Text>
+              <Text className="mt-1 text-lg font-black text-text-primary" numberOfLines={2}>
+                {nextSeasonPrompt?.completedSeasonName}
+              </Text>
+              <Text className="mt-2 text-sm leading-relaxed text-text-secondary">
+                You finished this season. Move to the next entry?
+              </Text>
+              <Text className="mt-1 text-sm font-semibold text-text-primary" numberOfLines={2}>
+                {nextSeasonPrompt?.nextTitle}
+              </Text>
+            </View>
+
+            <View className="gap-2 p-4">
+              <Pressable
+                disabled={isNavigatingToNextSeason}
+                onPress={handleNavigateToNextSeason}
+                className="items-center justify-center rounded-xl border border-primary/40 bg-primary/15 py-3.5 active:bg-primary/20"
+              >
+                {isNavigatingToNextSeason ? (
+                  <View className="flex-row items-center gap-2">
+                    <ActivityIndicator size="small" color="#ef4444" />
+                    <Text className="font-semibold text-text-primary">Opening...</Text>
+                  </View>
+                ) : (
+                  <Text className="font-semibold text-text-primary">Go to Next Season</Text>
+                )}
+              </Pressable>
+
+              <Pressable
+                disabled={isNavigatingToNextSeason}
+                onPress={() => setNextSeasonPrompt(null)}
+                className="items-center justify-center rounded-xl border border-border-default bg-bg-base py-3.5 active:bg-bg-elevated"
+              >
+                <Text className="font-semibold text-text-secondary">Stay Here</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={!!watchActionTarget}

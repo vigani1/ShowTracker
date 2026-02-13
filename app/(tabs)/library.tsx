@@ -32,6 +32,7 @@ type LibraryItem = {
   firstAired: string | null;
   tmdbId: number | null;
   anilistId: number | null;
+  malId: number | null;
   tvmazeId: number | null;
   imdbId: string | null;
   watchedEpisodes: number;
@@ -52,6 +53,9 @@ function getRouteId(item: LibraryItem) {
   }
   if (typeof item.anilistId === "number" && item.mediaType === "anime") {
     return `anilist:anime:${item.anilistId}`;
+  }
+  if (typeof item.malId === "number" && item.mediaType === "anime") {
+    return `jikan:anime:${item.malId}`;
   }
   return null;
 }

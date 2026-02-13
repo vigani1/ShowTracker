@@ -31,6 +31,7 @@ export function AddToListModal({ visible, onClose, show }: AddToListModalProps) 
       ? {
           tmdbId: show.tmdbId,
           anilistId: show.anilistId,
+          malId: show.malId,
           tvmazeId: show.tvmazeId,
         }
       : "skip"
@@ -66,6 +67,7 @@ export function AddToListModal({ visible, onClose, show }: AddToListModalProps) 
         const showPayload = {
           tmdbId: show.tmdbId,
           anilistId: show.anilistId,
+          malId: show.malId,
           tvmazeId: show.tvmazeId,
           imdbId: show.imdbId,
           mediaType: show.mediaType,
@@ -80,6 +82,12 @@ export function AddToListModal({ visible, onClose, show }: AddToListModalProps) 
           episodeRuntime: show.episodeRuntime,
           rating: show.rating,
           firstAired: show.firstAired,
+          anilistFormat: show.anilistFormat,
+          animeSeason: show.animeSeason,
+          animeSeasonYear: show.animeSeasonYear,
+          rootAnilistId: show.rootAnilistId,
+          relatedAnilistIds: show.relatedAnilistIds,
+          lastRelationSyncAt: show.lastRelationSyncAt,
           lastUpdated: Date.now(),
         };
         const showId = await upsertShow(showPayload);

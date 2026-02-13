@@ -54,6 +54,7 @@ function getRouteId(args: {
   mediaType: "tv" | "anime" | "movie";
   tmdbId?: number | null;
   anilistId?: number | null;
+  malId?: number | null;
 }) {
   if (
     typeof args.tmdbId === "number" &&
@@ -63,6 +64,9 @@ function getRouteId(args: {
   }
   if (typeof args.anilistId === "number" && args.mediaType === "anime") {
     return `anilist:anime:${args.anilistId}`;
+  }
+  if (typeof args.malId === "number" && args.mediaType === "anime") {
+    return `jikan:anime:${args.malId}`;
   }
   return null;
 }
@@ -331,7 +335,12 @@ export default function ProfileScreen() {
     () =>
       (dashboard?.shows ?? []).map((entry) => ({
         key: `active-show-${entry.id ?? entry.title}`,
-        routeId: getRouteId({ mediaType: entry.mediaType, tmdbId: entry.tmdbId, anilistId: entry.anilistId }),
+        routeId: getRouteId({
+          mediaType: entry.mediaType,
+          tmdbId: entry.tmdbId,
+          anilistId: entry.anilistId,
+          malId: entry.malId,
+        }),
         title: entry.title,
         posterUrl: entry.posterUrl,
         meta:
@@ -347,7 +356,12 @@ export default function ProfileScreen() {
     () =>
       (dashboard?.movies ?? []).map((entry) => ({
         key: `active-movie-${entry.id ?? entry.title}`,
-        routeId: getRouteId({ mediaType: entry.mediaType, tmdbId: entry.tmdbId, anilistId: entry.anilistId }),
+        routeId: getRouteId({
+          mediaType: entry.mediaType,
+          tmdbId: entry.tmdbId,
+          anilistId: entry.anilistId,
+          malId: entry.malId,
+        }),
         title: entry.title,
         posterUrl: entry.posterUrl,
         meta: formatStatus(entry.status),

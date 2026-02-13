@@ -1,9 +1,20 @@
 import { getCached, setCached } from "@/lib/api/cache";
-import type { NormalizedShow } from "@/lib/api/types";
-import { normalizeJikanAnime } from "@/lib/api/normalize";
+import type { NormalizedEpisode, NormalizedShow } from "@/lib/api/types";
+import {
+  normalizeJikanAnime,
+  parseJikanDurationToMinutes,
+} from "@/lib/api/normalize";
 
-const jikanBaseUrl =
-  process.env.EXPO_PUBLIC_JIKAN_BASE_URL ?? "https://api.jikan.moe/v4";
+function resolveJikanBaseUrl() {
+  const configured = process.env.EXPO_PUBLIC_JIKAN_BASE_URL?.trim();
+  const base = configured && configured.length > 0
+    ? configured.replace(/\/+$/, "")
+    : "https://api.jikan.moe/v4";
+
+  return base.endsWith("/v4") ? base : `${base}/v4`;
+}
+
+const jikanBaseUrl = resolveJikanBaseUrl();
 
 const cacheTtlMs = 15 * 60 * 1000;
 
@@ -24,6 +35,26 @@ export type JikanAnime = {
   aired?: { from?: string | null };
 };
 
+export type JikanAnimeEpisode = {
+  mal_id: number;
+  title?: string | null;
+  title_romanji?: string | null;
+  aired?: string | null;
+  filler?: boolean;
+  recap?: boolean;
+  duration?: string | null;
+};
+
+export type JikanAnimeRelation = {
+  relation: string;
+  entry: {
+    mal_id: number;
+    type: string;
+    name: string;
+    url: string;
+  }[];
+};
+
 type JikanSearchResponse = {
   data: JikanAnime[];
   pagination?: {
@@ -33,8 +64,41 @@ type JikanSearchResponse = {
   };
 };
 
+type JikanAnimeEpisodesResponse = {
+  data: JikanAnimeEpisode[];
+  pagination?: {
+    has_next_page?: boolean;
+    last_visible_page?: number;
+    current_page?: number;
+  };
+};
+
+type JikanAnimeRelationsResponse = {
+  data: JikanAnimeRelation[];
+};
+
+function normalizeDateString(value?: string | null) {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const directDate = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (directDate?.[1]) {
+    return directDate[1];
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
 async function request<T>(path: string, params?: Record<string, string>) {
-  const url = new URL(path, jikanBaseUrl);
+  const normalizedPath = path.replace(/^\/+/, "");
+  const url = new URL(normalizedPath, `${jikanBaseUrl}/`);
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
       url.searchParams.set(key, value);
@@ -102,6 +166,89 @@ export async function searchJikan(query: string, page = 1) {
 }
 
 export async function getJikanAnime(id: number): Promise<NormalizedShow> {
+  const cacheKey = `jikan-anime:${id}`;
+  const cached = getCached<NormalizedShow>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const response = await request<{ data: JikanAnime }>(`/anime/${id}`);
-  return normalizeJikanAnime(response.data);
+  const normalized = normalizeJikanAnime(response.data);
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
+}
+
+export async function getJikanAnimeEpisodes(
+  malId: number,
+  maxPages = 8
+): Promise<NormalizedEpisode[]> {
+  const safeMaxPages = Math.max(1, Math.min(maxPages, 20));
+  const cacheKey = `jikan-anime-episodes:${malId}:${safeMaxPages}`;
+  const cached = getCached<NormalizedEpisode[]>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const episodes: NormalizedEpisode[] = [];
+  let page = 1;
+
+  while (page <= safeMaxPages) {
+    const response = await request<JikanAnimeEpisodesResponse>(
+      `/anime/${malId}/episodes`,
+      { page: String(page) }
+    );
+
+    for (const episode of response.data) {
+      const episodeNumber =
+        typeof episode.mal_id === "number" && episode.mal_id > 0
+          ? episode.mal_id
+          : episodes.length + 1;
+      episodes.push({
+        id: `jikan-episode:${malId}:${episodeNumber}`,
+        seasonNumber: 1,
+        episodeNumber,
+        name: episode.title ?? episode.title_romanji ?? `Episode ${episodeNumber}`,
+        airDate: normalizeDateString(episode.aired),
+        runtime: parseJikanDurationToMinutes(episode.duration),
+      });
+    }
+
+    if (!response.pagination?.has_next_page) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
+
+  setCached(cacheKey, episodes, cacheTtlMs);
+  return episodes;
+}
+
+export async function getJikanAnimeRelations(
+  malId: number
+): Promise<NormalizedShow[]> {
+  const cacheKey = `jikan-anime-relations:${malId}`;
+  const cached = getCached<NormalizedShow[]>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const response = await request<JikanAnimeRelationsResponse>(
+    `/anime/${malId}/relations`
+  );
+
+  // Map raw Jikan relation entries to NormalizedShow stubs
+  const normalized: NormalizedShow[] = response.data.flatMap((relation) =>
+    relation.entry.map((entry) => ({
+      id: String(entry.mal_id),
+      title: entry.name,
+      malId: entry.mal_id,
+      mediaType: "anime" as const,
+    }))
+  );
+
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
 }
