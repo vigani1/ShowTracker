@@ -11,16 +11,23 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Link } from "expo-router";
 import { useAction, useQuery } from "convex/react";
+import { FlashList } from "@shopify/flash-list";
 import { api } from "@/convex/_generated/api";
+import { FilterChipGroup } from "@/components/FilterChipGroup";
+import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SegmentedControl } from "@/components/SegmentedControl";
-import { PageIntro } from "@/components/PageIntro";
-import { toHttpsImageUrl } from "@/lib/image-url";
-import { FlashList } from "@shopify/flash-list";
 import type { MediaType } from "@/lib/api/types";
+import {
+  applyTrackingFilters,
+  matchesStatusFilter,
+  type TrackingStatusFilter,
+} from "@/lib/filters/tracking-filters";
+import { toHttpsImageUrl } from "@/lib/image-url";
 
 type HomeTab = "watchlist" | "upcoming";
-type HomeFilter = "all" | "tv" | "anime";
+type HomeMediaFilter = "all" | "tv" | "anime";
+type HomeStatusFilter = TrackingStatusFilter;
 
 type WatchlistItem = {
   id: string;
@@ -71,6 +78,23 @@ type UpcomingListItem =
     };
 
 const DAY_IN_MS = 1000 * 60 * 60 * 24;
+const GRID_GAP = 12;
+const INITIAL_PAST_DAYS = 8;
+const INITIAL_FUTURE_DAYS = 8;
+const RANGE_EXTENSION_DAYS = 8;
+const SCROLL_EDGE_THRESHOLD = 180;
+const INITIAL_UPCOMING_HYDRATION_TIMEOUT_MS = 8000;
+const EDGE_LOAD_COOLDOWN_MS = 320;
+
+const watchlistStatusOptions: { value: HomeStatusFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "watching", label: "Watching" },
+  { value: "plan_to_watch", label: "Planned" },
+  { value: "paused", label: "Paused" },
+  { value: "dropped", label: "Dropped" },
+  { value: "watched", label: "Watched" },
+  { value: "not_watched", label: "Not Watched" },
+];
 
 function parseLocalDate(dateString: string) {
   const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -85,8 +109,10 @@ function parseLocalDate(dateString: string) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function startOfLocalDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+function getUtcDayIndex(date: Date) {
+  return (
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY_IN_MS
+  );
 }
 
 function formatDateForApi(date: Date): string {
@@ -100,16 +126,13 @@ function getDayLabel(dateString: string) {
   const date = parseLocalDate(dateString);
   if (!date) return "";
 
-  const today = startOfLocalDay(new Date());
-  const dayDiff = Math.floor((startOfLocalDay(date).getTime() - today.getTime()) / DAY_IN_MS);
+  const dayDiff = getUtcDayIndex(date) - getUtcDayIndex(new Date());
 
   if (dayDiff === 0) return "TODAY";
   if (dayDiff === 1) return "TOMORROW";
   if (dayDiff === 2) return "IN 2 DAYS";
 
-  return date
-    .toLocaleDateString("en-US", { weekday: "long" })
-    .toUpperCase();
+  return date.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
 }
 
 function getDateLabel(dateString: string) {
@@ -135,12 +158,6 @@ function getColumnCount(width: number, isWeb: boolean) {
   return width >= 500 ? 3 : 2;
 }
 
-const GRID_GAP = 12;
-const INITIAL_PAST_DAYS = 8;
-const INITIAL_FUTURE_DAYS = 8;
-const RANGE_EXTENSION_DAYS = 8;
-const SCROLL_EDGE_THRESHOLD = 180;
-
 function addDaysToDateString(dateString: string, days: number): string {
   const date = parseLocalDate(dateString);
   if (!date) return dateString;
@@ -154,7 +171,14 @@ function getInclusiveDayCount(startDate: string, endDate: string): number {
   const end = parseLocalDate(endDate);
   if (!start || !end) return 1;
 
-  return Math.max(1, Math.floor((startOfLocalDay(end).getTime() - startOfLocalDay(start).getTime()) / DAY_IN_MS) + 1);
+  const inclusiveDays = getUtcDayIndex(end) - getUtcDayIndex(start) + 1;
+  return Math.max(1, inclusiveDays);
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function getWatchlistRouteId(item: WatchlistItem) {
@@ -207,7 +231,9 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
           />
         ) : (
           <View className="flex-1 items-center justify-center bg-zinc-800 px-3">
-            <Text className="text-center text-sm font-semibold text-zinc-400">{item.title}</Text>
+            <Text className="text-center text-sm font-semibold text-zinc-400">
+              {item.title}
+            </Text>
           </View>
         )}
         <LinearGradient
@@ -223,12 +249,16 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
           </Text>
         </View>
         <View className="absolute bottom-0 left-0 right-0 px-2.5 pb-2.5">
-          <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>{item.title}</Text>
+          <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>
+            {item.title}
+          </Text>
           <Text className="text-xs text-zinc-400" numberOfLines={1}>
             {progressLabel}
           </Text>
           <View className="mt-1 flex-row items-center gap-2">
-            <Text className="text-[10px] uppercase tracking-wide text-zinc-300">{statusLabel}</Text>
+            <Text className="text-[10px] uppercase tracking-wide text-zinc-300">
+              {statusLabel}
+            </Text>
             {item.isAutoTracked ? (
               <Text className="rounded-sm border border-red-400/40 bg-red-500/20 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-red-100">
                 Auto
@@ -237,10 +267,7 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
           </View>
           {watchedPercent !== null ? (
             <View className="mt-1.5 h-1 overflow-hidden bg-white/15">
-              <View
-                className="h-full bg-red-500"
-                style={{ width: `${watchedPercent}%` }}
-              />
+              <View className="h-full bg-red-500" style={{ width: `${watchedPercent}%` }} />
             </View>
           ) : null}
         </View>
@@ -254,7 +281,11 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
 
   return (
     <Link href={{ pathname: "/show/[id]", params: { id: routeId } }} asChild>
-      <Pressable style={({ pressed }) => pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined}>
+      <Pressable
+        style={({ pressed }) =>
+          pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined
+        }
+      >
         {card}
       </Pressable>
     </Link>
@@ -263,7 +294,8 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
 
 function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boolean }) {
   const posterHeight = isWeb ? 280 : 240;
-  const hasEpisodeName = episode.episode.name && episode.episode.name !== episode.showTitle;
+  const hasEpisodeName =
+    episode.episode.name && episode.episode.name !== episode.showTitle;
 
   const card = (
     <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
@@ -276,7 +308,9 @@ function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boo
           />
         ) : (
           <View className="flex-1 items-center justify-center bg-zinc-800 px-3">
-            <Text className="text-center text-sm font-semibold text-zinc-400">{episode.showTitle}</Text>
+            <Text className="text-center text-sm font-semibold text-zinc-400">
+              {episode.showTitle}
+            </Text>
           </View>
         )}
         <LinearGradient
@@ -315,21 +349,27 @@ function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boo
 
   return (
     <Link href={{ pathname: "/show/[id]", params: { id: episode.routeId } }} asChild>
-      <Pressable style={({ pressed }) => pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined}>
+      <Pressable
+        style={({ pressed }) =>
+          pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined
+        }
+      >
         {card}
       </Pressable>
     </Link>
   );
 }
 
-export default function HomeScreen() {
+export function HomeScreen() {
   const [activeTab, setActiveTab] = useState<HomeTab>("watchlist");
-  const [filter, setFilter] = useState<HomeFilter>("all");
+  const [mediaFilter, setMediaFilter] = useState<HomeMediaFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<HomeStatusFilter>("all");
   const [watchlistVisibleCount, setWatchlistVisibleCount] = useState(0);
   const [isLoadingMoreWatchlist, setIsLoadingMoreWatchlist] = useState(false);
   const [isHydratingInitialUpcoming, setIsHydratingInitialUpcoming] = useState(false);
   const [isLoadingPast, setIsLoadingPast] = useState(false);
   const [isLoadingFuture, setIsLoadingFuture] = useState(false);
+  const [isTodayVisible, setIsTodayVisible] = useState(true);
   const [gridWidth, setGridWidth] = useState(0);
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
@@ -344,12 +384,13 @@ export default function HomeScreen() {
   );
 
   const upcomingScrollRef = useRef<any>(null);
-  const didHydrateInitialUpcomingRef = useRef(false);
+  const didStartInitialUpcomingHydrationRef = useRef(false);
   const hydratedRangesRef = useRef(new Set<string>());
   const shouldAnchorTodayRef = useRef(false);
   const previousTabRef = useRef<HomeTab>("watchlist");
   const canLoadPastFromEdgeRef = useRef(true);
   const canLoadFutureFromEdgeRef = useRef(true);
+  const allowUpcomingEdgeLoadRef = useRef(false);
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const relationSyncTriggeredRef = useRef(false);
   const [upcomingSnapshot, setUpcomingSnapshot] = useState<UpcomingGroup[]>([]);
@@ -357,11 +398,11 @@ export default function HomeScreen() {
   const watchlist = useQuery(api.shows.getWatchlist, {});
   const upcoming = useQuery(
     api.schedule.getUpcomingSchedule,
-    activeTab === "upcoming" && !isHydratingInitialUpcoming
+    activeTab === "upcoming"
       ? {
           startDate: rangeStartDate,
           endDate: rangeEndDate,
-          mediaFilter: filter === "all" ? undefined : filter,
+          mediaFilter: mediaFilter === "all" ? undefined : mediaFilter,
         }
       : "skip"
   );
@@ -377,10 +418,15 @@ export default function HomeScreen() {
       }
 
       hydratedRangesRef.current.add(cacheKey);
-      await hydrateScheduleRange({
-        startDate,
-        days: safeDays,
-      });
+      try {
+        await hydrateScheduleRange({
+          startDate,
+          days: safeDays,
+        });
+      } catch (error) {
+        hydratedRangesRef.current.delete(cacheKey);
+        throw error;
+      }
     },
     [hydrateScheduleRange]
   );
@@ -390,25 +436,53 @@ export default function HomeScreen() {
       shouldAnchorTodayRef.current = true;
       canLoadPastFromEdgeRef.current = true;
       canLoadFutureFromEdgeRef.current = true;
+      allowUpcomingEdgeLoadRef.current = false;
+      setIsTodayVisible(true);
     }
     previousTabRef.current = activeTab;
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab !== "upcoming" || didHydrateInitialUpcomingRef.current) {
+    if (
+      activeTab !== "upcoming" ||
+      didStartInitialUpcomingHydrationRef.current ||
+      isHydratingInitialUpcoming
+    ) {
       return;
     }
 
-    didHydrateInitialUpcomingRef.current = true;
+    didStartInitialUpcomingHydrationRef.current = true;
+    let cancelled = false;
     setIsHydratingInitialUpcoming(true);
 
-    void hydrateRange(
+    const hydrationPromise = hydrateRange(
       rangeStartDate,
       getInclusiveDayCount(rangeStartDate, rangeEndDate)
-    ).finally(() => {
-      setIsHydratingInitialUpcoming(false);
+    ).catch((error) => {
+      console.warn("Initial upcoming range hydration failed", error);
     });
-  }, [activeTab, hydrateRange, rangeEndDate, rangeStartDate]);
+
+    void Promise.race([
+      hydrationPromise,
+      delay(INITIAL_UPCOMING_HYDRATION_TIMEOUT_MS),
+    ])
+      .finally(() => {
+        if (!cancelled) {
+          setIsHydratingInitialUpcoming(false);
+          shouldAnchorTodayRef.current = true;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeTab,
+    hydrateRange,
+    isHydratingInitialUpcoming,
+    rangeEndDate,
+    rangeStartDate,
+  ]);
 
   useEffect(() => {
     if (relationSyncTriggeredRef.current) {
@@ -456,17 +530,82 @@ export default function HomeScreen() {
     }
   }, [activeTab, hydrateRange, isLoadingFuture, rangeEndDate]);
 
+  const triggerLoadPast = useCallback(() => {
+    if (
+      !canLoadPastFromEdgeRef.current ||
+      isLoadingPast
+    ) {
+      return;
+    }
+
+    canLoadPastFromEdgeRef.current = false;
+    void loadPastWeek()
+      .catch((error) => {
+        console.warn("Failed to load earlier upcoming range", error);
+      })
+      .finally(() => {
+        setTimeout(() => {
+          canLoadPastFromEdgeRef.current = true;
+        }, EDGE_LOAD_COOLDOWN_MS);
+      });
+  }, [isLoadingPast, loadPastWeek]);
+
+  const triggerLoadFuture = useCallback(() => {
+    if (
+      !canLoadFutureFromEdgeRef.current ||
+      isLoadingFuture
+    ) {
+      return;
+    }
+
+    canLoadFutureFromEdgeRef.current = false;
+    void loadFutureWeek()
+      .catch((error) => {
+        console.warn("Failed to load later upcoming range", error);
+      })
+      .finally(() => {
+        setTimeout(() => {
+          canLoadFutureFromEdgeRef.current = true;
+        }, EDGE_LOAD_COOLDOWN_MS);
+      });
+  }, [isLoadingFuture, loadFutureWeek]);
+
   useEffect(() => {
     if (activeTab === "upcoming" && upcoming !== undefined) {
       setUpcomingSnapshot(upcoming as UpcomingGroup[]);
     }
   }, [activeTab, upcoming]);
 
-  const filteredWatchlist = useMemo(() => {
-    const items = (watchlist ?? []) as WatchlistItem[];
-    if (filter === "all") return items;
-    return items.filter((item) => item.mediaType === filter);
-  }, [filter, watchlist]);
+  const watchlistItems = useMemo(() => (watchlist ?? []) as WatchlistItem[], [watchlist]);
+
+  const mediaScopedWatchlist = useMemo(
+    () =>
+      applyTrackingFilters(watchlistItems, {
+        media: mediaFilter,
+        status: "all",
+      }),
+    [mediaFilter, watchlistItems]
+  );
+
+  const filteredWatchlist = useMemo(
+    () =>
+      applyTrackingFilters(mediaScopedWatchlist, {
+        media: "all",
+        status: statusFilter,
+      }),
+    [mediaScopedWatchlist, statusFilter]
+  );
+
+  const watchlistStatusOptionsWithCount = useMemo(
+    () =>
+      watchlistStatusOptions.map((option) => ({
+        ...option,
+        count: mediaScopedWatchlist.filter((item) =>
+          matchesStatusFilter(item, option.value)
+        ).length,
+      })),
+    [mediaScopedWatchlist]
+  );
 
   const upcomingGroups = useMemo(
     () => ((upcoming ?? upcomingSnapshot) as UpcomingGroup[]),
@@ -510,24 +649,48 @@ export default function HomeScreen() {
     [todayKey, upcomingListItems]
   );
 
+  const upcomingRangeLabel = useMemo(
+    () => `${getDateLabel(rangeStartDate)} - ${getDateLabel(rangeEndDate)}`,
+    [rangeEndDate, rangeStartDate]
+  );
+
+  const onUpcomingViewableItemsChanged = useCallback(
+    ({ viewableItems }: { viewableItems: { item: UpcomingListItem }[] }) => {
+      const hasTodayHeaderVisible = viewableItems.some(
+        (entry) => entry.item.type === "header" && entry.item.date === todayKey
+      );
+      setIsTodayVisible(hasTodayHeaderVisible);
+    },
+    [todayKey]
+  );
+
+  const jumpToToday = useCallback(() => {
+    if (todayAnchorIndex < 0) {
+      return;
+    }
+
+    upcomingScrollRef.current?.scrollToIndex({
+      index: todayAnchorIndex,
+      animated: true,
+    });
+  }, [todayAnchorIndex]);
+
   const isWatchlistLoading = watchlist === undefined;
   const isUpcomingLoading =
     activeTab === "upcoming" &&
     upcomingGroups.length === 0 &&
     (upcoming === undefined || isHydratingInitialUpcoming);
 
-  const getHeaderText = () => {
-    switch (activeTab) {
-      case "watchlist":
-        return { title: "Watchlist", subtitle: "Shows with new episodes to watch" };
-      case "upcoming":
-        return { title: "Upcoming", subtitle: "Episodes from 8 days before and after today" };
-    }
-  };
+  const headerText =
+    activeTab === "watchlist"
+      ? { title: "Watchlist", subtitle: "Filtered by media and watch state" }
+      : { title: "Upcoming", subtitle: "Episodes from 8 days before and after today" };
 
-  const headerText = getHeaderText();
   const watchlistCount = filteredWatchlist.length;
-  const upcomingCount = upcomingGroups.reduce((sum, group) => sum + group.episodes.length, 0);
+  const upcomingCount = upcomingGroups.reduce(
+    (sum, group) => sum + group.episodes.length,
+    0
+  );
   const visibleWatchlistItems = useMemo(
     () => filteredWatchlist.slice(0, watchlistVisibleCount),
     [filteredWatchlist, watchlistVisibleCount]
@@ -536,7 +699,10 @@ export default function HomeScreen() {
 
   useEffect(() => {
     setWatchlistVisibleCount((current) => {
-      const next = Math.min(filteredWatchlist.length, Math.max(current, watchlistPageSize));
+      const next = Math.min(
+        filteredWatchlist.length,
+        Math.max(current, watchlistPageSize)
+      );
       return next;
     });
     setIsLoadingMoreWatchlist(false);
@@ -562,7 +728,13 @@ export default function HomeScreen() {
       );
       setIsLoadingMoreWatchlist(false);
     }, 120);
-  }, [filteredWatchlist.length, hasMoreWatchlist, isLoadingMoreWatchlist, isWatchlistLoading, watchlistPageSize]);
+  }, [
+    filteredWatchlist.length,
+    hasMoreWatchlist,
+    isLoadingMoreWatchlist,
+    isWatchlistLoading,
+    watchlistPageSize,
+  ]);
 
   const upcomingListData = useMemo(
     () => (isUpcomingLoading || upcomingGroups.length === 0 ? [] : upcomingListItems),
@@ -591,8 +763,23 @@ export default function HomeScreen() {
           index: todayAnchorIndex,
           animated: false,
         });
+
+        setTimeout(() => {
+          allowUpcomingEdgeLoadRef.current = true;
+        }, 180);
       });
       shouldAnchorTodayRef.current = false;
+      setIsTodayVisible(true);
+    }
+  }, [activeTab, isUpcomingLoading, todayAnchorIndex]);
+
+  useEffect(() => {
+    if (
+      activeTab === "upcoming" &&
+      !isUpcomingLoading &&
+      todayAnchorIndex < 0
+    ) {
+      allowUpcomingEdgeLoadRef.current = true;
     }
   }, [activeTab, isUpcomingLoading, todayAnchorIndex]);
 
@@ -600,14 +787,22 @@ export default function HomeScreen() {
     ({ item }: { item: UpcomingListItem }) => {
       if (item.type === "header") {
         return (
-          <View className="mb-3">
+          <View className={`mb-3 ${item.isToday ? "mt-1" : ""}`}>
             <View
-              className={`self-start rounded-md border-2 px-3 py-1 ${
-                item.isToday ? "border-red-500 bg-red-500" : "border-zinc-600 bg-zinc-700/70"
+              className={`self-start rounded-md border-2 ${
+                item.isToday
+                  ? "border-primary bg-primary px-4 py-1.5"
+                  : "border-zinc-600 bg-zinc-700/70 px-3 py-1"
               }`}
             >
-              <Text className="text-[11px] font-black uppercase tracking-wide text-zinc-100">
-                {getDayLabel(item.date)} · {getDateLabel(item.date)}
+              <Text
+                className={`text-[11px] font-black uppercase tracking-wide ${
+                  item.isToday ? "text-white" : "text-zinc-100"
+                }`}
+              >
+                {item.isToday
+                  ? `TODAY - ${getDateLabel(item.date)}`
+                  : `${getDayLabel(item.date)} · ${getDateLabel(item.date)}`}
               </Text>
             </View>
           </View>
@@ -635,40 +830,25 @@ export default function HomeScreen() {
 
   const onUpcomingScroll = useCallback(
     (event: any) => {
+      if (!allowUpcomingEdgeLoadRef.current) {
+        return;
+      }
+
       const y = event.nativeEvent.contentOffset.y;
       const viewportHeight = event.nativeEvent.layoutMeasurement.height;
       const contentHeight = event.nativeEvent.contentSize.height;
       const distanceFromBottom = contentHeight - (y + viewportHeight);
 
-      if (y > SCROLL_EDGE_THRESHOLD * 2) {
-        canLoadPastFromEdgeRef.current = true;
+      if (y <= SCROLL_EDGE_THRESHOLD) {
+        triggerLoadPast();
+        return;
       }
 
-      if (distanceFromBottom > SCROLL_EDGE_THRESHOLD * 2) {
-        canLoadFutureFromEdgeRef.current = true;
-      }
-
-      if (
-        y <= SCROLL_EDGE_THRESHOLD &&
-        canLoadPastFromEdgeRef.current &&
-        !isHydratingInitialUpcoming &&
-        !isLoadingPast
-      ) {
-        canLoadPastFromEdgeRef.current = false;
-        void loadPastWeek();
-      }
-
-      if (
-        distanceFromBottom <= SCROLL_EDGE_THRESHOLD &&
-        canLoadFutureFromEdgeRef.current &&
-        !isHydratingInitialUpcoming &&
-        !isLoadingFuture
-      ) {
-        canLoadFutureFromEdgeRef.current = false;
-        void loadFutureWeek();
+      if (distanceFromBottom <= SCROLL_EDGE_THRESHOLD) {
+        triggerLoadFuture();
       }
     },
-    [isHydratingInitialUpcoming, isLoadingFuture, isLoadingPast, loadFutureWeek, loadPastWeek]
+    [triggerLoadFuture, triggerLoadPast]
   );
 
   const renderWatchlistItem = useCallback(
@@ -713,7 +893,7 @@ export default function HomeScreen() {
                     subtitle={headerText.subtitle}
                     eyebrow="Today"
                     icon="sparkles-outline"
-                    rightLabel={`${watchlistCount} pending`}
+                    rightLabel={`${watchlistCount} matched`}
                     className="mb-4"
                   />
 
@@ -728,13 +908,21 @@ export default function HomeScreen() {
                   />
 
                   <SegmentedControl
+                    className="mb-3"
                     options={[
                       { value: "all", label: "All" },
                       { value: "tv", label: "TV" },
                       { value: "anime", label: "Anime" },
                     ]}
-                    value={filter}
-                    onValueChange={(value: HomeFilter) => setFilter(value)}
+                    value={mediaFilter}
+                    onValueChange={(value: HomeMediaFilter) => setMediaFilter(value)}
+                  />
+
+                  <FilterChipGroup
+                    className="mb-3"
+                    options={watchlistStatusOptionsWithCount}
+                    value={statusFilter}
+                    onValueChange={(value) => setStatusFilter(value)}
                   />
 
                   {isWatchlistLoading ? (
@@ -745,9 +933,11 @@ export default function HomeScreen() {
 
                   {!isWatchlistLoading && filteredWatchlist.length === 0 ? (
                     <View className="mt-6 items-center rounded-xl border-2 border-border-default bg-bg-surface px-6 py-12">
-                      <Text className="text-lg font-semibold text-text-primary">Nothing in watch list</Text>
+                      <Text className="text-lg font-semibold text-text-primary">
+                        No results for these filters
+                      </Text>
                       <Text className="mt-1 text-center text-sm text-text-secondary">
-                        Track shows and they will appear here with unwatched episode counts.
+                        Try changing media or status filters.
                       </Text>
                     </View>
                   ) : null}
@@ -765,81 +955,154 @@ export default function HomeScreen() {
               }
             />
           ) : (
-            <FlashList
-              ref={upcomingScrollRef}
-              data={upcomingListData}
-              keyExtractor={(item) => item.id}
-              renderItem={renderUpcomingListItem as any}
-              getItemType={(item) => item.type}
-              stickyHeaderIndices={stickyHeaderIndices}
-              onScroll={onUpcomingScroll}
-              scrollEventThrottle={16}
-              showsVerticalScrollIndicator
-              contentContainerStyle={{ paddingBottom: 24 }}
-              ListHeaderComponent={
-                <View className="pb-4">
-                  <PageIntro
-                    title={headerText.title}
-                    subtitle={headerText.subtitle}
-                    eyebrow="Calendar"
-                    icon="calendar-outline"
-                    rightLabel={`${upcomingCount} episodes`}
-                    className="mb-4"
-                  />
+            <View className="flex-1">
+              <View className="pb-3">
+                <PageIntro
+                  title={headerText.title}
+                  subtitle={headerText.subtitle}
+                  eyebrow="Calendar"
+                  icon="calendar-outline"
+                  rightLabel={`${upcomingCount} episodes`}
+                  className="mb-4"
+                />
 
-                  <SegmentedControl
-                    className="mb-3"
-                    options={[
-                      { value: "watchlist", label: "Watchlist" },
-                      { value: "upcoming", label: "Upcoming" },
-                    ]}
-                    value={activeTab}
-                    onValueChange={(value: HomeTab) => setActiveTab(value)}
-                  />
+                <SegmentedControl
+                  className="mb-3"
+                  options={[
+                    { value: "watchlist", label: "Watchlist" },
+                    { value: "upcoming", label: "Upcoming" },
+                  ]}
+                  value={activeTab}
+                  onValueChange={(value: HomeTab) => setActiveTab(value)}
+                />
 
-                  <SegmentedControl
-                    options={[
-                      { value: "all", label: "All" },
-                      { value: "tv", label: "TV" },
-                      { value: "anime", label: "Anime" },
-                    ]}
-                    value={filter}
-                    onValueChange={(value: HomeFilter) => setFilter(value)}
-                  />
+                <SegmentedControl
+                  options={[
+                    { value: "all", label: "All" },
+                    { value: "tv", label: "TV" },
+                    { value: "anime", label: "Anime" },
+                  ]}
+                  value={mediaFilter}
+                  onValueChange={(value: HomeMediaFilter) => setMediaFilter(value)}
+                />
 
-                  {isUpcomingLoading ? (
-                    <View className="py-10 items-center">
-                      <ActivityIndicator size="small" color="#ef4444" />
-                      <Text className="mt-2 text-xs text-text-secondary">Loading schedule...</Text>
-                    </View>
+                <View className="mt-3 flex-row items-center justify-between">
+                  <Text className="text-[11px] font-black uppercase tracking-wide text-text-secondary">
+                    Loaded: {upcomingRangeLabel}
+                  </Text>
+                  <View
+                    className={`rounded-md border px-2.5 py-1 ${
+                      isTodayVisible
+                        ? "border-primary/70 bg-primary/20"
+                        : "border-border-default bg-bg-surface"
+                    }`}
+                  >
+                    <Text
+                      className={`text-[11px] font-black uppercase tracking-wide ${
+                        isTodayVisible ? "text-primary" : "text-text-secondary"
+                      }`}
+                    >
+                      TODAY {getDateLabel(todayKey)}
+                    </Text>
+                  </View>
+                </View>
+
+                <View className="mt-2 flex-row items-center gap-2">
+                  <Pressable
+                    onPress={triggerLoadPast}
+                    disabled={isLoadingPast}
+                    className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
+                    style={({ pressed }) => ({
+                      opacity: isLoadingPast ? 0.45 : pressed ? 0.85 : 1,
+                    })}
+                  >
+                    <Text className="text-[11px] font-bold uppercase tracking-wide text-text-primary">
+                      {isLoadingPast ? "Loading Earlier..." : "Load Earlier"}
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={triggerLoadFuture}
+                    disabled={isLoadingFuture}
+                    className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
+                    style={({ pressed }) => ({
+                      opacity: isLoadingFuture ? 0.45 : pressed ? 0.85 : 1,
+                    })}
+                  >
+                    <Text className="text-[11px] font-bold uppercase tracking-wide text-text-primary">
+                      {isLoadingFuture ? "Loading Later..." : "Load Later"}
+                    </Text>
+                  </Pressable>
+
+                  {todayAnchorIndex >= 0 ? (
+                    <Pressable
+                      onPress={jumpToToday}
+                      className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
+                      style={({ pressed }) =>
+                        pressed ? { opacity: 0.85 } : undefined
+                      }
+                    >
+                      <Text className="text-[11px] font-bold uppercase tracking-wide text-text-primary">
+                        {isTodayVisible ? "On Today" : "Jump to Today"}
+                      </Text>
+                    </Pressable>
                   ) : null}
+                </View>
 
-                  {!isUpcomingLoading && upcomingGroups.length === 0 ? (
+                {!isUpcomingLoading && upcomingGroups.length > 0 && isLoadingPast ? (
+                  <View className="mt-2 flex-row items-center gap-2">
+                    <ActivityIndicator size="small" color="#ef4444" />
+                    <Text className="text-xs text-text-secondary">
+                      Loading earlier days...
+                    </Text>
+                  </View>
+                ) : null}
+
+              </View>
+
+              <FlashList
+                ref={upcomingScrollRef}
+                data={upcomingListData}
+                keyExtractor={(item) => item.id}
+                renderItem={renderUpcomingListItem as any}
+                getItemType={(item) => item.type}
+                stickyHeaderIndices={stickyHeaderIndices}
+                onScroll={onUpcomingScroll}
+                onViewableItemsChanged={onUpcomingViewableItemsChanged as any}
+                scrollEventThrottle={16}
+                showsVerticalScrollIndicator
+                contentContainerStyle={{ paddingBottom: 24, flexGrow: 1 }}
+                ListEmptyComponent={
+                  isUpcomingLoading ? (
+                    <View className="items-center py-10">
+                      <ActivityIndicator size="small" color="#ef4444" />
+                      <Text className="mt-2 text-xs text-text-secondary">
+                        Loading schedule...
+                      </Text>
+                    </View>
+                  ) : (
                     <View className="items-center rounded-xl border-2 border-border-default bg-bg-surface px-6 py-12">
-                      <Text className="text-lg font-semibold text-text-primary">No upcoming episodes</Text>
+                      <Text className="text-lg font-semibold text-text-primary">
+                        No upcoming episodes
+                      </Text>
                       <Text className="mt-1 text-center text-sm text-text-secondary">
                         Shows with future episodes will appear here.
                       </Text>
                     </View>
-                  ) : null}
-
-                  {!isUpcomingLoading && upcomingGroups.length > 0 && isLoadingPast ? (
-                    <View className="mt-3 items-center py-2">
+                  )
+                }
+                ListFooterComponent={
+                  !isUpcomingLoading && upcomingGroups.length > 0 && isLoadingFuture ? (
+                    <View className="items-center py-2">
                       <ActivityIndicator size="small" color="#ef4444" />
-                      <Text className="mt-1 text-xs text-text-secondary">Loading earlier days...</Text>
+                      <Text className="mt-1 text-xs text-text-secondary">
+                        Loading later days...
+                      </Text>
                     </View>
-                  ) : null}
-                </View>
-              }
-              ListFooterComponent={
-                !isUpcomingLoading && upcomingGroups.length > 0 && isLoadingFuture ? (
-                  <View className="items-center py-2">
-                    <ActivityIndicator size="small" color="#ef4444" />
-                    <Text className="mt-1 text-xs text-text-secondary">Loading later days...</Text>
-                  </View>
-                ) : null
-              }
-            />
+                  ) : null
+                }
+              />
+            </View>
           )
         ) : (
           <View className="flex-1 items-center justify-center">
@@ -850,3 +1113,5 @@ export default function HomeScreen() {
     </ScreenWrapper>
   );
 }
+
+export { HomeScreen as default };

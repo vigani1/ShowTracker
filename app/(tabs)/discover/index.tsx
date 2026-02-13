@@ -8,18 +8,18 @@ import {
   type LayoutChangeEvent,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
+import { Link } from "expo-router";
+import { Button } from "@/components/Button";
+import { HeroSection } from "@/components/HeroSection";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
+import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SegmentedControl } from "@/components/SegmentedControl";
-import { HeroSection } from "@/components/HeroSection";
-import { Button } from "@/components/Button";
-import { PageIntro } from "@/components/PageIntro";
 import { getTrendingAniList } from "@/lib/api/anilist";
 import { normalizeAniListMedia, normalizeTmdbMedia } from "@/lib/api/normalize";
 import { getTrendingTmdb } from "@/lib/api/tmdb";
 import type { NormalizedShow } from "@/lib/api/types";
 import { createShowRouteId } from "@/lib/show-route";
-import { Link } from "expo-router";
 
 type DiscoverTab = "tv" | "anime" | "movie";
 
@@ -34,6 +34,7 @@ type TabState = {
 
 const INITIAL_ITEMS_PER_PAGE = 20;
 const LOAD_MORE_THRESHOLD = 0.5;
+const GRID_GAP = 12;
 
 const tabOptions = [
   { value: "tv" as const, label: "TV Shows" },
@@ -50,8 +51,6 @@ function getGridColumnCount(width: number, isWeb: boolean) {
   if (width >= 920) return 4;
   return 3;
 }
-
-const GRID_GAP = 12;
 
 function getSectionError(reason: unknown, fallback: string) {
   if (reason instanceof Error) return reason.message;
@@ -71,7 +70,9 @@ function SectionHeader({ title, count }: { title: string; count: number }) {
         {title}
       </Text>
       <View className="rounded-md border-2 border-border-bright bg-bg-surface px-3 py-1">
-        <Text className="text-[11px] font-black uppercase tracking-wide text-text-secondary">{count} titles</Text>
+        <Text className="text-[11px] font-black uppercase tracking-wide text-text-secondary">
+          {count} titles
+        </Text>
       </View>
     </View>
   );
@@ -83,7 +84,6 @@ export function DiscoverScreen() {
   const isWeb = Platform.OS === "web";
   const [gridWidth, setGridWidth] = useState(0);
 
-  // Tab states
   const [tvState, setTvState] = useState<TabState>({
     items: [],
     isLoading: true,
@@ -132,17 +132,14 @@ export function DiscoverScreen() {
     setGridWidth(e.nativeEvent.layout.width);
   }, []);
 
-  // Calculate grid dimensions
   const effectiveWidth = gridWidth || Math.max(width - 40, 0);
   const columns = getGridColumnCount(effectiveWidth, isWeb);
   const gridItemWidth = (effectiveWidth - (columns - 1) * GRID_GAP) / columns;
 
-  // Load initial data for all tabs
   useEffect(() => {
     let isCancelled = false;
 
     const loadInitialData = async () => {
-      // Load TV Shows
       try {
         const tvResult = await getTrendingTmdb("tv", "week", 1);
         if (!isCancelled) {
@@ -168,7 +165,6 @@ export function DiscoverScreen() {
         }
       }
 
-      // Load Anime
       try {
         const animeResult = await getTrendingAniList(1, INITIAL_ITEMS_PER_PAGE);
         if (!isCancelled) {
@@ -178,7 +174,9 @@ export function DiscoverScreen() {
             isLoadingMore: false,
             error: null,
             currentPage: 1,
-            hasMore: animeResult.data.Page.pageInfo.currentPage < animeResult.data.Page.pageInfo.lastPage,
+            hasMore:
+              animeResult.data.Page.pageInfo.currentPage <
+              animeResult.data.Page.pageInfo.lastPage,
           });
         }
       } catch (error) {
@@ -194,7 +192,6 @@ export function DiscoverScreen() {
         }
       }
 
-      // Load Movies
       try {
         const movieResult = await getTrendingTmdb("movie", "week", 1);
         if (!isCancelled) {
@@ -227,7 +224,6 @@ export function DiscoverScreen() {
     };
   }, []);
 
-  // Load more items when scrolling
   const loadMoreItems = useCallback(async () => {
     if (activeState.isLoading || activeState.isLoadingMore || !activeState.hasMore) {
       return;
@@ -246,7 +242,9 @@ export function DiscoverScreen() {
           items: [...prev.items, ...newItems],
           isLoadingMore: false,
           currentPage: nextPage,
-          hasMore: result.data.Page.pageInfo.currentPage < result.data.Page.pageInfo.lastPage,
+          hasMore:
+            result.data.Page.pageInfo.currentPage <
+            result.data.Page.pageInfo.lastPage,
         }));
       } else if (activeTab === "movie") {
         const result = await getTrendingTmdb("movie", "week", nextPage);
@@ -259,7 +257,6 @@ export function DiscoverScreen() {
           hasMore: result.page < result.total_pages,
         }));
       } else {
-        // TV Shows
         const result = await getTrendingTmdb("tv", "week", nextPage);
         const newItems = result.results.map(normalizeTmdbMedia);
         setTvState((prev) => ({
@@ -274,15 +271,22 @@ export function DiscoverScreen() {
       setActiveState((prev) => ({
         ...prev,
         isLoadingMore: false,
-        error: getSectionError(error, `Could not load more ${activeTab === "anime" ? "anime" : activeTab === "movie" ? "movies" : "TV shows"}.`),
+        error: getSectionError(
+          error,
+          `Could not load more ${
+            activeTab === "anime"
+              ? "anime"
+              : activeTab === "movie"
+                ? "movies"
+                : "TV shows"
+          }.`
+        ),
       }));
     }
   }, [activeState, activeTab, setActiveState]);
 
-  // Hero show for active tab
   const heroShow = activeState.items[0] ?? null;
 
-  // Render grid item
   const renderItem = useCallback(
     ({ item, index }: { item: NormalizedShow; index: number }) => (
       <View
@@ -304,7 +308,6 @@ export function DiscoverScreen() {
     [gridItemWidth, columns, isWeb]
   );
 
-  // Render footer loader
   const renderFooter = useCallback(() => {
     if (!activeState.isLoadingMore) return null;
     return (
@@ -314,7 +317,6 @@ export function DiscoverScreen() {
     );
   }, [activeState.isLoadingMore]);
 
-  // Empty state
   const renderEmpty = useCallback(() => {
     if (activeState.isLoading) {
       return (
@@ -335,12 +337,13 @@ export function DiscoverScreen() {
 
     return (
       <View className="mt-5 rounded-xl border-2 border-border-default bg-bg-surface px-4 py-5">
-        <Text className="text-sm text-text-secondary">No discovery data available right now.</Text>
+        <Text className="text-sm text-text-secondary">
+          No discovery data available right now.
+        </Text>
       </View>
     );
   }, [activeState.isLoading, activeState.error]);
 
-  // List header component
   const ListHeader = useCallback(
     () => (
       <View>
@@ -349,11 +352,12 @@ export function DiscoverScreen() {
           subtitle="Trending across TV, anime, and movies"
           eyebrow="Fresh picks"
           icon="compass-outline"
-          rightLabel={activeState.items.length > 0 ? `${activeState.items.length} live` : undefined}
+          rightLabel={
+            activeState.items.length > 0 ? `${activeState.items.length} live` : undefined
+          }
           className="mb-4"
         />
 
-        {/* Hero banner */}
         {heroShow ? (
           <View className="mb-5 overflow-hidden rounded-xl border-2 border-border-default">
             <HeroSection
@@ -362,21 +366,38 @@ export function DiscoverScreen() {
               subtitle={heroShow.overview ?? undefined}
               mobileHeight={180}
             >
-              <Link href={{ pathname: "/show/[id]", params: { id: createShowRouteId(heroShow) } }} asChild>
+              <Link
+                href={{
+                  pathname: "/show/[id]",
+                  params: { id: createShowRouteId(heroShow) },
+                }}
+                asChild
+              >
                 <Button label="View Details" variant="primary" className="self-start" />
               </Link>
             </HeroSection>
           </View>
         ) : null}
 
-        <SegmentedControl options={tabOptions} value={activeTab} onValueChange={setActiveTab} className="mb-5" />
+        <SegmentedControl
+          options={tabOptions}
+          value={activeTab}
+          onValueChange={setActiveTab}
+          className="mb-5"
+        />
 
-        {activeState.items.length > 0 && (
+        {activeState.items.length > 0 ? (
           <SectionHeader
-            title={`Trending ${activeTab === "anime" ? "Anime" : activeTab === "movie" ? "Movies" : "TV Shows"}`}
+            title={`Trending ${
+              activeTab === "anime"
+                ? "Anime"
+                : activeTab === "movie"
+                  ? "Movies"
+                  : "TV Shows"
+            }`}
             count={activeState.items.length}
           />
-        )}
+        ) : null}
       </View>
     ),
     [heroShow, activeTab, activeState.items.length]

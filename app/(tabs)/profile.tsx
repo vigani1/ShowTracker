@@ -24,9 +24,12 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
 type TimeBreakdown = {
+  years: number;
   months: number;
+  weeks: number;
   days: number;
   hours: number;
+  minutes: number;
 };
 
 type RailItem = {
@@ -36,6 +39,25 @@ type RailItem = {
   posterUrl: string | null | undefined;
   meta?: string;
   badge?: string;
+};
+
+type ProfileStats = {
+  totalWatchTimeFormatted?: string;
+  totalWatchTimeBreakdown?: TimeBreakdown;
+  tvWatchTimeFormatted?: string;
+  tvWatchTimeBreakdown?: TimeBreakdown;
+  animeWatchTimeFormatted?: string;
+  animeWatchTimeBreakdown?: TimeBreakdown;
+  movieWatchTimeFormatted?: string;
+  movieWatchTimeBreakdown?: TimeBreakdown;
+  totalEpisodesWatched?: number;
+  tvEpisodes?: number;
+  animeEpisodes?: number;
+  movieCount?: number;
+  currentStreak?: number;
+  longestStreak?: number;
+  completedShows?: number;
+  totalTrackedShows?: number;
 };
 
 function formatCount(value: number) {
@@ -71,86 +93,6 @@ function getRouteId(args: {
   return null;
 }
 
-function StatCard({
-  icon,
-  label,
-  value,
-  breakdown,
-  accent,
-  isDesktop,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  value: string | number;
-  breakdown?: TimeBreakdown;
-  accent: string;
-  isDesktop: boolean;
-}) {
-  const segments = [
-    { key: "months", value: breakdown?.months ?? 0, label: "MONTHS" },
-    { key: "days", value: breakdown?.days ?? 0, label: "DAYS" },
-    { key: "hours", value: breakdown?.hours ?? 0, label: "HOURS" },
-  ].filter((segment) => segment.value > 0);
-
-  return (
-    <View
-      className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface"
-      style={{ flexBasis: isDesktop ? "23.5%" : "48%", flexGrow: 1, minWidth: 160 }}
-    >
-      <View style={{ height: 3, backgroundColor: accent }} />
-      <View className="px-3 pb-4 pt-3">
-        <View className="mb-3 flex-row items-center gap-2">
-          <View
-            className="h-7 w-7 items-center justify-center rounded-lg"
-            style={{ backgroundColor: `${accent}25` }}
-          >
-            <Ionicons name={icon} size={14} color={accent} />
-          </View>
-          <Text className="text-xs font-medium text-text-secondary">{label}</Text>
-        </View>
-
-        <Text className="text-center text-3xl font-black text-text-primary">{value}</Text>
-
-        {segments.length > 0 ? (
-          <View className="mt-3 flex-row flex-wrap items-center justify-center gap-2">
-            {segments.map((segment) => (
-              <View
-                key={segment.key}
-                className="items-center rounded-md border border-border-default bg-bg-elevated/70 px-2 py-1"
-              >
-                <Text className="text-sm font-semibold text-text-primary">{segment.value}</Text>
-                <Text className="text-[10px] text-text-secondary">{segment.label}</Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
-function QuickMetric({
-  icon,
-  value,
-  label,
-  accent,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  value: string | number;
-  label: string;
-  accent: string;
-}) {
-  return (
-    <View className="flex-1 rounded-xl border-2 border-border-default bg-bg-surface px-3 py-3">
-      <View className="flex-row items-center gap-2">
-        <Ionicons name={icon} size={14} color={accent} />
-        <Text className="text-[11px] text-text-secondary">{label}</Text>
-      </View>
-      <Text className="mt-1 text-xl font-bold text-text-primary">{value}</Text>
-    </View>
-  );
-}
-
 function SectionHeader({
   title,
   icon,
@@ -163,19 +105,235 @@ function SectionHeader({
   return (
     <View className="mb-3 flex-row items-center justify-between">
       <View className="flex-row items-center gap-2">
-        <Ionicons name={icon} size={18} color="#ef4444" />
-        <Text
-          className="text-xl text-text-primary"
-          style={{ fontFamily: "Courier New", fontWeight: "900" }}
-        >
+        <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+          <Ionicons name={icon} size={14} color="#ef4444" />
+        </View>
+        <Text className="text-lg font-extrabold tracking-tight text-text-primary">
           {title}
         </Text>
       </View>
       {rightLabel ? (
-        <Text className="text-[11px] font-black uppercase tracking-wide text-text-secondary">
+        <Text className="text-[11px] font-semibold uppercase tracking-widest text-text-muted">
           {rightLabel}
         </Text>
       ) : null}
+    </View>
+  );
+}
+
+function StatsPanelUnified({
+  stats,
+  isDesktop,
+}: {
+  stats: ProfileStats;
+  isDesktop: boolean;
+}) {
+  const completed = stats.completedShows ?? 0;
+  const total = stats.totalTrackedShows ?? 0;
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  const metrics: { icon: keyof typeof Ionicons.glyphMap; value: string | number; label: string }[] = [
+    { icon: "tv-outline", value: stats.tvWatchTimeFormatted ?? "0min", label: "TV TIME" },
+    { icon: "albums-outline", value: formatCount(stats.tvEpisodes ?? 0), label: "TV EPS" },
+    { icon: "planet-outline", value: stats.animeWatchTimeFormatted ?? "0min", label: "ANIME TIME" },
+    { icon: "sparkles-outline", value: formatCount(stats.animeEpisodes ?? 0), label: "ANIME EPS" },
+    { icon: "film-outline", value: stats.movieWatchTimeFormatted ?? "0min", label: "MOVIE TIME" },
+    { icon: "play-circle-outline", value: String(stats.movieCount ?? 0), label: "MOVIES" },
+    { icon: "flame-outline", value: `${stats.currentStreak ?? 0}d`, label: "STREAK" },
+    { icon: "trophy-outline", value: `${stats.longestStreak ?? 0}d`, label: "BEST STREAK" },
+  ];
+
+  return (
+    <View className="overflow-hidden rounded-2xl border border-border-default bg-bg-surface">
+      <LinearGradient
+        colors={["rgba(239,68,68,0.06)", "transparent"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
+      />
+
+      <View className="relative flex-row items-center justify-between px-5 pb-4 pt-5">
+        <View>
+          <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+            Total Watch Time
+          </Text>
+          <Text className="mt-1 text-4xl font-black text-text-primary">
+            {stats.totalWatchTimeFormatted ?? "0min"}
+          </Text>
+        </View>
+        <View className="items-end">
+          <View className="flex-row items-center gap-1.5">
+            <Ionicons name="checkmark-circle" size={14} color="#ef4444" />
+            <Text className="text-sm font-bold text-text-primary">
+              {completed}/{total}
+            </Text>
+          </View>
+          <View className="mt-1.5 h-1.5 w-24 overflow-hidden rounded-full bg-bg-elevated">
+            <View
+              className="h-full rounded-full bg-primary"
+              style={{ width: `${pct}%` }}
+            />
+          </View>
+          <Text className="mt-1 text-[10px] text-text-muted">
+            {pct}% completed
+          </Text>
+        </View>
+      </View>
+
+      <View className="mx-5 h-px bg-border-default" />
+
+      <View
+        className="relative flex-row flex-wrap px-5 py-4"
+        style={{ gap: 12 }}
+      >
+        {metrics.map((m) => (
+          <View
+            key={m.label}
+            className="items-center py-2"
+            style={{ flexBasis: isDesktop ? "11.5%" : "22%", flexGrow: 1 }}
+          >
+            <View className="mb-2 h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+              <Ionicons name={m.icon} size={16} color="#ef4444" />
+            </View>
+            <Text className="text-lg font-black text-text-primary">
+              {m.value}
+            </Text>
+            <Text className="mt-0.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+              {m.label}
+            </Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function breakdownPills(breakdown?: TimeBreakdown) {
+  if (!breakdown) return [];
+  return [
+    { key: "years", value: breakdown.years, label: "Y" },
+    { key: "months", value: breakdown.months, label: "MO" },
+    { key: "weeks", value: breakdown.weeks, label: "W" },
+    { key: "days", value: breakdown.days, label: "D" },
+    { key: "hours", value: breakdown.hours, label: "H" },
+    { key: "minutes", value: breakdown.minutes, label: "MIN" },
+  ].filter((s) => s.value > 0).slice(0, 3);
+}
+
+function StatsPanelCards({
+  stats,
+  isDesktop,
+}: {
+  stats: ProfileStats;
+  isDesktop: boolean;
+}) {
+  const completed = stats.completedShows ?? 0;
+  const total = stats.totalTrackedShows ?? 0;
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  const quickMetrics = [
+    { icon: "flame-outline" as keyof typeof Ionicons.glyphMap, value: `${stats.currentStreak ?? 0}d`, label: "STREAK" },
+    { icon: "trophy-outline" as keyof typeof Ionicons.glyphMap, value: `${stats.longestStreak ?? 0}d`, label: "BEST" },
+    { icon: "checkmark-circle-outline" as keyof typeof Ionicons.glyphMap, value: `${completed}/${total}`, label: `${pct}%` },
+  ];
+
+  const mainCards: {
+    icon: keyof typeof Ionicons.glyphMap;
+    label: string;
+    value: string;
+    subtitle: string;
+    breakdown?: TimeBreakdown;
+  }[] = [
+    {
+      icon: "time-outline",
+      label: "TOTAL TIME",
+      value: stats.totalWatchTimeFormatted ?? "0min",
+      subtitle: `${formatCount(stats.totalEpisodesWatched ?? 0)} episodes`,
+      breakdown: stats.totalWatchTimeBreakdown,
+    },
+    {
+      icon: "tv-outline",
+      label: "TV TIME",
+      value: stats.tvWatchTimeFormatted ?? "0min",
+      subtitle: `${formatCount(stats.tvEpisodes ?? 0)} episodes`,
+      breakdown: stats.tvWatchTimeBreakdown,
+    },
+    {
+      icon: "planet-outline",
+      label: "ANIME TIME",
+      value: stats.animeWatchTimeFormatted ?? "0min",
+      subtitle: `${formatCount(stats.animeEpisodes ?? 0)} episodes`,
+      breakdown: stats.animeWatchTimeBreakdown,
+    },
+    {
+      icon: "film-outline",
+      label: "MOVIE TIME",
+      value: stats.movieWatchTimeFormatted ?? "0min",
+      subtitle: `${formatCount(stats.movieCount ?? 0)} movies`,
+      breakdown: stats.movieWatchTimeBreakdown,
+    },
+  ];
+
+  return (
+    <View>
+      <View className="flex-row gap-2">
+        {quickMetrics.map((m) => (
+          <View
+            key={m.label}
+            className="flex-1 flex-row items-center gap-2 overflow-hidden rounded-xl border border-border-default bg-bg-surface px-3 py-2.5"
+          >
+            <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+              <Ionicons name={m.icon} size={14} color="#ef4444" />
+            </View>
+            <View>
+              <Text className="text-base font-black text-text-primary">{m.value}</Text>
+              <Text className="text-[9px] font-semibold uppercase tracking-widest text-text-muted">{m.label}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      <View className="mt-3 flex-row flex-wrap gap-3">
+        {mainCards.map((card) => {
+          const segments = breakdownPills(card.breakdown);
+
+          return (
+            <View
+              key={card.label}
+              className="flex-row overflow-hidden rounded-xl border border-border-default bg-bg-surface"
+              style={{ flexBasis: isDesktop ? "23.5%" : "48%", flexGrow: 1, minWidth: 160 }}
+            >
+              <View className="w-1 bg-primary" />
+              <View className="flex-1 px-3 py-3">
+                <View className="mb-2 flex-row items-center gap-2">
+                  <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+                    <Ionicons name={card.icon} size={14} color="#ef4444" />
+                  </View>
+                  <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+                    {card.label}
+                  </Text>
+                </View>
+                <Text className="text-2xl font-black text-text-primary">{card.value}</Text>
+                <Text className="mt-0.5 text-[11px] text-text-secondary">{card.subtitle}</Text>
+                {segments.length > 0 ? (
+                  <View className="mt-2 flex-row flex-wrap gap-1.5">
+                    {segments.map((s) => (
+                      <View
+                        key={s.key}
+                        className="rounded-md bg-bg-elevated/70 px-2 py-0.5"
+                      >
+                        <Text className="text-[10px] font-semibold text-text-secondary">
+                          {s.value}{s.label}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -191,8 +349,9 @@ function PosterRail({
 }) {
   if (items.length === 0) {
     return (
-      <View className="items-center justify-center rounded-xl border-2 border-border-default bg-bg-surface py-8">
-        <Text className="text-sm text-text-secondary">{emptyMessage}</Text>
+      <View className="items-center justify-center rounded-xl border border-border-default bg-bg-surface py-8">
+        <Ionicons name="film-outline" size={24} color="#52525b" />
+        <Text className="mt-2 text-sm text-text-secondary">{emptyMessage}</Text>
       </View>
     );
   }
@@ -210,7 +369,7 @@ function PosterRail({
       {items.map((item) => {
         const card = (
           <Pressable
-            className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface"
+            className="overflow-hidden rounded-xl border border-border-default bg-bg-surface"
             style={({ pressed }) => (pressed && item.routeId ? { opacity: 0.92 } : undefined)}
             disabled={!item.routeId}
           >
@@ -242,8 +401,8 @@ function PosterRail({
               </View>
 
               {item.badge ? (
-                <View className="absolute left-2 top-2 rounded-md border border-white/20 bg-black/70 px-2 py-1">
-                  <Text className="text-[10px] font-black uppercase tracking-wide text-white">{item.badge}</Text>
+                <View className="absolute left-2 top-2 rounded-md border border-white/20 bg-bg-base/80 px-2 py-1">
+                  <Text className="text-[10px] font-bold uppercase tracking-wide text-white">{item.badge}</Text>
                 </View>
               ) : null}
             </View>
@@ -284,6 +443,7 @@ export default function ProfileScreen() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
+  const [statsVersion, setStatsVersion] = useState<"A" | "B">("A");
   const [visibleRailCount, setVisibleRailCount] = useState(8);
   const [isLoadingMoreRails, setIsLoadingMoreRails] = useState(false);
   const canLoadMoreFromEdgeRef = useRef(true);
@@ -303,12 +463,26 @@ export default function ProfileScreen() {
   const heroBackdropUrl = toHttpsImageUrl(heroBackdrop);
   const avatarUrl = toHttpsImageUrl(stats?.avatarUrl);
 
-  const favoriteShowRailItems = useMemo<RailItem[]>(
+  const favoriteTvRailItems = useMemo<RailItem[]>(
     () =>
       (favorites ?? [])
-        .filter((entry) => entry.mediaType !== "movie")
+        .filter((entry) => entry.mediaType === "tv")
         .map((entry) => ({
-          key: `fav-show-${String(entry.id)}`,
+          key: `fav-tv-${String(entry.id)}`,
+          routeId: null,
+          title: entry.title,
+          posterUrl: entry.posterUrl,
+          badge: "Favorite",
+        })),
+    [favorites]
+  );
+
+  const favoriteAnimeRailItems = useMemo<RailItem[]>(
+    () =>
+      (favorites ?? [])
+        .filter((entry) => entry.mediaType === "anime")
+        .map((entry) => ({
+          key: `fav-anime-${String(entry.id)}`,
           routeId: null,
           title: entry.title,
           posterUrl: entry.posterUrl,
@@ -331,24 +505,51 @@ export default function ProfileScreen() {
     [favorites]
   );
 
-  const activeShowRailItems = useMemo<RailItem[]>(
+  const activeTvRailItems = useMemo<RailItem[]>(
     () =>
-      (dashboard?.shows ?? []).map((entry) => ({
-        key: `active-show-${entry.id ?? entry.title}`,
-        routeId: getRouteId({
-          mediaType: entry.mediaType,
-          tmdbId: entry.tmdbId,
-          anilistId: entry.anilistId,
-          malId: entry.malId,
-        }),
-        title: entry.title,
-        posterUrl: entry.posterUrl,
-        meta:
-          typeof entry.remainingEpisodes === "number" && entry.remainingEpisodes > 0
-            ? `${entry.remainingEpisodes} left`
-            : formatStatus(entry.status),
-        badge: entry.mediaType === "anime" ? "Anime" : "TV",
-      })),
+      (dashboard?.shows ?? [])
+        .filter((entry) => entry.mediaType === "tv")
+        .map((entry) => ({
+          key: `active-tv-${entry.id ?? entry.title}`,
+          routeId: getRouteId({
+            mediaType: entry.mediaType,
+            tmdbId: entry.tmdbId,
+            anilistId: entry.anilistId,
+            malId: entry.malId,
+          }),
+          title: entry.title,
+          posterUrl: entry.posterUrl,
+          meta:
+            typeof entry.remainingEpisodes === "number" &&
+            entry.remainingEpisodes > 0
+              ? `${entry.remainingEpisodes} left`
+              : formatStatus(entry.status),
+          badge: "TV",
+        })),
+    [dashboard]
+  );
+
+  const activeAnimeRailItems = useMemo<RailItem[]>(
+    () =>
+      (dashboard?.shows ?? [])
+        .filter((entry) => entry.mediaType === "anime")
+        .map((entry) => ({
+          key: `active-anime-${entry.id ?? entry.title}`,
+          routeId: getRouteId({
+            mediaType: entry.mediaType,
+            tmdbId: entry.tmdbId,
+            anilistId: entry.anilistId,
+            malId: entry.malId,
+          }),
+          title: entry.title,
+          posterUrl: entry.posterUrl,
+          meta:
+            typeof entry.remainingEpisodes === "number" &&
+            entry.remainingEpisodes > 0
+              ? `${entry.remainingEpisodes} left`
+              : formatStatus(entry.status),
+          badge: "Anime",
+        })),
     [dashboard]
   );
 
@@ -374,8 +575,10 @@ export default function ProfileScreen() {
 
   const hasMoreRails =
     (lists?.length ?? 0) > visibleRailCount ||
-    favoriteShowRailItems.length > visibleRailCount ||
-    activeShowRailItems.length > visibleRailCount ||
+    favoriteTvRailItems.length > visibleRailCount ||
+    favoriteAnimeRailItems.length > visibleRailCount ||
+    activeTvRailItems.length > visibleRailCount ||
+    activeAnimeRailItems.length > visibleRailCount ||
     favoriteMovieRailItems.length > visibleRailCount ||
     activeMovieRailItems.length > visibleRailCount;
 
@@ -383,13 +586,21 @@ export default function ProfileScreen() {
     () => (lists ?? []).slice(0, visibleRailCount),
     [lists, visibleRailCount]
   );
-  const visibleFavoriteShowRailItems = useMemo(
-    () => favoriteShowRailItems.slice(0, visibleRailCount),
-    [favoriteShowRailItems, visibleRailCount]
+  const visibleFavoriteTvRailItems = useMemo(
+    () => favoriteTvRailItems.slice(0, visibleRailCount),
+    [favoriteTvRailItems, visibleRailCount]
   );
-  const visibleActiveShowRailItems = useMemo(
-    () => activeShowRailItems.slice(0, visibleRailCount),
-    [activeShowRailItems, visibleRailCount]
+  const visibleFavoriteAnimeRailItems = useMemo(
+    () => favoriteAnimeRailItems.slice(0, visibleRailCount),
+    [favoriteAnimeRailItems, visibleRailCount]
+  );
+  const visibleActiveTvRailItems = useMemo(
+    () => activeTvRailItems.slice(0, visibleRailCount),
+    [activeTvRailItems, visibleRailCount]
+  );
+  const visibleActiveAnimeRailItems = useMemo(
+    () => activeAnimeRailItems.slice(0, visibleRailCount),
+    [activeAnimeRailItems, visibleRailCount]
   );
   const visibleFavoriteMovieRailItems = useMemo(
     () => favoriteMovieRailItems.slice(0, visibleRailCount),
@@ -533,8 +744,8 @@ export default function ProfileScreen() {
         onScroll={onProfileScroll}
         scrollEventThrottle={16}
       >
-        <View className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface">
-          <View className="relative" style={{ height: isDesktop ? 250 : 220 }}>
+        <View className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
+          <View className="relative" style={{ height: isDesktop ? 280 : 240 }}>
             {heroBackdropUrl ? (
               <Image source={{ uri: heroBackdropUrl }} className="h-full w-full" resizeMode="cover" />
             ) : (
@@ -547,69 +758,85 @@ export default function ProfileScreen() {
             )}
 
             <LinearGradient
-              colors={["rgba(9,9,11,0.2)", "rgba(9,9,11,0.9)"]}
+              colors={["rgba(9,9,11,0.1)", "rgba(9,9,11,0.5)", "rgba(9,9,11,0.95)"]}
               start={{ x: 0.5, y: 0 }}
               end={{ x: 0.5, y: 1 }}
               style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
             />
 
-            <View className="absolute -right-8 -top-6 h-36 w-36 rounded-full bg-primary/25" />
-            <View className="absolute -bottom-16 -left-12 h-48 w-48 rounded-full bg-accent/20" />
+            <LinearGradient
+              colors={["rgba(9,9,11,0.55)", "transparent", "rgba(9,9,11,0.35)"]}
+              start={{ x: 0, y: 0.5 }}
+              end={{ x: 1, y: 0.5 }}
+              style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
+            />
 
-            <View className="absolute left-4 right-4 top-4 flex-row items-center justify-between">
-              <View className="rounded-full border border-white/20 bg-black/35 px-3 py-1.5">
-                <Text className="text-[11px] font-semibold text-white">
-                  {stats?.currentStreak ?? 0} day streak
-                </Text>
-              </View>
-              <View className="flex-row items-center gap-3">
+            <View className="absolute -right-8 -top-6 h-36 w-36 rounded-full bg-primary/15" />
+            <View className="absolute -bottom-16 -left-12 h-48 w-48 rounded-full bg-accent/10" />
+
+            <View className="absolute right-4 top-4 flex-row items-center gap-3">
+              <Pressable
+                onPress={openProfileEditor}
+                className="rounded-full border border-white/40 bg-black/70 px-4 py-2 shadow-lg"
+              >
+                <Text className="text-xs font-bold tracking-wide text-white">EDIT</Text>
+              </Pressable>
+              {isDesktop && (
                 <Pressable
-                  onPress={openProfileEditor}
-                  className="rounded-full border border-white/40 bg-black/70 px-4 py-2 shadow-lg"
+                  onPress={() => setShowSignOutConfirm(true)}
+                  disabled={!isAuthenticated || isSigningOut}
+                  className="rounded-full border border-primary/50 bg-black/70 px-4 py-2 shadow-lg"
+                  style={{ opacity: !isAuthenticated || isSigningOut ? 0.5 : 1 }}
                 >
-                  <Text className="text-xs font-bold tracking-wide text-white">EDIT</Text>
+                  <View className="flex-row items-center gap-2">
+                    <Ionicons name="log-out-outline" size={14} color="#ef4444" />
+                    <Text className="text-xs font-bold tracking-wide text-primary">
+                      {isSigningOut ? "..." : "LOGOUT"}
+                    </Text>
+                  </View>
                 </Pressable>
-                {isDesktop && (
-                  <Pressable
-                    onPress={() => setShowSignOutConfirm(true)}
-                    disabled={!isAuthenticated || isSigningOut}
-                    className="rounded-full border border-primary/50 bg-black/70 px-4 py-2 shadow-lg"
-                    style={{ opacity: !isAuthenticated || isSigningOut ? 0.5 : 1 }}
-                  >
-                    <View className="flex-row items-center gap-2">
-                      <Ionicons name="log-out-outline" size={14} color="#ef4444" />
-                      <Text className="text-xs font-bold tracking-wide text-primary">
-                        {isSigningOut ? "..." : "LOGOUT"}
-                      </Text>
-                    </View>
-                  </Pressable>
-                )}
-              </View>
+              )}
             </View>
 
             <View className="absolute bottom-4 left-4 right-4 flex-row items-end justify-between">
-              <View className="flex-row items-end gap-3">
-                <View className="h-20 w-20 overflow-hidden rounded-full border-4 border-bg-base bg-bg-elevated">
+              <View className="flex-row items-end gap-4">
+                <View className="h-24 w-24 overflow-hidden rounded-full border-[3px] border-primary/50 bg-bg-elevated">
                   {avatarUrl ? (
                     <Image source={{ uri: avatarUrl }} className="h-full w-full" resizeMode="cover" />
                   ) : (
                     <View className="h-full w-full items-center justify-center">
-                      <Ionicons name="person" size={34} color="#a1a1aa" />
+                      <Ionicons name="person" size={40} color="#a1a1aa" />
                     </View>
                   )}
                 </View>
 
                 <View className="max-w-[70%]">
-                  <Text className="text-2xl font-black text-white" numberOfLines={1}>
+                  <Text
+                    className={`font-black text-white ${isDesktop ? "text-3xl tracking-tight" : "text-2xl"}`}
+                    numberOfLines={1}
+                  >
                     {stats?.username || "ShowTracker User"}
                   </Text>
-                  <Text className="text-sm text-zinc-300" numberOfLines={1}>
-                    {isAuthenticated
-                      ? `${formatCount(stats?.totalEpisodesWatched ?? 0)} episodes logged`
-                      : "Not authenticated"}
-                  </Text>
+                  <View className="mt-0.5 flex-row items-center gap-2">
+                    <Text className="text-sm text-zinc-300" numberOfLines={1}>
+                      {isAuthenticated
+                        ? `${formatCount(stats?.totalEpisodesWatched ?? 0)} episodes logged`
+                        : "Not authenticated"}
+                    </Text>
+                    {(stats?.currentStreak ?? 0) > 0 && (
+                      <>
+                        <View className="h-1 w-1 rounded-full bg-zinc-500" />
+                        <View className="flex-row items-center gap-1">
+                          <Ionicons name="flame" size={12} color="#ef4444" />
+                          <Text className="text-sm font-semibold text-zinc-300">
+                            {stats?.currentStreak}d
+                          </Text>
+                        </View>
+                      </>
+                    )}
+                  </View>
                   {stats?.bio ? (
-                    <Text className="mt-0.5 text-xs text-zinc-300" numberOfLines={2}>
+                    <Text className="mt-0.5 text-xs text-zinc-400" numberOfLines={2}>
                       {stats.bio}
                     </Text>
                   ) : null}
@@ -623,77 +850,51 @@ export default function ProfileScreen() {
           <Text className="mt-3 text-sm text-success">{profileSuccess}</Text>
         ) : null}
 
-        <View className="mt-4 flex-row flex-wrap gap-3">
-          <QuickMetric
-            icon="flame-outline"
-            label="Current Streak"
-            value={`${stats?.currentStreak ?? 0}d`}
-            accent="#f97316"
-          />
-          <QuickMetric
-            icon="trophy-outline"
-            label="Longest Streak"
-            value={`${stats?.longestStreak ?? 0}d`}
-            accent="#fbbf24"
-          />
-          <QuickMetric
-            icon="checkmark-circle-outline"
-            label="Completed"
-            value={`${stats?.completedShows ?? 0}/${stats?.totalTrackedShows ?? 0}`}
-            accent="#34d399"
-          />
-        </View>
-
-        <View className="mt-8">
-          <SectionHeader title="Stats" icon="bar-chart-outline" rightLabel="YOUR WATCH ACTIVITY" />
-          <View className="flex-row flex-wrap gap-3">
-            <StatCard
-              icon="tv-outline"
-              label="TV Time"
-              value={stats?.tvWatchTimeFormatted ?? "0 min"}
-              breakdown={stats?.tvWatchTimeBreakdown}
-              accent="#38bdf8"
-              isDesktop={isDesktop}
-            />
-            <StatCard
-              icon="albums-outline"
-              label="Episodes Watched"
-              value={formatCount(stats?.totalEpisodesWatched ?? 0)}
-              accent="#ef4444"
-              isDesktop={isDesktop}
-            />
-            <StatCard
-              icon="film-outline"
-              label="Movie Time"
-              value={stats?.movieWatchTimeFormatted ?? "0 min"}
-              breakdown={stats?.movieWatchTimeBreakdown}
-              accent="#a78bfa"
-              isDesktop={isDesktop}
-            />
-            <StatCard
-              icon="play-circle-outline"
-              label="Movies Watched"
-              value={stats?.movieCount ?? 0}
-              accent="#f59e0b"
-              isDesktop={isDesktop}
-            />
+        <View className="mt-6">
+          <View className="mb-3 flex-row items-center justify-between">
+            <View className="flex-row items-center gap-2">
+              <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+                <Ionicons name="bar-chart-outline" size={14} color="#ef4444" />
+              </View>
+              <Text className="text-lg font-extrabold tracking-tight text-text-primary">
+                Stats
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => setStatsVersion((v) => (v === "A" ? "B" : "A"))}
+              className="rounded-full border border-border-default bg-bg-surface px-3 py-1"
+            >
+              <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+                {statsVersion === "A" ? "Cards" : "Panel"}
+              </Text>
+            </Pressable>
           </View>
+          {statsVersion === "A" ? (
+            <StatsPanelUnified stats={stats ?? {}} isDesktop={isDesktop} />
+          ) : (
+            <StatsPanelCards stats={stats ?? {}} isDesktop={isDesktop} />
+          )}
         </View>
 
         <View className="mt-8">
           <SectionHeader title="Lists" icon="list-outline" rightLabel={`${lists?.length ?? 0} TOTAL`} />
 
           <Link href="/list/create" asChild>
-            <Pressable className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface">
+            <Pressable className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
               <LinearGradient
-                colors={["rgba(239,68,68,0.18)", "rgba(239,68,68,0.02)"]}
+                colors={["rgba(239,68,68,0.12)", "rgba(239,68,68,0.02)"]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
-                style={{ paddingHorizontal: 16, paddingVertical: 18 }}
+                style={{ paddingHorizontal: 14, paddingVertical: 12 }}
               >
-                <View className="flex-row items-center justify-center gap-2">
-                  <Ionicons name="add" size={22} color="#ef4444" />
-                  <Text className="text-sm font-bold tracking-wide text-text-primary">CREATE A NEW LIST</Text>
+                <View className="flex-row items-center gap-3">
+                  <View className="h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+                    <Ionicons name="add" size={18} color="#ef4444" />
+                  </View>
+                  <View>
+                    <Text className="text-sm font-bold text-text-primary">New List</Text>
+                    <Text className="text-[11px] text-text-muted">Create a custom collection</Text>
+                  </View>
                 </View>
               </LinearGradient>
             </Pressable>
@@ -708,9 +909,9 @@ export default function ProfileScreen() {
             >
               {visibleLists.map((list) => (
                 <Link key={String(list.id)} href={`/list/${list.id}`} asChild>
-                  <Pressable className="w-44 overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface">
-                    <View className="h-1 w-full bg-primary" />
-                    <View className="p-3">
+                  <Pressable className="w-48 flex-row overflow-hidden rounded-xl border border-border-default bg-bg-surface">
+                    <View className="w-1 bg-primary" />
+                    <View className="flex-1 p-3">
                       <Text className="text-sm font-bold text-text-primary" numberOfLines={1}>
                         {list.name}
                       </Text>
@@ -725,23 +926,38 @@ export default function ProfileScreen() {
           ) : null}
         </View>
 
-        {favoriteShowRailItems.length > 0 ? (
-          <View className="mt-8">
+        {favoriteTvRailItems.length > 0 ? (
+          <View className="mt-6">
             <SectionHeader
-              title="Favorite Shows"
+              title="Favorite TV"
               icon="heart"
-              rightLabel={`${favoriteShowRailItems.length} FAVORITES`}
+              rightLabel={`${favoriteTvRailItems.length} FAVORITES`}
             />
             <PosterRail
-              items={visibleFavoriteShowRailItems}
-              emptyMessage="No favorite shows yet"
+              items={visibleFavoriteTvRailItems}
+              emptyMessage="No favorite TV yet"
+              isDesktop={isDesktop}
+            />
+          </View>
+        ) : null}
+
+        {favoriteAnimeRailItems.length > 0 ? (
+          <View className="mt-6">
+            <SectionHeader
+              title="Favorite Anime"
+              icon="heart"
+              rightLabel={`${favoriteAnimeRailItems.length} FAVORITES`}
+            />
+            <PosterRail
+              items={visibleFavoriteAnimeRailItems}
+              emptyMessage="No favorite anime yet"
               isDesktop={isDesktop}
             />
           </View>
         ) : null}
 
         {favoriteMovieRailItems.length > 0 ? (
-          <View className="mt-8">
+          <View className="mt-6">
             <SectionHeader
               title="Favorite Movies"
               icon="heart"
@@ -755,20 +971,33 @@ export default function ProfileScreen() {
           </View>
         ) : null}
 
-        <View className="mt-8">
+        <View className="mt-6">
           <SectionHeader
-            title="Shows"
+            title="TV Shows"
             icon="tv-outline"
-            rightLabel={`${dashboard?.shows?.length ?? 0} TRACKED`}
+            rightLabel={`${activeTvRailItems.length} TRACKED`}
           />
           <PosterRail
-            items={visibleActiveShowRailItems}
-            emptyMessage="Track a show to see it here"
+            items={visibleActiveTvRailItems}
+            emptyMessage="Track a TV show to see it here"
             isDesktop={isDesktop}
           />
         </View>
 
-        <View className="mt-8">
+        <View className="mt-6">
+          <SectionHeader
+            title="Anime"
+            icon="planet-outline"
+            rightLabel={`${activeAnimeRailItems.length} TRACKED`}
+          />
+          <PosterRail
+            items={visibleActiveAnimeRailItems}
+            emptyMessage="Track an anime to see it here"
+            isDesktop={isDesktop}
+          />
+        </View>
+
+        <View className="mt-6">
           <SectionHeader
             title="Movies"
             icon="film-outline"
@@ -789,7 +1018,7 @@ export default function ProfileScreen() {
 
         {!isDesktop && (
           <View className="mt-8 pb-8">
-            <SectionHeader title="Account" icon="person-outline" />
+            <SectionHeader title="Account" icon="log-out-outline" />
             <Pressable
               onPress={() => setShowSignOutConfirm(true)}
               disabled={!isAuthenticated || isSigningOut}

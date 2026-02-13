@@ -13,32 +13,52 @@ async function getCurrentUserId(ctx: QueryCtx | MutationCtx) {
 }
 
 function formatDuration(minutes: number): string {
-  if (minutes < 60) {
-    return `${Math.round(minutes)} min`;
+  if (minutes <= 0) return "0min";
+
+  const y = Math.floor(minutes / (365.25 * 24 * 60));
+  let rem = minutes - y * 365.25 * 24 * 60;
+  const mo = Math.floor(rem / (30.44 * 24 * 60));
+  rem -= mo * 30.44 * 24 * 60;
+  const w = Math.floor(rem / (7 * 24 * 60));
+  rem -= w * 7 * 24 * 60;
+  const d = Math.floor(rem / (24 * 60));
+  rem -= d * 24 * 60;
+  const h = Math.floor(rem / 60);
+  const m = Math.round(rem - h * 60);
+
+  const units: [number, string][] = [
+    [y, "y"], [mo, "mo"], [w, "w"], [d, "d"], [h, "h"], [m, "min"],
+  ];
+
+  const firstIdx = units.findIndex(([v]) => v > 0);
+  if (firstIdx === -1) return "0min";
+
+  const result = `${units[firstIdx][0]}${units[firstIdx][1]}`;
+  if (firstIdx + 1 < units.length && units[firstIdx + 1][0] > 0) {
+    return `${result} ${units[firstIdx + 1][0]}${units[firstIdx + 1][1]}`;
   }
-  if (minutes < 24 * 60) {
-    return `${Math.round(minutes / 60)} hours`;
-  }
-  if (minutes < 30 * 24 * 60) {
-    return `${Math.round(minutes / (24 * 60))} days`;
-  }
-  if (minutes < 365 * 24 * 60) {
-    return `${Math.round(minutes / (30 * 24 * 60))} months`;
-  }
-  return `${(minutes / (365 * 24 * 60)).toFixed(1)} years`;
+  return result;
 }
 
 function formatDurationBreakdown(minutes: number): {
+  years: number;
   months: number;
+  weeks: number;
   days: number;
   hours: number;
+  minutes: number;
 } {
-  const totalHours = Math.floor(minutes / 60);
-  const months = Math.floor(totalHours / (30 * 24));
-  const remainingHours = totalHours - months * 30 * 24;
-  const days = Math.floor(remainingHours / 24);
-  const hours = remainingHours - days * 24;
-  return { months, days, hours };
+  const y = Math.floor(minutes / (365.25 * 24 * 60));
+  let rem = minutes - y * 365.25 * 24 * 60;
+  const mo = Math.floor(rem / (30.44 * 24 * 60));
+  rem -= mo * 30.44 * 24 * 60;
+  const w = Math.floor(rem / (7 * 24 * 60));
+  rem -= w * 7 * 24 * 60;
+  const d = Math.floor(rem / (24 * 60));
+  rem -= d * 24 * 60;
+  const h = Math.floor(rem / 60);
+  const m = Math.round(rem - h * 60);
+  return { years: y, months: mo, weeks: w, days: d, hours: h, minutes: m };
 }
 
 function prettifyHandle(raw: string): string {
@@ -186,7 +206,9 @@ export const getUserStats = query({
     let totalRewatches = 0;
     let totalWatchTimeMinutes = 0;
     let tvEpisodes = 0;
+    let tvWatchTimeMinutes = 0;
     let animeEpisodes = 0;
+    let animeWatchTimeMinutes = 0;
     let movieCount = 0;
 
     const watchedTimestamps: number[] = [];
@@ -194,19 +216,22 @@ export const getUserStats = query({
 
     for (const episode of watchedEpisodes) {
       const watchCount = episode.watchCount ?? 1;
-      const runtime = episode.runtime ?? 0;
-      
+
       uniqueEpisodesWatched += 1;
       totalRewatches += watchCount - 1;
+
+      // Get show details to resolve runtime fallback
+      const show = await ctx.db.get(episode.showId);
+      const runtime = episode.runtime ?? show?.episodeRuntime ?? 0;
       totalWatchTimeMinutes += runtime * watchCount;
 
-      // Get show details
-      const show = await ctx.db.get(episode.showId);
       if (show) {
         if (show.mediaType === "tv") {
           tvEpisodes += watchCount;
+          tvWatchTimeMinutes += runtime * watchCount;
         } else if (show.mediaType === "anime") {
           animeEpisodes += watchCount;
+          animeWatchTimeMinutes += runtime * watchCount;
         }
 
         // Track per-show watch counts for "most re-watched"
@@ -281,28 +306,37 @@ export const getUserStats = query({
       profileTokenIdentifier: userProfile?.tokenIdentifier,
     });
 
-    // Calculate detailed time breakdowns
-    const tvWatchTimeMinutes = tvEpisodes * 45; // Assume 45 min avg
-    
+    // Calculate total across all types
+    const allWatchTimeMinutes = tvWatchTimeMinutes + animeWatchTimeMinutes + movieWatchTimeMinutes;
+
     return {
       // Episode stats
       uniqueEpisodesWatched,
       totalRewatches,
       totalEpisodesWatched: uniqueEpisodesWatched + totalRewatches,
-      
-      // Watch time
-      totalWatchTimeMinutes,
-      totalWatchTimeFormatted: formatDuration(totalWatchTimeMinutes + movieWatchTimeMinutes),
-      
+
       // Breakdown by type
       tvEpisodes,
       animeEpisodes,
       movieCount,
-      
-      // Detailed watch time by type with breakdown
+
+      // Total watch time
+      totalWatchTimeMinutes: allWatchTimeMinutes,
+      totalWatchTimeFormatted: formatDuration(allWatchTimeMinutes),
+      totalWatchTimeBreakdown: formatDurationBreakdown(allWatchTimeMinutes),
+
+      // TV watch time
+      tvWatchTimeMinutes,
       tvWatchTimeFormatted: formatDuration(tvWatchTimeMinutes),
       tvWatchTimeBreakdown: formatDurationBreakdown(tvWatchTimeMinutes),
-      animeWatchTimeFormatted: formatDuration(animeEpisodes * 24),
+
+      // Anime watch time
+      animeWatchTimeMinutes,
+      animeWatchTimeFormatted: formatDuration(animeWatchTimeMinutes),
+      animeWatchTimeBreakdown: formatDurationBreakdown(animeWatchTimeMinutes),
+
+      // Movie watch time
+      movieWatchTimeMinutes,
       movieWatchTimeFormatted: formatDuration(movieWatchTimeMinutes),
       movieWatchTimeBreakdown: formatDurationBreakdown(movieWatchTimeMinutes),
       

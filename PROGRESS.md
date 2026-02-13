@@ -2,11 +2,11 @@
 
 ## Current Phase
 
-Phase 8b: Polish and validation - remaining items (in progress)
+Phase 9: UI polish + tracking UX (in progress)
 
 ## Next Up
 
-Phase 9: UI Polish - filters, stats redesign, watchlist removal, scroll fixes
+Phase 8b: Finish remaining data-quality validation tasks
 
 ## Completed
 
@@ -148,6 +148,20 @@ Phase 9: UI Polish - filters, stats redesign, watchlist removal, scroll fixes
     - [x] Added `scripts/data-quality-audit.mjs`
     - [x] Added `scripts/anime-relations-audit.mjs`
     - [x] Added browser smoke checks and screenshot artifacts for relation + season flows
+- [x] Phase 9a: Filters + tracking UX foundation
+  - [x] Added reusable filter primitives (`components/FilterChipGroup.tsx`, `lib/filters/tracking-filters.ts`)
+  - [x] Refactored tab routes into folder index modules (`home/index`, `discover/index`, `library/index`) and updated tab mapping
+  - [x] Home filters expanded to support media + watch-state segmentation
+  - [x] Library split into dedicated TV/Anime/Movie segments with status filtering
+  - [x] Profile rails split to separate TV and anime favorites/active sections
+  - [x] Show details now supports add/remove watchlist and editable tracking statuses (`watching`, `planned`, `paused`, `dropped`, `completed`)
+  - [x] Added Convex mutations for tracking management (`removeFromWatchlist`, `setWatchlistStatus`)
+- [x] Upcoming schedule UX reliability hardening
+  - [x] Static header controls + explicit `Load Earlier` / `Load Later` / `Jump to Today`
+  - [x] Reset relation-sync trigger on failure so background sync retries are possible
+  - [x] Clear hydrated-range cache keys on failed schedule hydration to allow retries
+  - [x] Switched day-diff/inclusive-day calculations to UTC calendar-day math (DST-safe)
+  - [x] Updated today-visibility callback to refresh with current `todayKey` after date rollover
 
 ## PR Readiness Snapshot (current branch)
 
@@ -165,22 +179,17 @@ Phase 9: UI Polish - filters, stats redesign, watchlist removal, scroll fixes
   - [ ] End-to-end QA on mobile image rendering, watch actions, and list edit flows
   - [ ] Final UX sweep for loading/error states and microcopy consistency
 
-- [ ] Phase 9: UI Polish
-  - [ ] Profile page stats redesign - improve visual layout and design of stats section
-  - [ ] Add category filters to Home page (TV, Anime, Movies)
-  - [ ] Add category filters to Library page
-  - [ ] Add category filters to Schedule page
-  - [ ] Add category filters to Discover page
-  - [ ] Schedule/Upcoming page scroll optimization - fix initial load scroll position and jarring scroll behavior
-  - [ ] Add watchlist removal - implement ability to remove shows/movies/anime from watchlist (currently only supports adding)
-
-## Known Issues
-
-- React Native Web emits `props.pointerEvents is deprecated. Use style.pointerEvents` warning from upstream internals.
-- Some API records still arrive without complete metadata (air dates, runtimes, or totals), requiring additional fallback validation.
-- Duplicate anime entries can appear when TMDB show feeds overlap with AniList/Jikan results.
-- Anime source mismatch: TMDB can return anime without season structure while AniList can expose seasonized entries as separate shows, causing split titles.
-- Continue UX QA pass for non-tab/detail screens on very small mobile heights.
+- [x] Phase 9b: Profile page redesign
+  - [x] Cinematic hero section (3-stop gradient, side vignette, taller hero, bigger avatar with primary ring, streak badge inline)
+  - [x] Stats section redesign with two toggleable versions (unified panel + polished cards)
+  - [x] Separated TV / Anime / Movie watch time and episode counts in stats
+  - [x] Smart multi-unit time formatting (`2d 5h`, `1mo 2w`, `1y 3mo`, etc.)
+  - [x] Section headers with icon pills, NativeWind-only typography
+  - [x] Lists section: left accent bars, softer borders, left-aligned create button
+  - [x] PosterRail: softer borders, improved empty states, refined badges
+  - [x] Tighter section spacing (`mt-6` cadence)
+  - [x] Fixed anime watch time not counting (fallback to show-level `episodeRuntime`)
+  - [x] Fixed all watched-episode mutations to persist runtime for anime via show-level fallback
 
 ## Future Phases (Post-Polish)
 
@@ -204,3 +213,11 @@ Phase 9: UI Polish - filters, stats redesign, watchlist removal, scroll fixes
 - [ ] Notifications for new episodes (push notifications)
 - [ ] Import from TVTime/Trakt
 - [ ] Recommendations based on watch history
+
+## Known Issues
+
+- React Native Web emits `props.pointerEvents is deprecated. Use style.pointerEvents` warning from upstream internals.
+- Some API records still arrive without complete metadata (air dates, runtimes, or totals), requiring additional fallback validation.
+- Duplicate anime entries can appear when TMDB show feeds overlap with AniList/Jikan results.
+- Anime source mismatch: TMDB can return anime without season structure while AniList can expose seasonized entries as separate shows, causing split titles.
+- Continue UX QA pass for non-tab/detail screens on very small mobile heights.

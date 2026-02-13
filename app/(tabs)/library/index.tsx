@@ -12,14 +12,21 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Link } from "expo-router";
 import { useQuery } from "convex/react";
+import { FlashList } from "@shopify/flash-list";
 import { api } from "@/convex/_generated/api";
+import { FilterChipGroup } from "@/components/FilterChipGroup";
+import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SegmentedControl } from "@/components/SegmentedControl";
-import { PageIntro } from "@/components/PageIntro";
+import {
+  applyTrackingFilters,
+  matchesStatusFilter,
+  type TrackingStatusFilter,
+} from "@/lib/filters/tracking-filters";
 import { toHttpsImageUrl } from "@/lib/image-url";
-import { FlashList } from "@shopify/flash-list";
 
-type LibraryTab = "shows" | "movies";
+type LibraryMediaTab = "tv" | "anime" | "movie";
+type LibraryStatusFilter = TrackingStatusFilter;
 
 type LibraryItem = {
   id: string | null;
@@ -44,6 +51,25 @@ type LibraryItem = {
 
 type LibraryDashboardItem = LibraryItem;
 
+const GRID_GAP = 12;
+
+const tabOptions = [
+  { value: "tv" as const, label: "TV" },
+  { value: "anime" as const, label: "Anime" },
+  { value: "movie" as const, label: "Movies" },
+];
+
+const statusOptions: { value: LibraryStatusFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "watching", label: "Watching" },
+  { value: "plan_to_watch", label: "Planned" },
+  { value: "paused", label: "Paused" },
+  { value: "completed", label: "Completed" },
+  { value: "dropped", label: "Dropped" },
+  { value: "watched", label: "Watched" },
+  { value: "not_watched", label: "Not Watched" },
+];
+
 function getRouteId(item: LibraryItem) {
   if (
     typeof item.tmdbId === "number" &&
@@ -61,7 +87,11 @@ function getRouteId(item: LibraryItem) {
 }
 
 function getItemKey(item: LibraryItem) {
-  return getRouteId(item) ?? item.id ?? `${item.mediaType}:${item.title}:${item.firstAired ?? "unknown"}`;
+  return (
+    getRouteId(item) ??
+    item.id ??
+    `${item.mediaType}:${item.title}:${item.firstAired ?? "unknown"}`
+  );
 }
 
 function formatStatus(status: string) {
@@ -83,18 +113,11 @@ function getHomeColumnCount(width: number, isWeb: boolean) {
   return width >= 500 ? 3 : 2;
 }
 
-const GRID_GAP = 12;
-
-function LibraryCard({
-  item,
-  isWeb,
-}: {
-  item: LibraryDashboardItem;
-  isWeb: boolean;
-}) {
+function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boolean }) {
   const routeId = getRouteId(item);
   const isMovie = item.mediaType === "movie";
-  const rawPercent = typeof item.progressPercent === "number" ? item.progressPercent : 0;
+  const rawPercent =
+    typeof item.progressPercent === "number" ? item.progressPercent : 0;
   const progress = Math.max(0, Math.min(100, rawPercent)) / 100;
 
   const posterHeight = isWeb ? 280 : 240;
@@ -110,7 +133,9 @@ function LibraryCard({
           />
         ) : (
           <View className="flex-1 items-center justify-center bg-zinc-800 px-3">
-            <Text className="text-center text-sm font-semibold text-zinc-400">{item.title}</Text>
+            <Text className="text-center text-sm font-semibold text-zinc-400">
+              {item.title}
+            </Text>
           </View>
         )}
         <LinearGradient
@@ -128,13 +153,18 @@ function LibraryCard({
           </View>
         ) : null}
         <View className="absolute bottom-0 left-0 right-0 px-2.5 pb-2.5">
-          <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>{item.title}</Text>
+          <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>
+            {item.title}
+          </Text>
           <Text className="text-xs text-zinc-400" numberOfLines={1}>
             {item.firstAired?.slice(0, 4) ?? "TBA"} · {formatStatus(item.status)}
           </Text>
           {!isMovie && progress > 0 ? (
             <View className="mt-1.5 h-1 overflow-hidden bg-white/15">
-              <View className="h-full bg-red-500" style={{ width: `${Math.round(progress * 100)}%` }} />
+              <View
+                className="h-full bg-red-500"
+                style={{ width: `${Math.round(progress * 100)}%` }}
+              />
             </View>
           ) : null}
         </View>
@@ -148,20 +178,20 @@ function LibraryCard({
 
   return (
     <Link href={{ pathname: "/show/[id]", params: { id: routeId } }} asChild>
-      <Pressable style={({ pressed }) => pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined}>
+      <Pressable
+        style={({ pressed }) =>
+          pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined
+        }
+      >
         {card}
       </Pressable>
     </Link>
   );
 }
 
-const tabOptions = [
-  { value: "shows" as const, label: "Shows" },
-  { value: "movies" as const, label: "Movies" },
-];
-
 export default function LibraryScreen() {
-  const [activeTab, setActiveTab] = useState<LibraryTab>("shows");
+  const [activeTab, setActiveTab] = useState<LibraryMediaTab>("tv");
+  const [statusFilter, setStatusFilter] = useState<LibraryStatusFilter>("all");
   const [visibleCount, setVisibleCount] = useState(8);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const { width } = useWindowDimensions();
@@ -176,10 +206,32 @@ export default function LibraryScreen() {
 
   const sourceItems = useMemo(() => {
     if (!dashboard) return [] as LibraryDashboardItem[];
-    return (activeTab === "shows" ? dashboard.shows : dashboard.movies) as LibraryDashboardItem[];
-  }, [activeTab, dashboard]);
+    return [...dashboard.shows, ...dashboard.movies] as LibraryDashboardItem[];
+  }, [dashboard]);
 
-  const activeItems = useMemo(() => sourceItems, [sourceItems]);
+  const mediaItems = useMemo(
+    () => sourceItems.filter((item) => item.mediaType === activeTab),
+    [activeTab, sourceItems]
+  );
+
+  const activeItems = useMemo(
+    () =>
+      applyTrackingFilters(mediaItems, {
+        media: "all",
+        status: statusFilter,
+      }),
+    [mediaItems, statusFilter]
+  );
+
+  const statusOptionsWithCounts = useMemo(
+    () =>
+      statusOptions.map((option) => ({
+        ...option,
+        count: mediaItems.filter((item) => matchesStatusFilter(item, option.value))
+          .length,
+      })),
+    [mediaItems]
+  );
 
   const isLoading = dashboard === undefined;
   const effectiveWidth = gridWidth || width;
@@ -190,13 +242,18 @@ export default function LibraryScreen() {
   useEffect(() => {
     setVisibleCount(Math.min(pageSize, activeItems.length));
     setIsLoadingMore(false);
-  }, [activeItems.length, activeTab, pageSize]);
+  }, [activeItems.length, activeTab, pageSize, statusFilter]);
 
   useEffect(() => {
-    return () => { if (loadMoreTimerRef.current) clearTimeout(loadMoreTimerRef.current); };
+    return () => {
+      if (loadMoreTimerRef.current) clearTimeout(loadMoreTimerRef.current);
+    };
   }, []);
 
-  const visibleItems = useMemo(() => activeItems.slice(0, visibleCount), [activeItems, visibleCount]);
+  const visibleItems = useMemo(
+    () => activeItems.slice(0, visibleCount),
+    [activeItems, visibleCount]
+  );
 
   const loadMoreItems = () => {
     if (!hasMore || isLoadingMore || isLoading) return;
@@ -227,77 +284,94 @@ export default function LibraryScreen() {
     [columns, isWeb]
   );
 
-  const getHeaderText = () => {
-    switch (activeTab) {
-      case "shows":
-        return { title: "My Shows", subtitle: "All TV shows and anime you're tracking" };
-      case "movies":
-        return { title: "My Movies", subtitle: "Movies in your queue" };
-    }
-  };
-
-  const headerText = getHeaderText();
+  const headerText =
+    activeTab === "tv"
+      ? { title: "TV Library", subtitle: "Your tracked TV shows" }
+      : activeTab === "anime"
+        ? { title: "Anime Library", subtitle: "Your tracked anime" }
+        : { title: "Movie Library", subtitle: "Movies in your queue" };
 
   return (
     <ScreenWrapper>
       <View className="flex-1" onLayout={onGridLayout}>
         {gridWidth > 0 ? (
-        <FlashList
-          key={activeTab}
-          data={visibleItems}
-          keyExtractor={getItemKey}
-          renderItem={renderLibraryItem}
-          numColumns={columns}
-          ItemSeparatorComponent={() => <View style={{ height: GRID_GAP }} />}
-          onEndReached={loadMoreItems}
-          onEndReachedThreshold={0.5}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 16 }}
-          ListHeaderComponent={
-            <View className="pb-2">
-              <PageIntro
-                title={headerText.title}
-                subtitle={headerText.subtitle}
-                eyebrow="Your library"
-                icon={activeTab === "movies" ? "film-outline" : "albums-outline"}
-                rightLabel={`${activeItems.length} titles`}
-                className="mb-4"
-              />
+          <FlashList
+            key={`${activeTab}-${statusFilter}`}
+            data={visibleItems}
+            keyExtractor={getItemKey}
+            renderItem={renderLibraryItem}
+            numColumns={columns}
+            ItemSeparatorComponent={() => <View style={{ height: GRID_GAP }} />}
+            onEndReached={loadMoreItems}
+            onEndReachedThreshold={0.5}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 16 }}
+            ListHeaderComponent={
+              <View className="pb-2">
+                <PageIntro
+                  title={headerText.title}
+                  subtitle={headerText.subtitle}
+                  eyebrow="Your library"
+                  icon={
+                    activeTab === "movie"
+                      ? "film-outline"
+                      : activeTab === "anime"
+                        ? "planet-outline"
+                        : "tv-outline"
+                  }
+                  rightLabel={`${activeItems.length} matched`}
+                  className="mb-4"
+                />
 
-              <SegmentedControl options={tabOptions} value={activeTab} onValueChange={setActiveTab} className="mb-4" />
+                <SegmentedControl
+                  options={tabOptions}
+                  value={activeTab}
+                  onValueChange={setActiveTab}
+                  className="mb-3"
+                />
 
-              {isLoading ? (
-                <View className="items-center gap-2 rounded-xl border-2 border-border-default bg-bg-surface py-8">
-                  <ActivityIndicator size="small" color="#ef4444" />
-                  <Text className="text-sm text-text-secondary">Loading your library</Text>
-                </View>
-              ) : null}
+                <FilterChipGroup
+                  className="mb-4"
+                  options={statusOptionsWithCounts}
+                  value={statusFilter}
+                  onValueChange={(value) => setStatusFilter(value)}
+                />
 
-              {!isLoading && !activeItems.length ? (
-                <View className="rounded-xl border-2 border-border-default bg-bg-surface px-4 py-6">
-                  <Text className="text-lg font-bold text-text-primary">
-                    {activeTab === "movies" ? "No queued movies yet" : "No active shows yet"}
+                {isLoading ? (
+                  <View className="items-center gap-2 rounded-xl border-2 border-border-default bg-bg-surface py-8">
+                    <ActivityIndicator size="small" color="#ef4444" />
+                    <Text className="text-sm text-text-secondary">
+                      Loading your library
+                    </Text>
+                  </View>
+                ) : null}
+
+                {!isLoading && !activeItems.length ? (
+                  <View className="rounded-xl border-2 border-border-default bg-bg-surface px-4 py-6">
+                    <Text className="text-lg font-bold text-text-primary">
+                      No titles for these filters
+                    </Text>
+                    <Text className="mt-1 text-sm leading-relaxed text-text-secondary">
+                      Try another media tab or status filter.
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            }
+            ListFooterComponent={
+              !isLoading && hasMore ? (
+                <Pressable onPress={loadMoreItems} className="items-center py-4">
+                  <ActivityIndicator
+                    size="small"
+                    color={isLoadingMore ? "#ef4444" : "#52525b"}
+                  />
+                  <Text className="mt-1 text-xs text-text-secondary">
+                    {isLoadingMore ? "Loading more..." : "Tap to load more"}
                   </Text>
-                  <Text className="mt-1 text-sm leading-relaxed text-text-secondary">
-                    {activeTab === "movies"
-                      ? "Add movies to your watchlist and they will appear here as your queue."
-                      : "Start tracking episodes from any show detail page and they will appear here."}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          }
-          ListFooterComponent={
-            !isLoading && hasMore ? (
-              <Pressable onPress={loadMoreItems} className="items-center py-4">
-                <ActivityIndicator size="small" color={isLoadingMore ? "#ef4444" : "#52525b"} />
-                <Text className="mt-1 text-xs text-text-secondary">
-                  {isLoadingMore ? "Loading more..." : "Tap to load more"}
-                </Text>
-              </Pressable>
-            ) : null
-          }
-        />
+                </Pressable>
+              ) : null
+            }
+          />
         ) : (
           <View className="flex-1 items-center justify-center">
             <ActivityIndicator size="small" color="#ef4444" />

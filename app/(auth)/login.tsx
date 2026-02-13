@@ -20,7 +20,6 @@ import { api } from "@/convex/_generated/api";
 
 const gradientBase = "absolute inset-0";
 const gradientDivider = "h-1 w-full";
-const gradientButton = "items-center justify-center py-3";
 
 const fieldBase =
   "flex-row items-center gap-2 rounded-lg border-2 border-border-default bg-bg-base/70 px-3 py-2.5";

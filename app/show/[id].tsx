@@ -36,6 +36,7 @@ import type {
   NormalizedSeason,
   NormalizedShow,
 } from "@/lib/api/types";
+import type { UserTrackingStatus } from "@/lib/filters/tracking-filters";
 import { createShowRouteId, parseShowRouteId } from "@/lib/show-route";
 import { toHttpsImageUrl } from "@/lib/image-url";
 import { Ionicons } from "@expo/vector-icons";
@@ -44,6 +45,7 @@ type SeasonLoadState = Record<number, boolean>;
 type SeasonErrorState = Record<number, string | null>;
 type EpisodePendingState = Record<string, boolean>;
 type SeasonActionState = Record<number, boolean>;
+type ShowTrackingStatus = UserTrackingStatus;
 
 type RelatedAnimeEntry = {
   title: string;
@@ -83,6 +85,38 @@ type WatchActionTarget =
       subtitle: string;
       releasedEpisodes: NormalizedEpisode[];
     };
+
+const trackingStatusOptions: {
+  value: ShowTrackingStatus;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "watching",
+    label: "Watching",
+    description: "Actively progressing through episodes",
+  },
+  {
+    value: "plan_to_watch",
+    label: "Planned",
+    description: "Saved for later",
+  },
+  {
+    value: "paused",
+    label: "Paused",
+    description: "On hold for now",
+  },
+  {
+    value: "dropped",
+    label: "Dropped",
+    description: "No longer watching",
+  },
+  {
+    value: "completed",
+    label: "Completed",
+    description: "Finished the entire title",
+  },
+];
 
 function createSeasonPlaceholders(
   count: number,
@@ -180,11 +214,32 @@ function buildShowPayload(show: NormalizedShow) {
 
 function buildTrackingArgs(show: NormalizedShow | null) {
   if (!show) return "skip" as const;
-  if (typeof show.tmdbId === "number") return { tmdbId: show.tmdbId };
-  if (typeof show.anilistId === "number") return { anilistId: show.anilistId };
-  if (typeof show.malId === "number") return { malId: show.malId };
-  if (typeof show.tvmazeId === "number") return { tvmazeId: show.tvmazeId };
-  return "skip" as const;
+
+  const lookupArgs: {
+    tmdbId?: number;
+    anilistId?: number;
+    malId?: number;
+    tvmazeId?: number;
+  } = {};
+
+  if (typeof show.tmdbId === "number") {
+    lookupArgs.tmdbId = show.tmdbId;
+  }
+  if (typeof show.anilistId === "number") {
+    lookupArgs.anilistId = show.anilistId;
+  }
+  if (typeof show.malId === "number") {
+    lookupArgs.malId = show.malId;
+  }
+  if (typeof show.tvmazeId === "number") {
+    lookupArgs.tvmazeId = show.tvmazeId;
+  }
+
+  if (Object.keys(lookupArgs).length === 0) {
+    return "skip" as const;
+  }
+
+  return lookupArgs;
 }
 
 function buildRelatedAnimeKey(entry: {
@@ -492,6 +547,16 @@ function formatTrackingStatus(status?: string | null) {
     .replace(/\b\w/g, (letter: string) => letter.toUpperCase());
 }
 
+function isTrackingStatus(value?: string | null): value is ShowTrackingStatus {
+  return (
+    value === "watching" ||
+    value === "paused" ||
+    value === "dropped" ||
+    value === "completed" ||
+    value === "plan_to_watch"
+  );
+}
+
 const NAMED_HTML_ENTITIES: Record<string, string> = {
   amp: "&",
   apos: "'",
@@ -553,6 +618,9 @@ export function ShowDetailScreen() {
   const [pendingEpisodeKeys, setPendingEpisodeKeys] = useState<EpisodePendingState>({});
   const [seasonActionLoading, setSeasonActionLoading] = useState<SeasonActionState>({});
   const [isAddingToWatchlist, setIsAddingToWatchlist] = useState(false);
+  const [isRemovingFromWatchlist, setIsRemovingFromWatchlist] = useState(false);
+  const [isSettingStatus, setIsSettingStatus] = useState(false);
+  const [isStatusMenuVisible, setIsStatusMenuVisible] = useState(false);
   const [isMarkingShow, setIsMarkingShow] = useState(false);
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -569,6 +637,8 @@ export function ShowDetailScreen() {
   const [isLoadingRelatedAnime, setIsLoadingRelatedAnime] = useState(false);
 
   const addToWatchlist = useMutation(api.shows.addToWatchlist);
+  const removeFromWatchlist = useMutation(api.shows.removeFromWatchlist);
+  const setWatchlistStatus = useMutation(api.shows.setWatchlistStatus);
   const addAnimeToWatchlistWithRelations = useAction(
     api.shows.addAnimeToWatchlistWithRelations
   );
@@ -582,6 +652,9 @@ export function ShowDetailScreen() {
   const trackingArgs = useMemo(() => buildTrackingArgs(show), [show]);
   const tracking = useQuery(api.shows.getUserShowTracking, trackingArgs);
   const canTrackShow = trackingArgs !== "skip";
+  const activeTrackingStatus: ShowTrackingStatus = isTrackingStatus(tracking?.status)
+    ? tracking.status
+    : "plan_to_watch";
 
   const relatedAnimeTrackingArgs = useMemo(() => {
     if (!show || show.mediaType !== "anime") {
@@ -1104,6 +1177,12 @@ export function ShowDetailScreen() {
       setTrackingError("This title cannot be tracked yet.");
       return;
     }
+    if (tracking?.inWatchlist) {
+      return;
+    }
+    if (isAddingToWatchlist || isRemovingFromWatchlist || isSettingStatus) {
+      return;
+    }
 
     setIsAddingToWatchlist(true);
     setTrackingError(null);
@@ -1119,6 +1198,90 @@ export function ShowDetailScreen() {
       setTrackingError("Could not add this show to watchlist.");
     } finally {
       setIsAddingToWatchlist(false);
+    }
+  };
+
+  const handleRemoveFromWatchlist = async () => {
+    if (!show) return false;
+    if (!canTrackShow) {
+      setTrackingError("This title cannot be tracked yet.");
+      return false;
+    }
+    if (!tracking?.inWatchlist) {
+      return true;
+    }
+    if (isRemovingFromWatchlist || isAddingToWatchlist || isSettingStatus) {
+      return false;
+    }
+
+    setIsRemovingFromWatchlist(true);
+    setTrackingError(null);
+    try {
+      await removeFromWatchlist({
+        show: buildShowPayload(show),
+      });
+      setPendingOverrides({});
+      setPendingEpisodeKeys({});
+      setEpisodeWatchCounts({});
+      setMovieWatchCount(null);
+      setWatchActionTarget(null);
+      return true;
+    } catch (mutationError) {
+      console.error("Failed to remove show from watchlist", mutationError);
+      setTrackingError("Could not remove this show from watchlist.");
+      return false;
+    } finally {
+      setIsRemovingFromWatchlist(false);
+    }
+  };
+
+  const handleSetTrackingStatus = async (nextStatus: ShowTrackingStatus) => {
+    if (!show) return false;
+    if (!canTrackShow) {
+      setTrackingError("This title cannot be tracked yet.");
+      return false;
+    }
+    if (isSettingStatus || isAddingToWatchlist || isRemovingFromWatchlist) {
+      return false;
+    }
+    if (tracking?.inWatchlist && tracking?.status === nextStatus) {
+      return true;
+    }
+
+    const payload = buildShowPayload(show);
+
+    setIsSettingStatus(true);
+    setTrackingError(null);
+    try {
+      if (!tracking?.inWatchlist && show.mediaType === "anime") {
+        await addAnimeToWatchlistWithRelations(payload);
+      }
+
+      await setWatchlistStatus({
+        show: payload,
+        status: nextStatus,
+      });
+      return true;
+    } catch (mutationError) {
+      console.error("Failed to update watch status", mutationError);
+      setTrackingError("Could not update watch status.");
+      return false;
+    } finally {
+      setIsSettingStatus(false);
+    }
+  };
+
+  const handleSelectStatusFromMenu = async (nextStatus: ShowTrackingStatus) => {
+    const didUpdate = await handleSetTrackingStatus(nextStatus);
+    if (didUpdate) {
+      setIsStatusMenuVisible(false);
+    }
+  };
+
+  const handleRemoveFromStatusMenu = async () => {
+    const didRemove = await handleRemoveFromWatchlist();
+    if (didRemove) {
+      setIsStatusMenuVisible(false);
     }
   };
 
@@ -1817,6 +1980,19 @@ export function ShowDetailScreen() {
   const isShowFullyWatched =
     totalEpisodesCount !== null && watchedEpisodesCount >= totalEpisodesCount;
 
+  const isWatchlistActionPending = isAddingToWatchlist || isRemovingFromWatchlist;
+  const isStatusMenuBusy = isSettingStatus || isWatchlistActionPending;
+  const activeTrackingOption =
+    trackingStatusOptions.find((option) => option.value === activeTrackingStatus) ??
+    trackingStatusOptions[1];
+  const watchlistActionLabel = isAddingToWatchlist
+    ? "Adding..."
+    : isRemovingFromWatchlist
+      ? "Removing..."
+      : tracking?.inWatchlist
+        ? "Remove from Watchlist"
+        : "Add to Watchlist";
+
   const cleanedShowTitle = cleanRichText(show?.title) || show?.title || "";
   const cleanedShowOverview =
     cleanRichText(show?.overview) || "No overview available yet.";
@@ -1954,57 +2130,110 @@ export function ShowDetailScreen() {
             </View>
           )}
 
-          {/* Action Buttons - Radio button style */}
           {canTrackShow && (
-            <View className="mb-6 flex-row flex-wrap items-center gap-6">
-              {/* Watchlist Radio */}
-              <View className="flex-row items-center gap-3">
+            <View className="mb-6 rounded-xl border-2 border-border-default bg-bg-surface p-5">
+              <View className="mb-3 flex-row items-start justify-between gap-3">
+                <View className="flex-1">
+                  <Text className="text-sm font-semibold text-text-primary">
+                    Tracking
+                  </Text>
+                  <Text className="mt-1 text-xs text-text-secondary">
+                    {tracking?.inWatchlist
+                      ? `Current status: ${activeTrackingOption.label}`
+                      : "Not in your watchlist yet."}
+                  </Text>
+                </View>
+                <Badge
+                  label={tracking?.inWatchlist ? activeTrackingOption.label : "Not Tracked"}
+                  variant={tracking?.inWatchlist ? "accent" : "default"}
+                />
+              </View>
+
+              <View
+                className={`gap-2 ${
+                  isDesktop ? "flex-row flex-wrap items-center" : "flex-col"
+                }`}
+              >
                 <Pressable
-                  onPress={handleAddToWatchlist}
-                  disabled={!canTrackShow || isAddingToWatchlist || !!tracking?.inWatchlist}
-                  className="relative h-7 w-7 items-center justify-center"
+                  onPress={() => {
+                    if (tracking?.inWatchlist) {
+                      void handleRemoveFromWatchlist();
+                      return;
+                    }
+                    void handleAddToWatchlist();
+                  }}
+                  disabled={!canTrackShow || isStatusMenuBusy}
+                  className={`rounded-lg border border-border-default bg-bg-base px-3.5 py-2.5 ${
+                    isDesktop
+                      ? "flex-row items-center gap-1.5"
+                      : "w-full flex-row items-center justify-center gap-1.5"
+                  }`}
                   style={({ pressed }) => ({
-                    opacity: !canTrackShow || isAddingToWatchlist || !!tracking?.inWatchlist ? 0.5 : 1,
-                    transform: [{ scale: pressed ? 0.9 : 1 }],
+                    opacity: !canTrackShow || isStatusMenuBusy ? 0.45 : pressed ? 0.85 : 1,
                   })}
                 >
-                  {isAddingToWatchlist ? (
+                  {isWatchlistActionPending ? (
                     <ActivityIndicator size="small" color="#a1a1aa" />
                   ) : (
-                    <>
-                      <View
-                        className={`absolute h-7 w-7 rounded-full border-2 ${
-                          tracking?.inWatchlist ? "border-success" : "border-text-secondary"
-                        }`}
-                      />
-                      {tracking?.inWatchlist && (
-                        <>
-                          <View className="h-4 w-4 rounded-full bg-success" />
-                          <View className="absolute inset-0 items-center justify-center">
-                            <Text className="text-xs font-bold text-white">✓</Text>
-                          </View>
-                        </>
-                      )}
-                    </>
+                    <Ionicons
+                      name={tracking?.inWatchlist ? "remove-circle-outline" : "add-circle-outline"}
+                      size={15}
+                      color={tracking?.inWatchlist ? "#ef4444" : "#a1a1aa"}
+                    />
                   )}
+                  <Text
+                    className={`text-xs font-semibold uppercase tracking-wide ${
+                      tracking?.inWatchlist ? "text-primary" : "text-text-secondary"
+                    }`}
+                  >
+                    {watchlistActionLabel}
+                  </Text>
                 </Pressable>
+
                 <Pressable
-                  onPress={handleAddToWatchlist}
-                  disabled={!canTrackShow || isAddingToWatchlist || !!tracking?.inWatchlist}
-                  className="active:opacity-70"
+                  onPress={() => setIsStatusMenuVisible(true)}
+                  disabled={!canTrackShow || isStatusMenuBusy}
+                  className={`rounded-lg border border-border-default bg-bg-base px-3.5 py-2.5 ${
+                    isDesktop
+                      ? "flex-row items-center gap-1.5"
+                      : "w-full flex-row items-center justify-center gap-1.5"
+                  }`}
+                  style={({ pressed }) => ({
+                    opacity: !canTrackShow || isStatusMenuBusy ? 0.45 : pressed ? 0.85 : 1,
+                  })}
                 >
-                  <Text className={`text-sm ${
-                    tracking?.inWatchlist ? "text-success font-medium" : "text-text-secondary"
-                  }`}>
-                    {isAddingToWatchlist
-                      ? "Adding..."
-                      : tracking?.inWatchlist
-                        ? "In Watchlist"
-                        : "Add to Watchlist"}
+                  <Ionicons
+                    name="ellipsis-horizontal-circle-outline"
+                    size={15}
+                    color="#a1a1aa"
+                  />
+                  <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    Edit Status
                   </Text>
                 </Pressable>
               </View>
 
+              {show.mediaType === "anime" ? (
+                <Text className="mt-3 text-xs text-text-muted">
+                  Franchise note: related anime can be auto-followed in timeline order.
+                  Status changes here apply to this title.
+                </Text>
+              ) : null}
+
+              {isSettingStatus ? (
+                <View className="mt-3 flex-row items-center gap-2">
+                  <ActivityIndicator size="small" color="#52525b" />
+                  <Text className="text-xs text-text-secondary">
+                    Updating status...
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          )}
+
+          {/* Action Buttons - Radio button style */}
+          {canTrackShow && (
+            <View className="mb-6 flex-row flex-wrap items-center gap-6">
               {/* Show-level action for TV/anime */}
               {show.mediaType !== "movie" && seasons.length > 0 && (
                 <View className="flex-row items-center gap-3">
@@ -2202,7 +2431,8 @@ export function ShowDetailScreen() {
 
               <Text className="mt-3 text-xs text-text-muted">
                 Ordered by franchise chronology (main story first, side stories after). Auto-
-                followed entries show the Auto label.
+                followed entries show the Auto label. Open any related title to change its
+                watch status.
               </Text>
             </View>
           )}
@@ -2337,6 +2567,8 @@ export function ShowDetailScreen() {
         <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
           <Pressable
             className="absolute inset-0"
+            focusable={false}
+            style={{ outlineWidth: 0, outlineStyle: "solid", outlineColor: "transparent" }}
             onPress={() => !isNavigatingToNextSeason && setNextSeasonPrompt(null)}
           />
 
@@ -2393,6 +2625,8 @@ export function ShowDetailScreen() {
         <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
           <Pressable
             className="absolute inset-0"
+            focusable={false}
+            style={{ outlineWidth: 0, outlineStyle: "solid", outlineColor: "transparent" }}
             onPress={() => !isWatchActionRunning && setWatchActionTarget(null)}
           />
 
@@ -2436,6 +2670,122 @@ export function ShowDetailScreen() {
               <Pressable
                 disabled={isWatchActionRunning}
                 onPress={() => setWatchActionTarget(null)}
+                className="items-center justify-center rounded-xl py-2"
+              >
+                <Text className="text-sm text-text-muted">Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isStatusMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isStatusMenuBusy) {
+            setIsStatusMenuVisible(false);
+          }
+        }}
+      >
+        <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
+          <Pressable
+            className="absolute inset-0"
+            focusable={false}
+            style={{ outlineWidth: 0, outlineStyle: "solid", outlineColor: "transparent" }}
+            onPress={() => {
+              if (!isStatusMenuBusy) {
+                setIsStatusMenuVisible(false);
+              }
+            }}
+          />
+
+          <View className="w-full max-w-sm overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
+            <View className="border-b border-border-default px-4 pb-3 pt-4">
+              <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                Edit Tracking
+              </Text>
+              <Text className="mt-1 text-lg font-black text-text-primary" numberOfLines={2}>
+                {cleanedShowTitle}
+              </Text>
+              <Text className="mt-2 text-sm text-text-secondary">
+                {tracking?.inWatchlist
+                  ? `Current status: ${activeTrackingOption.label}`
+                  : "Pick a status to add this title to your watchlist."}
+              </Text>
+              {show.mediaType === "anime" ? (
+                <Text className="mt-1 text-xs text-text-muted">
+                  Related anime may auto-follow as part of the franchise timeline.
+                </Text>
+              ) : null}
+            </View>
+
+            <View className="gap-2 p-4">
+              {trackingStatusOptions.map((option) => {
+                const isActive = !!tracking?.inWatchlist && activeTrackingStatus === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    disabled={isStatusMenuBusy}
+                    onPress={() => {
+                      void handleSelectStatusFromMenu(option.value);
+                    }}
+                    className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                      isActive
+                        ? "border-primary/60 bg-primary/15"
+                        : "border-border-default bg-bg-base"
+                    }`}
+                    style={({ pressed }) => ({
+                      opacity: isStatusMenuBusy ? 0.45 : pressed ? 0.9 : 1,
+                    })}
+                  >
+                    <View className="flex-1">
+                      <Text
+                        className={`text-sm font-semibold ${
+                          isActive ? "text-primary" : "text-text-primary"
+                        }`}
+                      >
+                        {option.label}
+                      </Text>
+                      <Text className="mt-0.5 text-xs text-text-secondary">
+                        {option.description}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={isActive ? "radio-button-on" : "radio-button-off"}
+                      size={18}
+                      color={isActive ? "#ef4444" : "#71717a"}
+                    />
+                  </Pressable>
+                );
+              })}
+
+              {tracking?.inWatchlist ? (
+                <Pressable
+                  disabled={isStatusMenuBusy}
+                  onPress={() => {
+                    void handleRemoveFromStatusMenu();
+                  }}
+                  className="items-center justify-center rounded-xl border border-primary/35 bg-primary/10 py-3"
+                  style={({ pressed }) => ({
+                    opacity: isStatusMenuBusy ? 0.45 : pressed ? 0.85 : 1,
+                  })}
+                >
+                  <Text className="font-semibold text-primary">Remove from Watchlist</Text>
+                </Pressable>
+              ) : null}
+
+              {isStatusMenuBusy ? (
+                <View className="flex-row items-center justify-center gap-2 py-1">
+                  <ActivityIndicator size="small" color="#a1a1aa" />
+                  <Text className="text-xs text-text-secondary">Saving...</Text>
+                </View>
+              ) : null}
+
+              <Pressable
+                disabled={isStatusMenuBusy}
+                onPress={() => setIsStatusMenuVisible(false)}
                 className="items-center justify-center rounded-xl py-2"
               >
                 <Text className="text-sm text-text-muted">Cancel</Text>

@@ -57,6 +57,21 @@ const showLookupInput = {
   tvmazeId: v.optional(v.number()),
 };
 
+const userShowStatusValidator = v.union(
+  v.literal("watching"),
+  v.literal("paused"),
+  v.literal("dropped"),
+  v.literal("completed"),
+  v.literal("plan_to_watch")
+);
+
+type UserShowStatus =
+  | "watching"
+  | "paused"
+  | "dropped"
+  | "completed"
+  | "plan_to_watch";
+
 function hasLookupArgs(args: {
   tmdbId?: number;
   anilistId?: number;
@@ -1188,6 +1203,125 @@ export const addToWatchlist = mutation({
   },
 });
 
+export const removeFromWatchlist = mutation({
+  args: {
+    show: v.object(showInput),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const show = await findShowByLookup(ctx, args.show);
+
+    if (!show) {
+      return {
+        removed: false,
+        watchedEpisodesRemoved: 0,
+      };
+    }
+
+    const userShow = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", show._id))
+      .unique();
+
+    if (!userShow) {
+      return {
+        removed: false,
+        watchedEpisodesRemoved: 0,
+      };
+    }
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", show._id))
+      .collect();
+
+    for (const entry of watchedEpisodes) {
+      await ctx.db.delete(entry._id);
+    }
+
+    await ctx.db.delete(userShow._id);
+
+    return {
+      removed: true,
+      watchedEpisodesRemoved: watchedEpisodes.length,
+    };
+  },
+});
+
+export const setWatchlistStatus = mutation({
+  args: {
+    show: v.object(showInput),
+    status: userShowStatusValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const showId = await ensureShowRecordId(ctx, args.show);
+    const now = Date.now();
+
+    const relationRootAnilistId =
+      args.show.mediaType === "anime"
+        ? args.show.rootAnilistId ?? args.show.anilistId
+        : undefined;
+
+    const existing = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .unique();
+
+    if (!existing) {
+      await ctx.db.insert("userShows", {
+        userId,
+        showId,
+        status: args.status,
+        ...(typeof relationRootAnilistId === "number"
+          ? {
+              relationRootAnilistId,
+              isAutoTracked: false,
+            }
+          : {}),
+        ...(args.status === "completed" ? { lastWatchedAt: now } : {}),
+        addedAt: now,
+      });
+
+      return {
+        inWatchlist: true,
+        status: args.status as UserShowStatus,
+      };
+    }
+
+    const patch: {
+      status: UserShowStatus;
+      relationRootAnilistId?: number;
+      isAutoTracked?: boolean;
+      lastWatchedAt?: number;
+    } = {
+      status: args.status as UserShowStatus,
+    };
+
+    if (typeof relationRootAnilistId === "number") {
+      patch.relationRootAnilistId = relationRootAnilistId;
+      if (
+        args.show.mediaType === "anime" &&
+        typeof args.show.anilistId === "number" &&
+        relationRootAnilistId === args.show.anilistId
+      ) {
+        patch.isAutoTracked = false;
+      }
+    }
+
+    if (args.status === "completed" && typeof existing.lastWatchedAt !== "number") {
+      patch.lastWatchedAt = now;
+    }
+
+    await ctx.db.patch(existing._id, patch);
+
+    return {
+      inWatchlist: true,
+      status: args.status as UserShowStatus,
+    };
+  },
+});
+
 export const toggleEpisodeWatched = mutation({
   args: {
     show: v.object(showInput),
@@ -1274,7 +1408,7 @@ export const toggleEpisodeWatched = mutation({
       season: args.season,
       episode: args.episode,
       watchedAt: now,
-      runtime: args.runtime,
+      runtime: args.runtime ?? args.show.episodeRuntime,
       watchCount: 1,
       watchHistory: [now],
     });
@@ -1371,7 +1505,7 @@ export const batchRewatchEpisodes = mutation({
           season: entry.season,
           episode: entry.episode,
           watchedAt: now,
-          runtime: entry.runtime,
+          runtime: entry.runtime ?? args.show.episodeRuntime,
           watchCount: 1,
           watchHistory: [now],
         });
@@ -1460,7 +1594,7 @@ export const markSeasonWatched = mutation({
         season: args.season,
         episode: entry.episode,
         watchedAt: now,
-        runtime: entry.runtime,
+        runtime: entry.runtime ?? args.show.episodeRuntime,
         watchCount: 1,
         watchHistory: [now],
       });
@@ -1718,11 +1852,6 @@ export const getWatchlist = query({
           return null;
         }
 
-        const includeByStatus =
-          userShow.status === "watching" ||
-          (userShow.status === "plan_to_watch" &&
-            (userShow.isAutoTracked || show.mediaType === "anime"));
-
         const totalEpisodes =
           typeof show.totalEpisodes === "number" ? show.totalEpisodes : null;
 
@@ -1732,16 +1861,6 @@ export const getWatchlist = query({
           totalEpisodes === null
             ? null
             : Math.max(totalEpisodes - watchedCount, 0);
-
-        const isCompleted =
-          userShow.status === "completed" ||
-          (remainingEpisodes !== null && remainingEpisodes <= 0);
-
-        const displayEligible = includeByStatus && !isCompleted;
-
-        if (!displayEligible && show.mediaType !== "anime") {
-          return null;
-        }
 
         const progressPercent =
           totalEpisodes && totalEpisodes > 0
@@ -1782,8 +1901,6 @@ export const getWatchlist = query({
           anilistFormat: show.anilistFormat ?? null,
           animeSeason: show.animeSeason ?? null,
           animeSeasonYear: show.animeSeasonYear ?? null,
-          displayEligible,
-          isCompleted,
           watchedEpisodes: watchedCount,
           totalEpisodes,
           remainingEpisodes,
@@ -1804,11 +1921,16 @@ export const getWatchlist = query({
     const groupedAnime = new Map<string, (typeof hydrated)[number][]>();
     const selectedEntries: (typeof hydrated)[number][] = [];
 
+    const isCompletedEntry = (entry: {
+      status: "watching" | "paused" | "dropped" | "completed" | "plan_to_watch";
+      remainingEpisodes: number | null;
+    }) =>
+      entry.status === "completed" ||
+      (typeof entry.remainingEpisodes === "number" && entry.remainingEpisodes <= 0);
+
     for (const item of hydrated) {
       if (item.mediaType !== "anime") {
-        if (item.displayEligible) {
-          selectedEntries.push(item);
-        }
+        selectedEntries.push(item);
         continue;
       }
 
@@ -1827,7 +1949,25 @@ export const getWatchlist = query({
     }
 
     for (const entries of groupedAnime.values()) {
-      const displayable = entries.filter((entry) => entry.displayEligible);
+      const nonCompleted = entries.filter((entry) => !isCompletedEntry(entry));
+      const watchingEntries = nonCompleted.filter((entry) => entry.status === "watching");
+      const pausedEntries = nonCompleted.filter((entry) => entry.status === "paused");
+      const plannedEntries = nonCompleted.filter((entry) => entry.status === "plan_to_watch");
+      const droppedEntries = nonCompleted.filter((entry) => entry.status === "dropped");
+
+      const displayable =
+        watchingEntries.length > 0
+          ? watchingEntries
+          : pausedEntries.length > 0
+            ? pausedEntries
+            : plannedEntries.length > 0
+              ? plannedEntries
+              : droppedEntries.length > 0
+                ? droppedEntries
+                : nonCompleted.length > 0
+                  ? nonCompleted
+                  : entries;
+
       if (displayable.length === 0) {
         continue;
       }
@@ -1851,8 +1991,6 @@ export const getWatchlist = query({
           anilistFormat: _anilistFormat,
           animeSeason: _animeSeason,
           animeSeasonYear: _animeSeasonYear,
-          displayEligible: _displayEligible,
-          isCompleted: _isCompleted,
           ...rest
         }) => rest
       );
