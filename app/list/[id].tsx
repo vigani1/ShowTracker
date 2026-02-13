@@ -169,6 +169,12 @@ function EditModeHeader({
 }) {
   return (
     <View className="gap-4">
+      <PageIntro
+        title="Edit List"
+        subtitle="Update your list details"
+        eyebrow="Editing"
+        icon="create-outline"
+      />
       <View>
         <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary mb-2">
           List Name
@@ -239,7 +245,7 @@ export function ListDetailScreen() {
 
   // Grid calculations
   const isDesktop = windowWidth >= 768;
-  const containerPadding = isDesktop ? 24 : 16;
+  const containerPadding = isDesktop ? 24 : 0;
   const GRID_GAP = 12;
 
   const columns = useMemo(() => {

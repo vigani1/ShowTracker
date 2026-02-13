@@ -2049,7 +2049,7 @@ export function ShowDetailScreen() {
         />
 
         {/* Main Content */}
-        <View className={`${isDesktop ? "px-8" : "px-5"} pt-6 pb-8`}>
+        <View className={`${isDesktop ? "px-8" : "px-1"} pt-6 pb-8`}>
           <View className={`mx-auto w-full ${isDesktop ? "max-w-4xl" : ""}`}>
           {/* Overview & Poster Row (Mobile Only) */}
           {!isDesktop && (

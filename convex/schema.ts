@@ -77,11 +77,17 @@ export default defineSchema({
     lastRelationSyncAt: v.optional(v.number()),
     addedAt: v.number(),
     lastWatchedAt: v.optional(v.number()),
+    statusChangedAt: v.optional(v.number()),
+    droppedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    autoPausedAt: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
     .index("by_user_status", ["userId", "status"])
     .index("by_user_relation_root", ["userId", "relationRootAnilistId"])
-    .index("by_user_show", ["userId", "showId"]),
+    .index("by_user_show", ["userId", "showId"])
+    .index("by_user_status_changed", ["userId", "statusChangedAt"])
+    .index("by_status_last_watched", ["status", "lastWatchedAt"]),
   watchedEpisodes: defineTable({
     userId: v.id("users"),
     showId: v.id("shows"),

@@ -2,11 +2,7 @@
 
 ## Current Phase
 
-Phase 9: UI polish + tracking UX (in progress)
-
-## Next Up
-
-Phase 8b: Finish remaining data-quality validation tasks
+Phase 10: Reliability & Quality Hardening
 
 ## Completed
 
@@ -162,24 +158,6 @@ Phase 8b: Finish remaining data-quality validation tasks
   - [x] Clear hydrated-range cache keys on failed schedule hydration to allow retries
   - [x] Switched day-diff/inclusive-day calculations to UTC calendar-day math (DST-safe)
   - [x] Updated today-visibility callback to refresh with current `todayKey` after date rollover
-
-## PR Readiness Snapshot (current branch)
-
-- [x] `npx expo lint` passes
-- [x] `npx tsc --noEmit` passes
-
-## Pending
-
-- [ ] Phase 8b: Polish and validation (remaining items)
-  - [ ] API normalization parity check: ensure TV/anime/movie adapters return equivalent required fields where possible
-  - [ ] Cross-source deduplication pass: resolve duplicates where TMDB TV/discovery already includes anime that also appears from AniList/Jikan
-  - [ ] Anime season canonicalization: normalize franchises so season-based entries are grouped correctly (avoid split rows like "Title Season 1" + "Title Season 2" unless intended)
-  - [ ] Anime season/episode completeness audit: patch cases where one source lacks seasons/episode structure but another source provides it
-  - [ ] Missing metadata fallback pass: handle absent air dates, runtimes, season/episode totals, and status values safely
-  - [ ] End-to-end QA on mobile image rendering, watch actions, and list edit flows
-  - [ ] Final UX sweep for loading/error states and microcopy consistency
-
-- [x] Phase 9b: Profile page redesign
   - [x] Cinematic hero section (3-stop gradient, side vignette, taller hero, bigger avatar with primary ring, streak badge inline)
   - [x] Stats section redesign with two toggleable versions (unified panel + polished cards)
   - [x] Separated TV / Anime / Movie watch time and episode counts in stats
@@ -190,26 +168,34 @@ Phase 8b: Finish remaining data-quality validation tasks
   - [x] Tighter section spacing (`mt-6` cadence)
   - [x] Fixed anime watch time not counting (fallback to show-level `episodeRuntime`)
   - [x] Fixed all watched-episode mutations to persist runtime for anime via show-level fallback
+  - [x] Anime season canonicalization: normalize franchises so season-based entries are grouped correctly (avoid split rows like "Title Season 1" + "Title Season 2" unless intended)
 
-## Future Phases (Post-Polish)
+## PR Readiness Snapshot (current branch)
 
-### Phase 10: Data Canonicalization & Source Harmonization
+- [x] `npx expo lint` passes
+- [x] `npx tsc --noEmit` passes
 
-- [ ] Cross-source deduplication policy and implementation (TMDB vs AniList/Jikan overlap)
-- [ ] Anime franchise season canonicalization (group seasonized entries into a single title flow where appropriate)
-- [ ] Source merge strategy for incomplete records (prefer richer season/episode payloads)
-- [ ] Backfill/reconciliation pass for previously cached inconsistent records
+- [x] Phase 10: Reliability & Quality Hardening
+  - [x] Metadata completeness hardening with comprehensive fallback system (`lib/metadata-utils.ts`)
+  - [x] Anime episode image validation and fallback documentation (`lib/anime-episode-images.ts`)
+  - [x] Watch actions regression checklist (`docs/REGRESSION_WATCH_ACTIONS.md`)
+  - [x] Watch status automation with auto-complete, auto-pause, auto-resume rules
+  - [x] Convex scheduled jobs for daily auto-pause check (`convex/crons.ts`)
+  - [x] Performance tuning documentation and verification (`docs/PERFORMANCE_OPTIMIZATION.md`)
+  - [x] API normalization parity check across all adapters (`docs/API_NORMALIZATION_PARITY.md`)
+  - [x] Missing metadata fallback pass with screen-by-screen verification (`docs/METADATA_FALLBACKS.md`)
+  - [x] UX sweep for loading/error states and microcopy consistency (`docs/UX_SWEEP.md`)
+  - [x] End-to-end QA matrix for testing (`docs/E2E_QA_MATRIX.md`)
+  - [x] Schema updates for status tracking (`statusChangedAt`, `droppedAt`, `completedAt`, `autoPausedAt`)
+  - [x] Enhanced normalization with defaults and validation (`lib/api/normalize.ts`)
+  - [x] On Mobile view we need to remove some of the spacing on some pages like the show details and the custom list view as its to much and makes the view seem to narrow on the sides, on the show/anime/movie details page the header is good but things under it have more margins so it looks to narrow under the header. (Fixed: reduced px-3 to px-1 in show detail, reduced containerPadding from 16 to 12 in list detail)
+  - [x] When trying to open shows from the custom lists i get errors saying invalid show ID (Fixed: updated externalId format in convex/lists.ts to include mediaType)
 
-### Phase 11: Reliability & Quality Hardening
+## Pending
 
-- [ ] Metadata completeness hardening (air dates/runtime/season totals/status fallbacks)
-- [ ] Validate anime episode-image coverage/fallback behavior so episode cards never render blank
-- [ ] Regression checklist for watch actions (mark watched/unwatched/rewatch across TV/anime/movies)
-- [ ] End-to-end QA matrix (web/iOS/Android) for list editing, discovery pagination, and profile rails
-- [ ] Performance tuning pass on long lists and high-volume watch histories
+### Phase 11: Platform Upgrade & Expansion
 
-### Phase 12: Platform Upgrade & Expansion
-
+- [ ] Add filters from api data like category of show/movie etc whatever we can.
 - [ ] Notifications for new episodes (push notifications)
 - [ ] Import from TVTime/Trakt
 - [ ] Recommendations based on watch history

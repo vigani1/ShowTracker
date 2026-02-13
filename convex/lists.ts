@@ -220,13 +220,15 @@ export const getListDetail = query({
         return {
           id: show._id,
           externalId: show.tmdbId
-            ? `tmdb:${show.tmdbId}`
+            ? `tmdb:${show.mediaType}:${show.tmdbId}`
             : show.anilistId
-            ? `anilist:${show.anilistId}`
+            ? `anilist:anime:${show.anilistId}`
+            : show.malId
+            ? `jikan:anime:${show.malId}`
             : show.tvmazeId
-            ? `tvmaze:${show.tvmazeId}`
+            ? `tvmaze:tv:${show.tvmazeId}`
             : show.imdbId
-            ? `imdb:${show.imdbId}`
+            ? `imdb:${show.mediaType}:${show.imdbId}`
             : String(show._id),
           title: show.title,
           mediaType: show.mediaType,

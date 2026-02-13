@@ -1269,19 +1269,33 @@ export const setWatchlistStatus = mutation({
       .unique();
 
     if (!existing) {
-      await ctx.db.insert("userShows", {
+      const insertData: Omit<Doc<"userShows">, "_id" | "_creationTime"> = {
         userId,
         showId,
         status: args.status,
-        ...(typeof relationRootAnilistId === "number"
-          ? {
-              relationRootAnilistId,
-              isAutoTracked: false,
-            }
-          : {}),
-        ...(args.status === "completed" ? { lastWatchedAt: now } : {}),
+        statusChangedAt: now,
         addedAt: now,
-      });
+      };
+      
+      if (typeof relationRootAnilistId === "number") {
+        insertData.relationRootAnilistId = relationRootAnilistId;
+        insertData.isAutoTracked = false;
+      }
+      
+      if (args.status === "completed") {
+        insertData.lastWatchedAt = now;
+        insertData.completedAt = now;
+      }
+      
+      if (args.status === "watching") {
+        insertData.lastWatchedAt = now;
+      }
+      
+      if (args.status === "dropped") {
+        insertData.droppedAt = now;
+      }
+      
+      await ctx.db.insert("userShows", insertData);
 
       return {
         inWatchlist: true,
@@ -1289,13 +1303,9 @@ export const setWatchlistStatus = mutation({
       };
     }
 
-    const patch: {
-      status: UserShowStatus;
-      relationRootAnilistId?: number;
-      isAutoTracked?: boolean;
-      lastWatchedAt?: number;
-    } = {
+    const patch: Partial<Doc<"userShows">> = {
       status: args.status as UserShowStatus,
+      statusChangedAt: now,
     };
 
     if (typeof relationRootAnilistId === "number") {
@@ -1309,8 +1319,35 @@ export const setWatchlistStatus = mutation({
       }
     }
 
-    if (args.status === "completed" && typeof existing.lastWatchedAt !== "number") {
+    if (args.status === "completed") {
+      if (typeof existing.lastWatchedAt !== "number") {
+        patch.lastWatchedAt = now;
+      }
+      patch.completedAt = now;
+      patch.droppedAt = undefined; // Clear dropped date if completed
+    }
+
+    if (args.status === "watching" && typeof existing.lastWatchedAt !== "number") {
       patch.lastWatchedAt = now;
+    }
+    
+    if (args.status === "dropped") {
+      patch.droppedAt = now;
+    }
+
+    // Clear completedAt when transitioning away from completed
+    if (existing.status === "completed" && args.status !== "completed") {
+      patch.completedAt = undefined;
+    }
+
+    // Clear droppedAt when transitioning away from dropped
+    if (existing.status === "dropped" && args.status !== "dropped") {
+      patch.droppedAt = undefined;
+    }
+
+    // Clear autoPausedAt when manually changing status
+    if (existing.autoPausedAt) {
+      patch.autoPausedAt = undefined;
     }
 
     await ctx.db.patch(existing._id, patch);
@@ -1414,16 +1451,62 @@ export const toggleEpisodeWatched = mutation({
     });
 
     const totalWatched = watchedEpisodes.length + 1;
-    const nextStatus =
-      args.show.totalEpisodes && totalWatched >= args.show.totalEpisodes
-        ? "completed"
-        : "watching";
+    
+    // Determine next status based on progress
+    let nextStatus: UserShowStatus = userShow?.status ?? "watching";
+    let statusChanged = false;
+    
+    // Auto-resume from paused/planned
+    if (nextStatus === "paused" || nextStatus === "plan_to_watch") {
+      nextStatus = "watching";
+      statusChanged = true;
+    }
+
+    // Auto-resume from completed if new episodes added
+    if (
+      userShow?.status === "completed" &&
+      args.show.totalEpisodes &&
+      totalWatched < args.show.totalEpisodes
+    ) {
+      nextStatus = "watching";
+      statusChanged = true;
+    }
+
+    // Auto-complete when all episodes watched
+    if (
+      args.show.totalEpisodes &&
+      totalWatched >= args.show.totalEpisodes &&
+      nextStatus !== "completed"
+    ) {
+      nextStatus = "completed";
+      statusChanged = true;
+    }
 
     if (userShow) {
-      await ctx.db.patch(userShow._id, {
+      const updateData: Partial<Doc<"userShows">> = {
         status: nextStatus,
         lastWatchedAt: now,
-      });
+      };
+      
+      if (statusChanged) {
+        updateData.statusChangedAt = now;
+        // Clear stale automation fields when status changes
+        if (userShow.autoPausedAt) {
+          updateData.autoPausedAt = undefined;
+        }
+        if (userShow.droppedAt) {
+          updateData.droppedAt = undefined;
+        }
+      }
+
+      if (nextStatus === "completed") {
+        updateData.completedAt = now;
+      } else if (userShow.status === "completed") {
+        // Clear completedAt when transitioning away from completed
+        updateData.completedAt = undefined;
+      }
+      
+      await ctx.db.patch(userShow._id, updateData);
     }
 
     return {
@@ -1520,10 +1603,30 @@ export const batchRewatchEpisodes = mutation({
         : "watching";
 
     if (userShow) {
-      await ctx.db.patch(userShow._id, {
+      const statusChanged = userShow.status !== nextStatus;
+      const updateData: Partial<Doc<"userShows">> = {
         status: nextStatus,
         lastWatchedAt: now,
-      });
+      };
+
+      if (statusChanged) {
+        updateData.statusChangedAt = now;
+        if (userShow.autoPausedAt) {
+          updateData.autoPausedAt = undefined;
+        }
+        if (userShow.droppedAt) {
+          updateData.droppedAt = undefined;
+        }
+        if (userShow.status === "completed") {
+          updateData.completedAt = undefined;
+        }
+      }
+
+      if (nextStatus === "completed") {
+        updateData.completedAt = now;
+      }
+
+      await ctx.db.patch(userShow._id, updateData);
     }
 
     return {
@@ -1608,10 +1711,30 @@ export const markSeasonWatched = mutation({
         : "watching";
 
     if (userShow) {
-      await ctx.db.patch(userShow._id, {
+      const statusChanged = userShow.status !== nextStatus;
+      const updateData: Partial<Doc<"userShows">> = {
         status: nextStatus,
         lastWatchedAt: now,
-      });
+      };
+
+      if (statusChanged) {
+        updateData.statusChangedAt = now;
+        if (userShow.autoPausedAt) {
+          updateData.autoPausedAt = undefined;
+        }
+        if (userShow.droppedAt) {
+          updateData.droppedAt = undefined;
+        }
+        if (userShow.status === "completed") {
+          updateData.completedAt = undefined;
+        }
+      }
+
+      if (nextStatus === "completed") {
+        updateData.completedAt = now;
+      }
+
+      await ctx.db.patch(userShow._id, updateData);
     }
 
     return {
@@ -2107,10 +2230,30 @@ export const batchMarkWatched = mutation({
         : "watching";
 
     if (userShow) {
-      await ctx.db.patch(userShow._id, {
+      const statusChanged = userShow.status !== nextStatus;
+      const updateData: Partial<Doc<"userShows">> = {
         status: nextStatus,
         lastWatchedAt: now,
-      });
+      };
+
+      if (statusChanged) {
+        updateData.statusChangedAt = now;
+        if (userShow.autoPausedAt) {
+          updateData.autoPausedAt = undefined;
+        }
+        if (userShow.droppedAt) {
+          updateData.droppedAt = undefined;
+        }
+        if (userShow.status === "completed") {
+          updateData.completedAt = undefined;
+        }
+      }
+
+      if (nextStatus === "completed") {
+        updateData.completedAt = now;
+      }
+
+      await ctx.db.patch(userShow._id, updateData);
     }
 
     return {
@@ -2344,5 +2487,165 @@ export const getEpisodeWatchCounts = query({
     }
 
     return counts;
+  },
+});
+
+// Status Automation Functions
+
+const INACTIVITY_THRESHOLD_DAYS = 30;
+const DROPPED_REMINDER_DAYS = 90;
+
+/**
+ * Check if a show should be auto-paused due to inactivity
+ */
+function shouldAutoPause(
+  status: UserShowStatus,
+  lastWatchedAt: number | undefined,
+  now: number = Date.now()
+): boolean {
+  if (status !== "watching") return false;
+  if (!lastWatchedAt) return false;
+  
+  const daysSinceLastWatch = (now - lastWatchedAt) / (1000 * 60 * 60 * 24);
+  return daysSinceLastWatch >= INACTIVITY_THRESHOLD_DAYS;
+}
+
+/**
+ * Check if completed show should be resumed due to new episodes
+ */
+function shouldResumeForNewContent(
+  currentStatus: UserShowStatus,
+  completedAt: number | undefined,
+  hasNewEpisodes: boolean
+): boolean {
+  if (currentStatus !== "completed") return false;
+  if (!hasNewEpisodes) return false;
+  return true;
+}
+
+/**
+ * Scheduled internal mutation to auto-pause inactive shows
+ * Runs daily via cron job
+ */
+export const autoPauseInactiveShows = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const cutoffTime = now - (INACTIVITY_THRESHOLD_DAYS * 24 * 60 * 60 * 1000);
+    
+    // Find all "watching" shows where lastWatchedAt is older than threshold
+    const showsToPause = await ctx.db
+      .query("userShows")
+      .withIndex("by_status_last_watched", (q) => 
+        q.eq("status", "watching").lt("lastWatchedAt", cutoffTime)
+      )
+      .collect();
+    
+    let pausedCount = 0;
+    
+    for (const userShow of showsToPause) {
+      // Double-check the condition
+      if (shouldAutoPause(userShow.status, userShow.lastWatchedAt, now)) {
+        await ctx.db.patch(userShow._id, {
+          status: "paused",
+          statusChangedAt: now,
+          autoPausedAt: now,
+        });
+        pausedCount++;
+        
+        // TODO: Send push notification when notifications are implemented
+        // await sendPushNotification({
+        //   userId: userShow.userId,
+        //   title: "Show auto-paused",
+        //   body: `You haven't watched this show in ${INACTIVITY_THRESHOLD_DAYS} days. Status set to Paused.`,
+        //   data: { showId: userShow.showId },
+        // });
+      }
+    }
+    
+    return { pausedCount };
+  },
+});
+
+/**
+ * Check for shows that need status updates based on episode activity
+ * Call this when episodes are marked/unmarked
+ */
+async function updateStatusBasedOnProgress(
+  ctx: MutationCtx,
+  userShowId: Id<"userShows">,
+  showId: Id<"shows">,
+  totalEpisodes?: number
+) {
+  const userShow = await ctx.db.get(userShowId);
+  if (!userShow) return;
+  
+  const watchedEpisodes = await ctx.db
+    .query("watchedEpisodes")
+    .withIndex("by_user_show", (q) => 
+      q.eq("userId", userShow.userId).eq("showId", showId)
+    )
+    .collect();
+  
+  const now = Date.now();
+  const watchedCount = watchedEpisodes.length;
+  
+  // Rule 1: Auto-complete when all episodes watched
+  if (
+    userShow.status === "watching" &&
+    totalEpisodes &&
+    watchedCount >= totalEpisodes
+  ) {
+    await ctx.db.patch(userShowId, {
+      status: "completed",
+      statusChangedAt: now,
+      completedAt: now,
+    });
+    return;
+  }
+  
+  // Rule 2: Resume from paused when episode is watched
+  if (
+    (userShow.status === "paused" || userShow.status === "plan_to_watch") &&
+    watchedCount > 0
+  ) {
+    await ctx.db.patch(userShowId, {
+      status: "watching",
+      statusChangedAt: now,
+    });
+    return;
+  }
+  
+  // Rule 3: Un-complete when episodes are removed
+  if (
+    userShow.status === "completed" &&
+    totalEpisodes &&
+    watchedCount < totalEpisodes
+  ) {
+    await ctx.db.patch(userShowId, {
+      status: "watching",
+      statusChangedAt: now,
+      completedAt: undefined,
+    });
+    return;
+  }
+}
+
+/**
+ * Get user automation preferences (placeholder for future implementation)
+ */
+export const getUserAutomationPreferences = query({
+  args: {},
+  handler: async (ctx) => {
+    await getCurrentUserId(ctx);
+    // Return default preferences until user settings are implemented
+    return {
+      autoPauseEnabled: true,
+      autoPauseDays: INACTIVITY_THRESHOLD_DAYS,
+      autoCompleteEnabled: true,
+      newSeasonNotifications: true,
+      droppedRemindersEnabled: true,
+      droppedReminderDays: DROPPED_REMINDER_DAYS,
+    };
   },
 });
