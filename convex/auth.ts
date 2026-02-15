@@ -1,7 +1,7 @@
 import { convexAuth } from "@convex-dev/auth/server";
 import { Anonymous } from "@convex-dev/auth/providers/Anonymous";
 import { Password } from "@convex-dev/auth/providers/Password";
-import { mutation } from "./_generated/server";
+import { mutation } from "@/convex/_generated/server";
 import { v } from "convex/values";
 
 export const { auth, signIn, signOut, store } = convexAuth({

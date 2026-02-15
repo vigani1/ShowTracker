@@ -32,6 +32,7 @@ export default defineSchema({
   }).index("by_user", ["userId"]),
   shows: defineTable({
     tmdbId: v.optional(v.number()),
+    tvdbId: v.optional(v.number()),
     anilistId: v.optional(v.number()),
     malId: v.optional(v.number()),
     tvmazeId: v.optional(v.number()),
@@ -57,6 +58,7 @@ export default defineSchema({
     lastUpdated: v.number(),
   })
     .index("by_tmdbId", ["tmdbId"])
+    .index("by_tvdbId", ["tvdbId"])
     .index("by_anilistId", ["anilistId"])
     .index("by_malId", ["malId"])
     .index("by_rootAnilistId", ["rootAnilistId"])
@@ -77,6 +79,9 @@ export default defineSchema({
     lastRelationSyncAt: v.optional(v.number()),
     addedAt: v.number(),
     lastWatchedAt: v.optional(v.number()),
+    watchedEpisodesCount: v.optional(v.number()),
+    watchedTotalCount: v.optional(v.number()),
+    watchedRuntimeMinutes: v.optional(v.number()),
     statusChangedAt: v.optional(v.number()),
     droppedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),

@@ -21,9 +21,11 @@ function RootLayoutContent() {
   const isShellPath =
     pathname === "/home" ||
     pathname === "/discover" ||
+    pathname === "/recommendations" ||
     pathname === "/search" ||
     pathname === "/library" ||
     pathname === "/profile" ||
+    pathname === "/import" ||
     pathname.startsWith("/list/") ||
     pathname.startsWith("/show/");
   const shouldShowDesktopSidebar =

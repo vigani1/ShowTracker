@@ -1,15 +1,17 @@
 import {
   action,
+  internalAction,
   internalMutation,
   internalQuery,
   mutation,
   query,
-} from "./_generated/server";
-import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server.js";
-import type { Doc, Id } from "./_generated/dataModel";
+} from "@/convex/_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "@/convex/_generated/server";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { auth } from "./auth";
-import { api, internal } from "./_generated/api";
+import { paginationOptsValidator } from "convex/server";
+import { api, internal } from "@/convex/_generated/api";
 import {
   getAniListAnimeRelations,
   getAniListMediaByMalId,
@@ -21,10 +23,12 @@ import type { NormalizedShow } from "../lib/api/types";
 const RELATION_SYNC_THROTTLE_MS = 1000 * 60 * 60 * 6;
 const RELATION_SYNC_BATCH_LIMIT = 6;
 const RELATION_SYNC_MAX_GRAPH_NODES = 30;
+const IMPORT_TRACKED_SHOWS_MAX_ITEMS = 20;
 const RELATION_INCLUDE_TYPES = new Set(["PREQUEL", "SEQUEL"]);
 
 const showInput = {
   tmdbId: v.optional(v.number()),
+  tvdbId: v.optional(v.number()),
   anilistId: v.optional(v.number()),
   malId: v.optional(v.number()),
   tvmazeId: v.optional(v.number()),
@@ -52,9 +56,11 @@ const showInput = {
 
 const showLookupInput = {
   tmdbId: v.optional(v.number()),
+  tvdbId: v.optional(v.number()),
   anilistId: v.optional(v.number()),
   malId: v.optional(v.number()),
   tvmazeId: v.optional(v.number()),
+  mediaType: v.optional(v.union(v.literal("tv"), v.literal("anime"), v.literal("movie"))),
 };
 
 const userShowStatusValidator = v.union(
@@ -72,18 +78,59 @@ type UserShowStatus =
   | "completed"
   | "plan_to_watch";
 
+const TERMINAL_SHOW_LIFECYCLE_STATUSES = new Set([
+  "ended",
+  "finished",
+  "finished airing",
+  "completed",
+  "complete",
+  "released",
+  "canceled",
+  "cancelled",
+]);
+
 function hasLookupArgs(args: {
   tmdbId?: number;
+  tvdbId?: number;
   anilistId?: number;
   malId?: number;
   tvmazeId?: number;
+  mediaType?: "tv" | "anime" | "movie";
 }) {
   return (
     typeof args.tmdbId === "number" ||
+    typeof args.tvdbId === "number" ||
     typeof args.anilistId === "number" ||
     typeof args.malId === "number" ||
     typeof args.tvmazeId === "number"
   );
+}
+
+function pickBestLookupCandidate(
+  candidates: Doc<"shows">[],
+  expected?: "tv" | "anime" | "movie"
+) {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const scoped =
+    expected !== undefined
+      ? candidates.filter((candidate) => candidate.mediaType === expected)
+      : candidates;
+
+  if (scoped.length === 0) {
+    return null;
+  }
+
+  return [...scoped].sort((a, b) => {
+    const updatedA = a.lastUpdated ?? 0;
+    const updatedB = b.lastUpdated ?? 0;
+    if (updatedA !== updatedB) {
+      return updatedB - updatedA;
+    }
+    return b._creationTime - a._creationTime;
+  })[0];
 }
 
 function getExternalShowId(show: {
@@ -123,6 +170,12 @@ function mergeNumberArrays(...values: (number[] | undefined)[]) {
   return merged.size > 0 ? Array.from(merged) : undefined;
 }
 
+function sortFiniteTimestamps(values: number[]) {
+  return values
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+}
+
 function buildShowPatch(
   incoming: ShowPayload,
   existing?: Doc<"shows">
@@ -141,6 +194,7 @@ function buildShowPatch(
 
   return {
     ...incoming,
+    tvdbId: incoming.tvdbId ?? existing?.tvdbId,
     malId: incoming.malId ?? existing?.malId,
     anilistFormat: incoming.anilistFormat ?? existing?.anilistFormat,
     animeSeason: incoming.animeSeason ?? existing?.animeSeason,
@@ -153,6 +207,7 @@ function buildShowPatch(
 
 type ShowPayload = {
   tmdbId?: number;
+  tvdbId?: number;
   anilistId?: number;
   malId?: number;
   tvmazeId?: number;
@@ -179,64 +234,284 @@ type ShowPayload = {
 };
 
 async function getCurrentUserId(ctx: QueryCtx | MutationCtx | ActionCtx) {
-  const userId = await auth.getUserId(ctx);
+  const userId = await getAuthUserId(ctx);
   if (!userId) {
     throw new Error("Unauthorized");
   }
-  return userId;
+
+  return userId as Id<"users">;
+}
+
+type UserShowTrackingAggregates = {
+  watchedEpisodesCount: number;
+  watchedTotalCount: number;
+  watchedRuntimeMinutes: number;
+  lastWatchedAt?: number;
+};
+
+function getEpisodeLastWatchedAt(entry: Doc<"watchedEpisodes">) {
+  const watchHistory = entry.watchHistory ?? [];
+  if (watchHistory.length > 0) {
+    return watchHistory[watchHistory.length - 1];
+  }
+  return entry.watchedAt;
+}
+
+function computeWatchedEpisodeAggregates(
+  watchedEpisodes: Doc<"watchedEpisodes">[]
+): UserShowTrackingAggregates {
+  let watchedTotalCount = 0;
+  let watchedRuntimeMinutes = 0;
+  let lastWatchedAt: number | undefined;
+
+  for (const entry of watchedEpisodes) {
+    const watchCount = entry.watchCount ?? 1;
+    watchedTotalCount += watchCount;
+
+    const runtime = typeof entry.runtime === "number" ? entry.runtime : 0;
+    watchedRuntimeMinutes += runtime * watchCount;
+
+    const episodeLastWatchedAt = getEpisodeLastWatchedAt(entry);
+    if (
+      typeof episodeLastWatchedAt === "number" &&
+      Number.isFinite(episodeLastWatchedAt) &&
+      (typeof lastWatchedAt !== "number" || episodeLastWatchedAt > lastWatchedAt)
+    ) {
+      lastWatchedAt = episodeLastWatchedAt;
+    }
+  }
+
+  return {
+    watchedEpisodesCount: watchedEpisodes.length,
+    watchedTotalCount,
+    watchedRuntimeMinutes,
+    lastWatchedAt,
+  };
+}
+
+async function refreshUserShowTrackingAggregates(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  showId: Id<"shows">
+) {
+  const userShow = await ctx.db
+    .query("userShows")
+    .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+    .unique();
+
+  if (!userShow) {
+    return null;
+  }
+
+  const watchedEpisodes = await ctx.db
+    .query("watchedEpisodes")
+    .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+    .collect();
+
+  const aggregates = computeWatchedEpisodeAggregates(watchedEpisodes);
+
+  await ctx.db.patch(userShow._id, {
+    watchedEpisodesCount: aggregates.watchedEpisodesCount,
+    watchedTotalCount: aggregates.watchedTotalCount,
+    watchedRuntimeMinutes: aggregates.watchedRuntimeMinutes,
+    lastWatchedAt: aggregates.lastWatchedAt,
+  });
+
+  return aggregates;
+}
+
+function normalizePositiveEpisodeCount(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+function isTerminalLifecycleStatus(status?: string) {
+  const normalized = status?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return TERMINAL_SHOW_LIFECYCLE_STATUSES.has(normalized);
+}
+
+function getImportedStatusFromProgress(
+  importedStatus: UserShowStatus,
+  show: Pick<ShowPayload, "mediaType" | "totalEpisodes" | "status">,
+  watchedEpisodesCount: number
+): UserShowStatus {
+  if (importedStatus !== "watching") {
+    return importedStatus;
+  }
+
+  if (show.mediaType === "movie") {
+    return watchedEpisodesCount > 0 ? "completed" : importedStatus;
+  }
+
+  const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
+  if (typeof totalEpisodes !== "number") {
+    return importedStatus;
+  }
+
+  if (!isTerminalLifecycleStatus(show.status)) {
+    return importedStatus;
+  }
+
+  return watchedEpisodesCount >= totalEpisodes ? "completed" : importedStatus;
+}
+
+function normalizeLookupTitle(title?: string) {
+  if (!title) {
+    return "";
+  }
+
+  return title
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function extractLookupYear(value?: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  const match = value.match(/(19|20)\d{2}/);
+  if (!match) {
+    return undefined;
+  }
+
+  const year = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(year) || year < 1900 || year > 2100) {
+    return undefined;
+  }
+
+  return year;
 }
 
 async function findShowByLookup(
   ctx: QueryCtx | MutationCtx,
   args: {
     tmdbId?: number;
+    tvdbId?: number;
     anilistId?: number;
     malId?: number;
     tvmazeId?: number;
+    imdbId?: string;
+    mediaType?: "tv" | "anime" | "movie";
+    title?: string;
+    firstAired?: string;
   }
 ) {
-  const byTmdb =
+  const byTmdbCandidates =
     typeof args.tmdbId === "number"
       ? await ctx.db
           .query("shows")
           .withIndex("by_tmdbId", (q) => q.eq("tmdbId", args.tmdbId))
-          .unique()
-      : null;
+          .take(20)
+      : [];
+  const byTmdb = pickBestLookupCandidate(byTmdbCandidates, args.mediaType);
   if (byTmdb) {
     return byTmdb;
   }
 
-  const byAniList =
+  const byTvdbCandidates =
+    typeof args.tvdbId === "number"
+      ? await ctx.db
+          .query("shows")
+          .withIndex("by_tvdbId", (q) => q.eq("tvdbId", args.tvdbId))
+          .take(20)
+      : [];
+  const byTvdb = pickBestLookupCandidate(byTvdbCandidates, args.mediaType);
+  if (byTvdb) {
+    return byTvdb;
+  }
+
+  const byAniListCandidates =
     typeof args.anilistId === "number"
       ? await ctx.db
           .query("shows")
           .withIndex("by_anilistId", (q) => q.eq("anilistId", args.anilistId))
-          .unique()
-      : null;
+          .take(20)
+      : [];
+  const byAniList = pickBestLookupCandidate(byAniListCandidates, args.mediaType);
   if (byAniList) {
     return byAniList;
   }
 
-  const byMalId =
+  const byMalIdCandidates =
     typeof args.malId === "number"
       ? await ctx.db
           .query("shows")
           .withIndex("by_malId", (q) => q.eq("malId", args.malId))
-          .unique()
-      : null;
+          .take(20)
+      : [];
+  const byMalId = pickBestLookupCandidate(byMalIdCandidates, args.mediaType);
   if (byMalId) {
     return byMalId;
   }
 
-  const byTvMaze =
+  const byTvMazeCandidates =
     typeof args.tvmazeId === "number"
       ? await ctx.db
           .query("shows")
           .withIndex("by_tvmazeId", (q) => q.eq("tvmazeId", args.tvmazeId))
-          .unique()
-      : null;
+          .take(20)
+      : [];
 
-  return byTvMaze;
+  const byTvMaze = pickBestLookupCandidate(byTvMazeCandidates, args.mediaType);
+  if (byTvMaze) {
+    return byTvMaze;
+  }
+
+  if (!args.mediaType) {
+    return null;
+  }
+  const mediaType = args.mediaType;
+
+  const byMediaTypeCandidates = await ctx.db
+    .query("shows")
+    .withIndex("by_mediaType", (q) => q.eq("mediaType", mediaType))
+    .order("desc")
+    .take(500);
+
+  const normalizedImdbId = args.imdbId?.trim().toLowerCase();
+  if (normalizedImdbId) {
+    const byImdb = byMediaTypeCandidates.find(
+      (candidate) => candidate.imdbId?.trim().toLowerCase() === normalizedImdbId
+    );
+    if (byImdb) {
+      return byImdb;
+    }
+  }
+
+  const normalizedTitle = normalizeLookupTitle(args.title);
+  if (!normalizedTitle) {
+    return null;
+  }
+
+  const titleMatches = byMediaTypeCandidates.filter(
+    (candidate) => normalizeLookupTitle(candidate.title) === normalizedTitle
+  );
+
+  if (titleMatches.length === 0) {
+    return null;
+  }
+
+  const requestedYear = extractLookupYear(args.firstAired);
+  if (typeof requestedYear !== "number") {
+    return pickBestLookupCandidate(titleMatches, mediaType);
+  }
+
+  const yearMatches = titleMatches.filter(
+    (candidate) => extractLookupYear(candidate.firstAired) === requestedYear
+  );
+
+  return pickBestLookupCandidate(
+    yearMatches.length > 0 ? yearMatches : titleMatches,
+    mediaType
+  );
 }
 
 async function ensureShowRecordId(
@@ -265,6 +540,7 @@ function buildShowPayloadFromNormalized(
 ): ShowPayload {
   return {
     tmdbId: show.tmdbId,
+    tvdbId: show.tvdbId,
     anilistId: show.anilistId,
     malId: show.malId,
     tvmazeId: show.tvmazeId,
@@ -308,6 +584,7 @@ function mergeShowPayload(
     ...existing,
     ...incoming,
     tmdbId: incoming.tmdbId ?? existing.tmdbId,
+    tvdbId: incoming.tvdbId ?? existing.tvdbId,
     anilistId: incoming.anilistId ?? existing.anilistId,
     malId: incoming.malId ?? existing.malId,
     tvmazeId: incoming.tvmazeId ?? existing.tvmazeId,
@@ -542,6 +819,9 @@ export const applyAnimeRelationSync = internalMutation({
         userId: args.userId,
         showId,
         status: "plan_to_watch",
+        watchedEpisodesCount: 0,
+        watchedTotalCount: 0,
+        watchedRuntimeMinutes: 0,
         isAutoTracked: !isRoot,
         relationRootAnilistId: args.rootAnilistId,
         ...(isRoot ? { lastRelationSyncAt: args.syncedAt } : {}),
@@ -904,22 +1184,10 @@ export const getHomeDashboard = query({
   handler: async (ctx) => {
     const userId = await getCurrentUserId(ctx);
 
-    const [userShows, watchedEpisodes] = await Promise.all([
-      ctx.db
-        .query("userShows")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .collect(),
-      ctx.db
-        .query("watchedEpisodes")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .collect(),
-    ]);
-
-    const watchedByShow = new Map<string, number>();
-    for (const entry of watchedEpisodes) {
-      const key = entry.showId as string;
-      watchedByShow.set(key, (watchedByShow.get(key) ?? 0) + 1);
-    }
+    const userShows = await ctx.db
+      .query("userShows")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
 
     const hydrated = await Promise.all(
       userShows.map(async (userShow) => {
@@ -928,7 +1196,7 @@ export const getHomeDashboard = query({
           return null;
         }
 
-        const watchedCount = watchedByShow.get(userShow.showId as string) ?? 0;
+        const watchedCount = userShow.watchedEpisodesCount ?? 0;
         const totalEpisodes =
           typeof show.totalEpisodes === "number" ? show.totalEpisodes : null;
         const remainingEpisodes =
@@ -962,6 +1230,8 @@ export const getHomeDashboard = query({
           remainingEpisodes,
           progressPercent,
           lastActivityAt: userShow.lastWatchedAt ?? userShow.addedAt,
+          genres: show.genres ?? [],
+          rating: show.rating ?? null,
         };
       })
     );
@@ -1157,6 +1427,64 @@ export const getHomeDashboard = query({
   },
 });
 
+export const getLibrary = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getCurrentUserId(ctx);
+
+    const userShows = await ctx.db
+      .query("userShows")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    const hydrated = await Promise.all(
+      userShows.map(async (userShow) => {
+        const show = await ctx.db.get(userShow.showId);
+        if (!show) {
+          return null;
+        }
+
+        const watchedCount = userShow.watchedEpisodesCount ?? 0;
+        const totalEpisodes =
+          typeof show.totalEpisodes === "number" ? show.totalEpisodes : null;
+        const remainingEpisodes =
+          totalEpisodes === null ? null : Math.max(totalEpisodes - watchedCount, 0);
+        const progressPercent =
+          totalEpisodes && totalEpisodes > 0
+            ? Math.min(100, Math.round((watchedCount / totalEpisodes) * 100))
+            : null;
+
+        return {
+          id: getExternalShowId(show) ?? String(show._id),
+          title: show.title,
+          mediaType: show.mediaType,
+          status: userShow.status,
+          posterUrl: show.posterUrl ?? null,
+          backdropUrl: show.backdropUrl ?? null,
+          overview: show.overview ?? null,
+          firstAired: show.firstAired ?? null,
+          tmdbId: show.tmdbId ?? null,
+          anilistId: show.anilistId ?? null,
+          malId: show.malId ?? null,
+          tvmazeId: show.tvmazeId ?? null,
+          imdbId: show.imdbId ?? null,
+          watchedEpisodes: watchedCount,
+          totalEpisodes,
+          remainingEpisodes,
+          progressPercent,
+          genres: show.genres ?? [],
+          rating: show.rating ?? null,
+          lastActivityAt: userShow.lastWatchedAt ?? userShow.addedAt,
+        };
+      })
+    );
+
+    return hydrated
+      .filter((entry): entry is NonNullable<typeof entry> => !!entry)
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  },
+});
+
 export const addToWatchlist = mutation({
   args: showInput,
   handler: async (ctx, args) => {
@@ -1190,6 +1518,9 @@ export const addToWatchlist = mutation({
       userId,
       showId,
       status: "plan_to_watch",
+      watchedEpisodesCount: 0,
+      watchedTotalCount: 0,
+      watchedRuntimeMinutes: 0,
       ...(typeof relationRootAnilistId === "number"
         ? {
             relationRootAnilistId,
@@ -1273,6 +1604,9 @@ export const setWatchlistStatus = mutation({
         userId,
         showId,
         status: args.status,
+        watchedEpisodesCount: 0,
+        watchedTotalCount: 0,
+        watchedRuntimeMinutes: 0,
         statusChangedAt: now,
         addedAt: now,
       };
@@ -1359,6 +1693,277 @@ export const setWatchlistStatus = mutation({
   },
 });
 
+export const importTrackedShows = mutation({
+  args: {
+    items: v.array(
+      v.object({
+        show: v.object(showInput),
+        status: userShowStatusValidator,
+        watchedEpisodes: v.array(
+          v.object({
+            season: v.number(),
+            episode: v.number(),
+            watchedAt: v.optional(v.number()),
+            watchCount: v.optional(v.number()),
+            watchHistory: v.optional(v.array(v.number())),
+          })
+        ),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    if (args.items.length > IMPORT_TRACKED_SHOWS_MAX_ITEMS) {
+      throw new Error(
+        `Too many items in one import request. Max ${IMPORT_TRACKED_SHOWS_MAX_ITEMS} items per request.`
+      );
+    }
+
+    const now = Date.now();
+    const processedShowIds = new Set<string>();
+
+    let importedShows = 0;
+    let insertedEpisodes = 0;
+    let skippedEpisodes = 0;
+
+    for (const item of args.items) {
+      const showId = await ensureShowRecordId(ctx, item.show);
+
+      const existingUserShow = await ctx.db
+        .query("userShows")
+        .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+        .unique();
+
+      let userShowId: Id<"userShows">;
+
+      const hasWatchedEpisodes = item.watchedEpisodes.length > 0;
+      const relationRootAnilistId =
+        item.show.mediaType === "anime"
+          ? item.show.rootAnilistId ?? item.show.anilistId
+          : undefined;
+
+      if (!existingUserShow) {
+        const insertData: Omit<Doc<"userShows">, "_id" | "_creationTime"> = {
+          userId,
+          showId,
+          status: item.status,
+          addedAt: now,
+          watchedEpisodesCount: 0,
+          watchedTotalCount: 0,
+          watchedRuntimeMinutes: 0,
+          statusChangedAt: now,
+        };
+
+        if (typeof relationRootAnilistId === "number") {
+          insertData.relationRootAnilistId = relationRootAnilistId;
+          insertData.isAutoTracked = false;
+        }
+
+        if (hasWatchedEpisodes) {
+          insertData.lastWatchedAt = now;
+        }
+
+        if (item.status === "completed") {
+          insertData.completedAt = now;
+        }
+
+        if (item.status === "dropped") {
+          insertData.droppedAt = now;
+        }
+
+        userShowId = await ctx.db.insert("userShows", insertData);
+      } else {
+        userShowId = existingUserShow._id;
+        const patch: Partial<Doc<"userShows">> = {
+          status: item.status,
+          statusChangedAt: now,
+        };
+
+        if (typeof relationRootAnilistId === "number") {
+          patch.relationRootAnilistId = relationRootAnilistId;
+          if (
+            item.show.mediaType === "anime" &&
+            typeof item.show.anilistId === "number" &&
+            relationRootAnilistId === item.show.anilistId
+          ) {
+            patch.isAutoTracked = false;
+          }
+        }
+
+        if (hasWatchedEpisodes) {
+          patch.lastWatchedAt = now;
+        }
+
+        patch.completedAt = item.status === "completed" ? now : undefined;
+        patch.droppedAt = item.status === "dropped" ? now : undefined;
+
+        await ctx.db.patch(existingUserShow._id, patch);
+      }
+
+      const existingEpisodes = await ctx.db
+        .query("watchedEpisodes")
+        .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+        .collect();
+
+      const existingEpisodeKeys = new Set(
+        existingEpisodes.map((entry) => `${entry.season}:${entry.episode}`)
+      );
+
+      const mergedIncomingEpisodes = new Map<
+        string,
+        {
+          season: number;
+          episode: number;
+          watchedAt?: number;
+          watchCount?: number;
+          watchHistory?: number[];
+        }
+      >();
+
+      for (const episode of item.watchedEpisodes) {
+        const episodeKey = `${episode.season}:${episode.episode}`;
+        const incomingHistory = Array.isArray(episode.watchHistory)
+          ? sortFiniteTimestamps(
+              episode.watchHistory.filter(
+                (entry): entry is number =>
+                  typeof entry === "number" && Number.isFinite(entry)
+              )
+            )
+          : typeof episode.watchedAt === "number" && Number.isFinite(episode.watchedAt)
+            ? [episode.watchedAt]
+            : [];
+
+        const incomingCount =
+          typeof episode.watchCount === "number" && Number.isFinite(episode.watchCount)
+            ? Math.max(1, Math.floor(episode.watchCount))
+            : incomingHistory.length > 0
+              ? incomingHistory.length
+              : 1;
+
+        const existing = mergedIncomingEpisodes.get(episodeKey);
+        if (!existing) {
+          mergedIncomingEpisodes.set(episodeKey, {
+            season: episode.season,
+            episode: episode.episode,
+            watchedAt: episode.watchedAt,
+            watchCount: incomingCount,
+            watchHistory: incomingHistory,
+          });
+          continue;
+        }
+
+        const existingHistory = sortFiniteTimestamps(
+          Array.isArray(existing.watchHistory) ? existing.watchHistory : []
+        );
+        const mergedHistory = sortFiniteTimestamps([
+          ...existingHistory,
+          ...incomingHistory,
+        ]);
+        const mergedCount = (existing.watchCount ?? 1) + incomingCount;
+
+        const watchedAtCandidates = [
+          existing.watchedAt,
+          episode.watchedAt,
+          mergedHistory.length > 0 ? mergedHistory[mergedHistory.length - 1] : undefined,
+        ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+        const mergedWatchedAt =
+          watchedAtCandidates.length > 0
+            ? watchedAtCandidates.reduce((max, value) => (value > max ? value : max), watchedAtCandidates[0])
+            : undefined;
+
+        mergedIncomingEpisodes.set(episodeKey, {
+          season: episode.season,
+          episode: episode.episode,
+          watchedAt: mergedWatchedAt,
+          watchCount: mergedCount,
+          watchHistory: mergedHistory,
+        });
+      }
+
+      const uniqueIncomingEpisodes = Array.from(mergedIncomingEpisodes.values());
+
+      for (const episode of uniqueIncomingEpisodes) {
+        const key = `${episode.season}:${episode.episode}`;
+        if (existingEpisodeKeys.has(key)) {
+          skippedEpisodes += 1;
+          continue;
+        }
+
+        const watchedAt =
+          typeof episode.watchedAt === "number" && Number.isFinite(episode.watchedAt)
+            ? episode.watchedAt
+            : now;
+
+        const watchHistory = Array.isArray(episode.watchHistory)
+          ? sortFiniteTimestamps(
+              episode.watchHistory.filter(
+                (entry): entry is number =>
+                  typeof entry === "number" && Number.isFinite(entry)
+              )
+            )
+          : [];
+        const normalizedWatchHistory =
+          watchHistory.length > 0 ? watchHistory : [watchedAt];
+        const watchCount =
+          typeof episode.watchCount === "number" && Number.isFinite(episode.watchCount)
+            ? Math.max(1, Math.floor(episode.watchCount), normalizedWatchHistory.length)
+            : normalizedWatchHistory.length;
+        const normalizedWatchedAt =
+          normalizedWatchHistory.length > 0
+            ? normalizedWatchHistory[normalizedWatchHistory.length - 1]
+            : watchedAt;
+
+        await ctx.db.insert("watchedEpisodes", {
+          userId,
+          showId,
+          season: episode.season,
+          episode: episode.episode,
+          watchedAt: normalizedWatchedAt,
+          runtime: item.show.episodeRuntime,
+          watchCount,
+          watchHistory: normalizedWatchHistory,
+        });
+
+        insertedEpisodes += 1;
+      }
+
+      const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
+      const watchedEpisodesCount = Math.max(
+        0,
+        Math.floor(refreshed?.watchedEpisodesCount ?? item.watchedEpisodes.length)
+      );
+      const normalizedImportStatus = getImportedStatusFromProgress(
+        item.status,
+        item.show,
+        watchedEpisodesCount
+      );
+
+      if (normalizedImportStatus !== item.status) {
+        await ctx.db.patch(userShowId, {
+          status: normalizedImportStatus,
+          statusChangedAt: now,
+          completedAt: normalizedImportStatus === "completed" ? now : undefined,
+          droppedAt: normalizedImportStatus === "dropped" ? now : undefined,
+        });
+      }
+
+      const showKey = String(showId);
+      if (!processedShowIds.has(showKey)) {
+        processedShowIds.add(showKey);
+        importedShows += 1;
+      }
+    }
+
+    return {
+      importedShows,
+      insertedEpisodes,
+      skippedEpisodes,
+    };
+  },
+});
+
 export const toggleEpisodeWatched = mutation({
   args: {
     show: v.object(showInput),
@@ -1381,6 +1986,9 @@ export const toggleEpisodeWatched = mutation({
         userId,
         showId,
         status: "watching",
+        watchedEpisodesCount: 0,
+        watchedTotalCount: 0,
+        watchedRuntimeMinutes: 0,
         addedAt: Date.now(),
         lastWatchedAt: Date.now(),
       });
@@ -1415,6 +2023,8 @@ export const toggleEpisodeWatched = mutation({
           });
         }
 
+        await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
         return {
           watched: true,
           watchCount: currentCount + 1,
@@ -1432,9 +2042,11 @@ export const toggleEpisodeWatched = mutation({
           await ctx.db.patch(userShow._id, { status: "watching" });
         }
 
+        const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
         return {
           watched: false,
-          watchedEpisodes: remainingCount,
+          watchedEpisodes: refreshed?.watchedEpisodesCount ?? remainingCount,
         };
       }
     }
@@ -1509,9 +2121,11 @@ export const toggleEpisodeWatched = mutation({
       await ctx.db.patch(userShow._id, updateData);
     }
 
+    const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
     return {
       watched: true,
-      watchedEpisodes: totalWatched,
+      watchedEpisodes: refreshed?.watchedEpisodesCount ?? totalWatched,
       status: nextStatus,
       watchCount: 1,
       isRewatch: false,
@@ -1545,6 +2159,9 @@ export const batchRewatchEpisodes = mutation({
         userId,
         showId,
         status: "watching",
+        watchedEpisodesCount: 0,
+        watchedTotalCount: 0,
+        watchedRuntimeMinutes: 0,
         addedAt: now,
         lastWatchedAt: now,
       });
@@ -1629,11 +2246,13 @@ export const batchRewatchEpisodes = mutation({
       await ctx.db.patch(userShow._id, updateData);
     }
 
+    const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
     return {
       processedCount: uniqueEpisodes.length,
       updatedCount,
       insertedCount,
-      watchedEpisodes: totalWatched,
+      watchedEpisodes: refreshed?.watchedEpisodesCount ?? totalWatched,
       status: nextStatus,
     };
   },
@@ -1665,6 +2284,9 @@ export const markSeasonWatched = mutation({
         userId,
         showId,
         status: "watching",
+        watchedEpisodesCount: 0,
+        watchedTotalCount: 0,
+        watchedRuntimeMinutes: 0,
         addedAt: now,
         lastWatchedAt: now,
       });
@@ -1737,9 +2359,11 @@ export const markSeasonWatched = mutation({
       await ctx.db.patch(userShow._id, updateData);
     }
 
+    const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
     return {
       addedCount,
-      watchedEpisodes: totalWatched,
+      watchedEpisodes: refreshed?.watchedEpisodesCount ?? totalWatched,
       status: nextStatus,
     };
   },
@@ -1788,9 +2412,11 @@ export const unmarkSeasonWatched = mutation({
       });
     }
 
+    const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
     return {
       removedCount,
-      watchedEpisodes: watchedEpisodes.length - removedCount,
+      watchedEpisodes: refreshed?.watchedEpisodesCount ?? watchedEpisodes.length - removedCount,
     };
   },
 });
@@ -1823,6 +2449,8 @@ export const clearShowWatched = mutation({
       });
     }
 
+    await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
     return {
       removedCount: watchedEpisodes.length,
     };
@@ -1832,32 +2460,17 @@ export const clearShowWatched = mutation({
 export const getWatchlist = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getCurrentUserId(ctx);
+    const userId = await getAuthUserId(ctx);
+    
+    // Return empty array if user is not authenticated
+    if (!userId) {
+      return [];
+    }
 
     const userShows = await ctx.db
       .query("userShows")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .withIndex("by_user", (q) => q.eq("userId", userId as Id<"users">))
       .collect();
-
-    const watchedEpisodes = await ctx.db
-      .query("watchedEpisodes")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .collect();
-
-    const watchedByShow = new Map<string, Set<string>>();
-    const lastWatchedAtByShow = new Map<string, number>();
-    for (const entry of watchedEpisodes) {
-      const key = entry.showId as string;
-      if (!watchedByShow.has(key)) {
-        watchedByShow.set(key, new Set());
-      }
-      watchedByShow.get(key)!.add(`${entry.season}:${entry.episode}`);
-
-      const currentLastWatchedAt = lastWatchedAtByShow.get(key) ?? 0;
-      if (entry.watchedAt > currentLastWatchedAt) {
-        lastWatchedAtByShow.set(key, entry.watchedAt);
-      }
-    }
 
     const seasonMonthOffsetByName: Record<string, number> = {
       WINTER: 0,
@@ -1978,8 +2591,7 @@ export const getWatchlist = query({
         const totalEpisodes =
           typeof show.totalEpisodes === "number" ? show.totalEpisodes : null;
 
-        const watchedKeys = watchedByShow.get(userShow.showId as string) || new Set();
-        const watchedCount = watchedKeys.size;
+        const watchedCount = userShow.watchedEpisodesCount ?? 0;
         const remainingEpisodes =
           totalEpisodes === null
             ? null
@@ -1989,10 +2601,6 @@ export const getWatchlist = query({
           totalEpisodes && totalEpisodes > 0
             ? Math.min(100, Math.round((watchedCount / totalEpisodes) * 100))
             : null;
-
-        const lastWatchedEntry = watchedEpisodes
-          .filter((e) => e.showId === userShow.showId)
-          .sort((a, b) => b.watchedAt - a.watchedAt)[0];
 
         const trackingState =
           totalEpisodes === null
@@ -2028,11 +2636,7 @@ export const getWatchlist = query({
           totalEpisodes,
           remainingEpisodes,
           progressPercent,
-          lastWatchedAt:
-            userShow.lastWatchedAt ??
-            lastWatchedEntry?.watchedAt ??
-            lastWatchedAtByShow.get(userShow.showId as string) ??
-            userShow.addedAt,
+          lastWatchedAt: userShow.lastWatchedAt ?? userShow.addedAt,
         };
       })
     );
@@ -2148,6 +2752,504 @@ export const getUserWatchlistShows = query({
   },
 });
 
+const RESET_USER_DATA_BATCH_SIZE = 400;
+const RESET_USER_DATA_MAX_BATCHES = 250;
+const RESET_GLOBAL_MEDIA_BATCH_SIZE = 500;
+const RESET_GLOBAL_MEDIA_MAX_BATCHES = 1000;
+
+export const resetUserTrackingDataBatch = internalMutation({
+  args: {
+    userId: v.id("users"),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    let remaining = Math.max(1, Math.floor(args.limit));
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .take(remaining);
+
+    for (const entry of watchedEpisodes) {
+      await ctx.db.delete(entry._id);
+    }
+
+    remaining -= watchedEpisodes.length;
+
+    const userShows =
+      remaining > 0
+        ? await ctx.db
+            .query("userShows")
+            .withIndex("by_user", (q) => q.eq("userId", args.userId))
+            .take(remaining)
+        : [];
+
+    for (const entry of userShows) {
+      await ctx.db.delete(entry._id);
+    }
+
+    remaining -= userShows.length;
+
+    const userFavorites =
+      remaining > 0
+        ? await ctx.db
+            .query("userFavorites")
+            .withIndex("by_user", (q) => q.eq("userId", args.userId))
+            .take(remaining)
+        : [];
+
+    for (const entry of userFavorites) {
+      await ctx.db.delete(entry._id);
+    }
+
+    remaining -= userFavorites.length;
+
+    const customLists =
+      remaining > 0
+        ? await ctx.db
+            .query("customLists")
+            .withIndex("by_user", (q) => q.eq("userId", args.userId))
+            .take(remaining)
+        : [];
+
+    for (const entry of customLists) {
+      await ctx.db.delete(entry._id);
+    }
+
+    const deletedTotal =
+      watchedEpisodes.length +
+      userShows.length +
+      userFavorites.length +
+      customLists.length;
+
+    return {
+      removedUserShows: userShows.length,
+      removedWatchedEpisodes: watchedEpisodes.length,
+      removedFavorites: userFavorites.length,
+      removedLists: customLists.length,
+      deletedTotal,
+      hasMore: deletedTotal >= args.limit,
+    };
+  },
+});
+
+export const resetUserTrackingData = action({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getCurrentUserId(ctx);
+
+    let removedUserShows = 0;
+    let removedWatchedEpisodes = 0;
+    let removedFavorites = 0;
+    let removedLists = 0;
+    let batches = 0;
+
+    while (batches < RESET_USER_DATA_MAX_BATCHES) {
+      const batchResult: {
+        removedUserShows: number;
+        removedWatchedEpisodes: number;
+        removedFavorites: number;
+        removedLists: number;
+        deletedTotal: number;
+        hasMore: boolean;
+      } = await ctx.runMutation(internal.shows.resetUserTrackingDataBatch, {
+        userId,
+        limit: RESET_USER_DATA_BATCH_SIZE,
+      });
+
+      removedUserShows += batchResult.removedUserShows;
+      removedWatchedEpisodes += batchResult.removedWatchedEpisodes;
+      removedFavorites += batchResult.removedFavorites;
+      removedLists += batchResult.removedLists;
+      batches += 1;
+
+      if (!batchResult.hasMore || batchResult.deletedTotal === 0) {
+        return {
+          removedUserShows,
+          removedWatchedEpisodes,
+          removedFavorites,
+          removedLists,
+          batches,
+          completed: true,
+        };
+      }
+    }
+
+    return {
+      removedUserShows,
+      removedWatchedEpisodes,
+      removedFavorites,
+      removedLists,
+      batches,
+      completed: false,
+    };
+  },
+});
+
+export const resetGlobalMediaDataBatch = internalMutation({
+  args: {
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    let remaining = Math.max(1, Math.floor(args.limit));
+
+    const watchedEpisodes = await ctx.db.query("watchedEpisodes").take(remaining);
+    for (const entry of watchedEpisodes) {
+      await ctx.db.delete(entry._id);
+    }
+    remaining -= watchedEpisodes.length;
+
+    const userShows =
+      remaining > 0 ? await ctx.db.query("userShows").take(remaining) : [];
+    for (const entry of userShows) {
+      await ctx.db.delete(entry._id);
+    }
+    remaining -= userShows.length;
+
+    const userFavorites =
+      remaining > 0 ? await ctx.db.query("userFavorites").take(remaining) : [];
+    for (const entry of userFavorites) {
+      await ctx.db.delete(entry._id);
+    }
+    remaining -= userFavorites.length;
+
+    const customLists =
+      remaining > 0 ? await ctx.db.query("customLists").take(remaining) : [];
+    for (const entry of customLists) {
+      await ctx.db.delete(entry._id);
+    }
+    remaining -= customLists.length;
+
+    const shows = remaining > 0 ? await ctx.db.query("shows").take(remaining) : [];
+    for (const entry of shows) {
+      await ctx.db.delete(entry._id);
+    }
+    remaining -= shows.length;
+
+    const scheduleCache =
+      remaining > 0 ? await ctx.db.query("scheduleCache").take(remaining) : [];
+    for (const entry of scheduleCache) {
+      await ctx.db.delete(entry._id);
+    }
+
+    const deletedTotal =
+      watchedEpisodes.length +
+      userShows.length +
+      userFavorites.length +
+      customLists.length +
+      shows.length +
+      scheduleCache.length;
+
+    return {
+      removedWatchedEpisodes: watchedEpisodes.length,
+      removedUserShows: userShows.length,
+      removedFavorites: userFavorites.length,
+      removedLists: customLists.length,
+      removedShows: shows.length,
+      removedScheduleCache: scheduleCache.length,
+      deletedTotal,
+      hasMore: deletedTotal >= args.limit,
+    };
+  },
+});
+
+export const resetGlobalMediaData = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    let removedWatchedEpisodes = 0;
+    let removedUserShows = 0;
+    let removedFavorites = 0;
+    let removedLists = 0;
+    let removedShows = 0;
+    let removedScheduleCache = 0;
+    let batches = 0;
+
+    while (batches < RESET_GLOBAL_MEDIA_MAX_BATCHES) {
+      const batchResult: {
+        removedWatchedEpisodes: number;
+        removedUserShows: number;
+        removedFavorites: number;
+        removedLists: number;
+        removedShows: number;
+        removedScheduleCache: number;
+        deletedTotal: number;
+        hasMore: boolean;
+      } = await ctx.runMutation(internal.shows.resetGlobalMediaDataBatch, {
+        limit: RESET_GLOBAL_MEDIA_BATCH_SIZE,
+      });
+
+      removedWatchedEpisodes += batchResult.removedWatchedEpisodes;
+      removedUserShows += batchResult.removedUserShows;
+      removedFavorites += batchResult.removedFavorites;
+      removedLists += batchResult.removedLists;
+      removedShows += batchResult.removedShows;
+      removedScheduleCache += batchResult.removedScheduleCache;
+      batches += 1;
+
+      if (!batchResult.hasMore || batchResult.deletedTotal === 0) {
+        return {
+          removedWatchedEpisodes,
+          removedUserShows,
+          removedFavorites,
+          removedLists,
+          removedShows,
+          removedScheduleCache,
+          batches,
+          completed: true,
+        };
+      }
+    }
+
+    return {
+      removedWatchedEpisodes,
+      removedUserShows,
+      removedFavorites,
+      removedLists,
+      removedShows,
+      removedScheduleCache,
+      batches,
+      completed: false,
+    };
+  },
+});
+
+const TRACKING_BACKFILL_PAGE_SIZE = 120;
+const STATUS_NORMALIZATION_PAGE_SIZE = 120;
+
+export const getUserShowsPageForTrackingBackfill = internalQuery({
+  args: {
+    userId: v.id("users"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("userShows")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .paginate(args.paginationOpts);
+  },
+});
+
+export const backfillUserShowTrackingAggregatesBatch = internalMutation({
+  args: {
+    userId: v.id("users"),
+    userShowIds: v.array(v.id("userShows")),
+  },
+  handler: async (ctx, args) => {
+    let patched = 0;
+
+    for (const userShowId of args.userShowIds) {
+      const userShow = await ctx.db.get(userShowId);
+      if (!userShow || userShow.userId !== args.userId) {
+        continue;
+      }
+
+      const watchedEpisodes = await ctx.db
+        .query("watchedEpisodes")
+        .withIndex("by_user_show", (q) =>
+          q.eq("userId", args.userId).eq("showId", userShow.showId)
+        )
+        .collect();
+
+      const aggregates = computeWatchedEpisodeAggregates(watchedEpisodes);
+
+      await ctx.db.patch(userShowId, {
+        watchedEpisodesCount: aggregates.watchedEpisodesCount,
+        watchedTotalCount: aggregates.watchedTotalCount,
+        watchedRuntimeMinutes: aggregates.watchedRuntimeMinutes,
+        lastWatchedAt: aggregates.lastWatchedAt ?? userShow.lastWatchedAt,
+      });
+
+      patched += 1;
+    }
+
+    return { patched };
+  },
+});
+
+export const normalizeWatchingStatusesBatch = internalMutation({
+  args: {
+    userId: v.id("users"),
+    userShowIds: v.array(v.id("userShows")),
+  },
+  handler: async (ctx, args) => {
+    let normalized = 0;
+    const now = Date.now();
+
+    for (const userShowId of args.userShowIds) {
+      const userShow = await ctx.db.get(userShowId);
+      if (!userShow || userShow.userId !== args.userId || userShow.status !== "watching") {
+        continue;
+      }
+
+      const show = await ctx.db.get(userShow.showId);
+      if (!show) {
+        continue;
+      }
+
+      const watchedEpisodesCount = Math.max(
+        0,
+        Math.floor(userShow.watchedEpisodesCount ?? 0)
+      );
+
+      const nextStatus = getImportedStatusFromProgress(
+        userShow.status,
+        {
+          mediaType: show.mediaType,
+          totalEpisodes: show.totalEpisodes,
+          status: show.status,
+        },
+        watchedEpisodesCount
+      );
+
+      if (nextStatus !== userShow.status) {
+        await ctx.db.patch(userShowId, {
+          status: nextStatus,
+          statusChangedAt: now,
+          completedAt: nextStatus === "completed" ? now : undefined,
+          droppedAt: nextStatus === "dropped" ? now : undefined,
+        });
+        normalized += 1;
+      }
+    }
+
+    return { normalized };
+  },
+});
+
+async function rebuildTrackingAggregatesForUser(
+  ctx: ActionCtx,
+  userId: Id<"users">
+) {
+  let cursor: string | null = null;
+  let scanned = 0;
+  let patched = 0;
+  let batches = 0;
+
+  while (true) {
+    const page: {
+      page: Array<Doc<"userShows">>;
+      continueCursor: string;
+      isDone: boolean;
+    } = await ctx.runQuery(internal.shows.getUserShowsPageForTrackingBackfill, {
+      userId,
+      paginationOpts: {
+        cursor,
+        numItems: TRACKING_BACKFILL_PAGE_SIZE,
+      },
+    });
+
+    scanned += page.page.length;
+
+    if (page.page.length > 0) {
+      const batchResult: { patched: number } = await ctx.runMutation(
+        internal.shows.backfillUserShowTrackingAggregatesBatch,
+        {
+          userId,
+          userShowIds: page.page.map((entry) => entry._id),
+        }
+      );
+      patched += batchResult.patched;
+      batches += 1;
+    }
+
+    if (page.isDone) {
+      break;
+    }
+
+    cursor = page.continueCursor;
+  }
+
+  return {
+    scanned,
+    patched,
+    batches,
+  };
+}
+
+export const rebuildUserShowTrackingAggregatesForUser = internalAction({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    return rebuildTrackingAggregatesForUser(ctx, args.userId);
+  },
+});
+
+async function normalizeWatchingStatusesForUser(
+  ctx: ActionCtx,
+  userId: Id<"users">
+) {
+  let cursor: string | null = null;
+  let scanned = 0;
+  let normalized = 0;
+  let batches = 0;
+
+  while (true) {
+    const page: {
+      page: Array<Doc<"userShows">>;
+      continueCursor: string;
+      isDone: boolean;
+    } = await ctx.runQuery(internal.shows.getUserShowsPageForTrackingBackfill, {
+      userId,
+      paginationOpts: {
+        cursor,
+        numItems: STATUS_NORMALIZATION_PAGE_SIZE,
+      },
+    });
+
+    scanned += page.page.length;
+
+    if (page.page.length > 0) {
+      const batchResult: { normalized: number } = await ctx.runMutation(
+        internal.shows.normalizeWatchingStatusesBatch,
+        {
+          userId,
+          userShowIds: page.page.map((entry) => entry._id),
+        }
+      );
+      normalized += batchResult.normalized;
+      batches += 1;
+    }
+
+    if (page.isDone) {
+      break;
+    }
+
+    cursor = page.continueCursor;
+  }
+
+  return {
+    scanned,
+    normalized,
+    batches,
+  };
+}
+
+export const normalizeWatchingStatusesFromProgressForUser = internalAction({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    return normalizeWatchingStatusesForUser(ctx, args.userId);
+  },
+});
+
+export const normalizeWatchingStatusesFromProgress = action({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getCurrentUserId(ctx);
+    return normalizeWatchingStatusesForUser(ctx, userId);
+  },
+});
+
+export const rebuildUserShowTrackingAggregates = action({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getCurrentUserId(ctx);
+    return rebuildTrackingAggregatesForUser(ctx, userId);
+  },
+});
+
 export const batchMarkWatched = mutation({
   args: {
     show: v.object(showInput),
@@ -2168,6 +3270,9 @@ export const batchMarkWatched = mutation({
         userId,
         showId,
         status: "watching",
+        watchedEpisodesCount: 0,
+        watchedTotalCount: 0,
+        watchedRuntimeMinutes: 0,
         addedAt: Date.now(),
         lastWatchedAt: Date.now(),
       });
@@ -2256,9 +3361,11 @@ export const batchMarkWatched = mutation({
       await ctx.db.patch(userShow._id, updateData);
     }
 
+    const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
     return {
       addedCount,
-      totalWatched,
+      totalWatched: refreshed?.watchedEpisodesCount ?? totalWatched,
       status: nextStatus,
     };
   },
@@ -2366,6 +3473,8 @@ export const toggleMovieWatched = mutation({
           });
         }
 
+        await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
         return {
           watched: true,
           watchCount: currentCount + 1,
@@ -2380,6 +3489,8 @@ export const toggleMovieWatched = mutation({
             status: "plan_to_watch",
           });
         }
+
+        await refreshUserShowTrackingAggregates(ctx, userId, showId);
 
         return {
           watched: false,
@@ -2404,6 +3515,9 @@ export const toggleMovieWatched = mutation({
           userId,
           showId,
           status: "completed",
+          watchedEpisodesCount: 0,
+          watchedTotalCount: 0,
+          watchedRuntimeMinutes: 0,
           addedAt: now,
           lastWatchedAt: now,
         });
@@ -2413,6 +3527,8 @@ export const toggleMovieWatched = mutation({
           lastWatchedAt: now,
         });
       }
+
+      await refreshUserShowTrackingAggregates(ctx, userId, showId);
 
       return {
         watched: true,
@@ -2630,6 +3746,112 @@ async function updateStatusBasedOnProgress(
     return;
   }
 }
+
+/**
+ * Get recommended shows based on user's watch history
+ * Returns shows that are similar to what the user has watched
+ */
+export const getRecommendations = query({
+  args: {
+    mediaType: v.optional(v.union(v.literal("tv"), v.literal("movie"))),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    
+    // Return empty if not authenticated
+    if (!userId) {
+      return [];
+    }
+
+    const limit = Math.max(1, Math.min(args.limit ?? 8, 20));
+
+    // Get user's tracked shows with aggregate fields.
+    const userShows = await ctx.db
+      .query("userShows")
+      .withIndex("by_user", (q) => q.eq("userId", userId as Id<"users">))
+      .collect();
+
+    const candidateUserShows = userShows
+      .filter((userShow) => {
+        const watchedCount = userShow.watchedEpisodesCount ?? 0;
+        return watchedCount > 0 || userShow.status === "watching" || userShow.status === "completed";
+      })
+      .map((userShow) => {
+        const activityAt = Math.max(
+          userShow.lastWatchedAt ?? 0,
+          userShow.statusChangedAt ?? 0,
+          userShow.addedAt
+        );
+
+        return {
+          userShow,
+          activityAt,
+          watchedCount: userShow.watchedEpisodesCount ?? 0,
+        };
+      })
+      .sort((a, b) => b.activityAt - a.activityAt)
+      .slice(0, 25);
+
+    const hydratedSeeds = await Promise.all(
+      candidateUserShows.map(async ({ userShow, activityAt, watchedCount }) => {
+        const show = await ctx.db.get(userShow.showId as Id<"shows">);
+        if (!show || typeof show.tmdbId !== "number") {
+          return null;
+        }
+
+        if (show.mediaType !== "tv" && show.mediaType !== "movie") {
+          return null;
+        }
+
+        if (args.mediaType && show.mediaType !== args.mediaType) {
+          return null;
+        }
+
+        return {
+          id: `tmdb:${show.mediaType}:${show.tmdbId}`,
+          tmdbId: show.tmdbId,
+          mediaType: show.mediaType,
+          title: show.title,
+          activityAt,
+          watchedCount,
+        };
+      })
+    );
+
+    const dedupedByTmdb = new Map<string, {
+      id: string;
+      tmdbId: number;
+      mediaType: "tv" | "movie";
+      title: string;
+      activityAt: number;
+      watchedCount: number;
+    }>();
+
+    for (const seed of hydratedSeeds) {
+      if (!seed) continue;
+      const key = `${seed.mediaType}:${seed.tmdbId}`;
+      const existing = dedupedByTmdb.get(key);
+      if (!existing || seed.activityAt > existing.activityAt) {
+        dedupedByTmdb.set(key, seed);
+      }
+    }
+
+    return Array.from(dedupedByTmdb.values())
+      .sort((a, b) => {
+        if (b.activityAt !== a.activityAt) return b.activityAt - a.activityAt;
+        if (b.watchedCount !== a.watchedCount) return b.watchedCount - a.watchedCount;
+        return a.title.localeCompare(b.title);
+      })
+      .slice(0, limit)
+      .map(({ id, tmdbId, mediaType, title }) => ({
+        id,
+        tmdbId,
+        mediaType,
+        title,
+      }));
+  },
+});
 
 /**
  * Get user automation preferences (placeholder for future implementation)

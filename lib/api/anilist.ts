@@ -72,6 +72,15 @@ export type AniListSearchResult = {
   };
 };
 
+export type AniListNormalizedResult = {
+  items: NormalizedShow[];
+  pageInfo: {
+    total: number;
+    currentPage: number;
+    lastPage: number;
+  };
+};
+
 export type AniListScheduleResult = {
   data: {
     Page: {
@@ -205,50 +214,149 @@ async function request<T>(query: string, variables: Record<string, unknown>) {
   throw new Error("AniList request failed: exceeded retry attempts");
 }
 
-export async function searchAniList(query: string, page = 1, perPage = 20) {
-  const cacheKey = `anilist-search:${query}:${page}:${perPage}`;
-  const cached = getCached<AniListSearchResult>(cacheKey);
+export type AniListFilterParams = {
+  genres?: string[];
+  seasonYear?: number;
+  minScore?: number;
+  status?: string;
+};
+
+export async function searchAniList(
+  query: string,
+  page = 1,
+  perPage = 20,
+  filters?: AniListFilterParams
+) {
+  const normalizedQuery = query.trim();
+  const hasSearch = normalizedQuery.length > 0;
+  const filterKey = filters
+    ? Object.entries(filters)
+        .map(([k, v]) => `${k}:${JSON.stringify(v)}`)
+        .join(",")
+    : "";
+  const cacheKey = `anilist-search:${normalizedQuery}:${page}:${perPage}:${filterKey}`;
+  const cached = getCached<AniListNormalizedResult>(cacheKey);
   if (cached) {
     return cached;
   }
 
+  const conditions: string[] = ["type: ANIME"];
+  const variableDefinitions: string[] = ["$page: Int", "$perPage: Int"];
+  const variables: Record<string, unknown> = {
+    page,
+    perPage,
+  };
+
+  if (hasSearch) {
+    conditions.push(`search: $search`);
+    variableDefinitions.unshift("$search: String");
+    variables.search = normalizedQuery;
+  }
+  if (filters?.genres?.length) {
+    conditions.push(`genre_in: $genres`);
+    variableDefinitions.push("$genres: [String]");
+    variables.genres = filters.genres;
+  }
+  if (filters?.seasonYear) {
+    conditions.push(`seasonYear: $seasonYear`);
+    variableDefinitions.push("$seasonYear: Int");
+    variables.seasonYear = filters.seasonYear;
+  }
+  if (filters?.minScore) {
+    conditions.push(`averageScore_greater: $minScore`);
+    variableDefinitions.push("$minScore: Int");
+    variables.minScore = filters.minScore;
+  }
+  if (filters?.status) {
+    conditions.push(`status: $status`);
+    variableDefinitions.push("$status: MediaStatus");
+    variables.status = filters.status;
+  }
+
   const data = await request<AniListSearchResult>(
-    `query ($search: String, $page: Int, $perPage: Int) {
+    `query (${variableDefinitions.join(", ")}) {
       Page(page: $page, perPage: $perPage) {
         pageInfo { total currentPage lastPage }
-        media(search: $search, type: ANIME, sort: POPULARITY_DESC) {
+        media(${conditions.join(", ")}, sort: POPULARITY_DESC) {
           ${anilistMediaSelection}
         }
       }
     }`,
-    { search: query, page, perPage }
+    variables
   );
 
-  setCached(cacheKey, data, cacheTtlMs);
-  return data;
+  const normalized: AniListNormalizedResult = {
+    items: data.data.Page.media.map((media) => normalizeAniListMedia(media)),
+    pageInfo: data.data.Page.pageInfo,
+  };
+
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
 }
 
-export async function getTrendingAniList(page = 1, perPage = 20) {
-  const cacheKey = `anilist-trending:${page}:${perPage}`;
-  const cached = getCached<AniListSearchResult>(cacheKey);
+export async function getTrendingAniList(
+  page = 1,
+  perPage = 20,
+  filters?: AniListFilterParams
+) {
+  const filterKey = filters
+    ? Object.entries(filters)
+        .map(([k, v]) => `${k}:${JSON.stringify(v)}`)
+        .join(",")
+    : "";
+  const cacheKey = `anilist-trending:${page}:${perPage}:${filterKey}`;
+  const cached = getCached<AniListNormalizedResult>(cacheKey);
   if (cached) {
     return cached;
   }
 
+  const conditions: string[] = ["type: ANIME"];
+  const variableDefinitions: string[] = ["$page: Int", "$perPage: Int"];
+  const variables: Record<string, unknown> = {
+    page,
+    perPage,
+  };
+
+  if (filters?.genres?.length) {
+    conditions.push(`genre_in: $genres`);
+    variableDefinitions.push("$genres: [String]");
+    variables.genres = filters.genres;
+  }
+  if (filters?.seasonYear) {
+    conditions.push(`seasonYear: $seasonYear`);
+    variableDefinitions.push("$seasonYear: Int");
+    variables.seasonYear = filters.seasonYear;
+  }
+  if (filters?.minScore) {
+    conditions.push(`averageScore_greater: $minScore`);
+    variableDefinitions.push("$minScore: Int");
+    variables.minScore = filters.minScore;
+  }
+  if (filters?.status) {
+    conditions.push(`status: $status`);
+    variableDefinitions.push("$status: MediaStatus");
+    variables.status = filters.status;
+  }
+
   const data = await request<AniListSearchResult>(
-    `query ($page: Int, $perPage: Int) {
+    `query (${variableDefinitions.join(", ")}) {
       Page(page: $page, perPage: $perPage) {
         pageInfo { total currentPage lastPage }
-        media(type: ANIME, sort: TRENDING_DESC) {
+        media(${conditions.join(", ")}, sort: TRENDING_DESC) {
           ${anilistMediaSelection}
         }
       }
     }`,
-    { page, perPage }
+    variables
   );
 
-  setCached(cacheKey, data, cacheTtlMs);
-  return data;
+  const normalized: AniListNormalizedResult = {
+    items: data.data.Page.media.map((media) => normalizeAniListMedia(media)),
+    pageInfo: data.data.Page.pageInfo,
+  };
+
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
 }
 
 export async function getAniListAiringSchedule(

@@ -6,6 +6,12 @@ import { Platform, Pressable, Text, useWindowDimensions, View } from "react-nati
 const navItems = [
   { href: "/home", label: "Home", icon: "home", iconOutline: "home-outline" },
   { href: "/discover", label: "Discover", icon: "compass", iconOutline: "compass-outline" },
+  {
+    href: "/recommendations",
+    label: "For You",
+    icon: "sparkles",
+    iconOutline: "sparkles-outline",
+  },
   { href: "/library", label: "Library", icon: "albums", iconOutline: "albums-outline" },
 ] as const;
 

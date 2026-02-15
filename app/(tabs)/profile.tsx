@@ -24,9 +24,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
 type TimeBreakdown = {
-  years: number;
   months: number;
-  weeks: number;
   days: number;
   hours: number;
   minutes: number;
@@ -97,10 +95,14 @@ function SectionHeader({
   title,
   icon,
   rightLabel,
+  actionLabel,
+  actionHref,
 }: {
   title: string;
   icon: keyof typeof Ionicons.glyphMap;
   rightLabel?: string;
+  actionLabel?: string;
+  actionHref?: string;
 }) {
   return (
     <View className="mb-3 flex-row items-center justify-between">
@@ -112,11 +114,22 @@ function SectionHeader({
           {title}
         </Text>
       </View>
-      {rightLabel ? (
-        <Text className="text-[11px] font-semibold uppercase tracking-widest text-text-muted">
-          {rightLabel}
-        </Text>
-      ) : null}
+      <View className="flex-row items-center gap-2">
+        {rightLabel ? (
+          <Text className="text-[11px] font-semibold uppercase tracking-widest text-text-muted">
+            {rightLabel}
+          </Text>
+        ) : null}
+        {actionLabel && actionHref ? (
+          <Link href={actionHref} asChild>
+            <Pressable className="rounded-full border border-border-default bg-bg-surface px-2.5 py-1">
+              <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary">
+                {actionLabel}
+              </Text>
+            </Pressable>
+          </Link>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -210,14 +223,23 @@ function StatsPanelUnified({
 
 function breakdownPills(breakdown?: TimeBreakdown) {
   if (!breakdown) return [];
-  return [
-    { key: "years", value: breakdown.years, label: "Y" },
-    { key: "months", value: breakdown.months, label: "MO" },
-    { key: "weeks", value: breakdown.weeks, label: "W" },
-    { key: "days", value: breakdown.days, label: "D" },
-    { key: "hours", value: breakdown.hours, label: "H" },
-    { key: "minutes", value: breakdown.minutes, label: "MIN" },
-  ].filter((s) => s.value > 0).slice(0, 3);
+
+  if (breakdown.months > 0 || breakdown.days > 0) {
+    return [
+      { key: "months", value: breakdown.months, label: "MO" },
+      { key: "days", value: breakdown.days, label: "D" },
+      { key: "hours", value: breakdown.hours, label: "H" },
+    ];
+  }
+
+  if (breakdown.hours > 0) {
+    return [
+      { key: "hours", value: breakdown.hours, label: "H" },
+      { key: "minutes", value: breakdown.minutes, label: "MIN" },
+    ];
+  }
+
+  return [{ key: "minutes", value: breakdown.minutes, label: "MIN" }];
 }
 
 function StatsPanelCards({
@@ -452,14 +474,17 @@ export default function ProfileScreen() {
   const stats = useQuery(api.stats.getUserStats);
   const favorites = useQuery(api.stats.getUserFavorites, { limit: 60 });
   const lists = useQuery(api.lists.getUserLists);
-  const dashboard = useQuery(api.shows.getHomeDashboard, {});
+  const library = useQuery(api.shows.getLibrary, {});
   const upsertUserProfile = useMutation(api.stats.upsertUserProfile);
 
   const isLoading =
-    stats === undefined || favorites === undefined || lists === undefined || dashboard === undefined;
+    stats === undefined || favorites === undefined || lists === undefined || library === undefined;
 
   const heroBackdrop =
-    stats?.bannerUrl ?? dashboard?.shows?.[0]?.backdropUrl ?? dashboard?.movies?.[0]?.backdropUrl ?? null;
+    stats?.bannerUrl ??
+    library?.find((entry) => typeof entry.backdropUrl === "string" && entry.backdropUrl.length > 0)
+      ?.backdropUrl ??
+    null;
   const heroBackdropUrl = toHttpsImageUrl(heroBackdrop);
   const avatarUrl = toHttpsImageUrl(stats?.avatarUrl);
 
@@ -507,7 +532,7 @@ export default function ProfileScreen() {
 
   const activeTvRailItems = useMemo<RailItem[]>(
     () =>
-      (dashboard?.shows ?? [])
+      (library ?? [])
         .filter((entry) => entry.mediaType === "tv")
         .map((entry) => ({
           key: `active-tv-${entry.id ?? entry.title}`,
@@ -526,12 +551,12 @@ export default function ProfileScreen() {
               : formatStatus(entry.status),
           badge: "TV",
         })),
-    [dashboard]
+    [library]
   );
 
   const activeAnimeRailItems = useMemo<RailItem[]>(
     () =>
-      (dashboard?.shows ?? [])
+      (library ?? [])
         .filter((entry) => entry.mediaType === "anime")
         .map((entry) => ({
           key: `active-anime-${entry.id ?? entry.title}`,
@@ -550,12 +575,14 @@ export default function ProfileScreen() {
               : formatStatus(entry.status),
           badge: "Anime",
         })),
-    [dashboard]
+    [library]
   );
 
   const activeMovieRailItems = useMemo<RailItem[]>(
     () =>
-      (dashboard?.movies ?? []).map((entry) => ({
+      (library ?? [])
+        .filter((entry) => entry.mediaType === "movie")
+        .map((entry) => ({
         key: `active-movie-${entry.id ?? entry.title}`,
         routeId: getRouteId({
           mediaType: entry.mediaType,
@@ -568,19 +595,20 @@ export default function ProfileScreen() {
         meta: formatStatus(entry.status),
         badge: "Movie",
       })),
-    [dashboard]
+    [library]
   );
 
   const railPageSize = isDesktop ? 14 : 8;
+  const activeRailVisibleCount = Math.max(visibleRailCount, 40);
 
   const hasMoreRails =
     (lists?.length ?? 0) > visibleRailCount ||
     favoriteTvRailItems.length > visibleRailCount ||
     favoriteAnimeRailItems.length > visibleRailCount ||
-    activeTvRailItems.length > visibleRailCount ||
-    activeAnimeRailItems.length > visibleRailCount ||
+    activeTvRailItems.length > activeRailVisibleCount ||
+    activeAnimeRailItems.length > activeRailVisibleCount ||
     favoriteMovieRailItems.length > visibleRailCount ||
-    activeMovieRailItems.length > visibleRailCount;
+    activeMovieRailItems.length > activeRailVisibleCount;
 
   const visibleLists = useMemo(
     () => (lists ?? []).slice(0, visibleRailCount),
@@ -595,20 +623,20 @@ export default function ProfileScreen() {
     [favoriteAnimeRailItems, visibleRailCount]
   );
   const visibleActiveTvRailItems = useMemo(
-    () => activeTvRailItems.slice(0, visibleRailCount),
-    [activeTvRailItems, visibleRailCount]
+    () => activeTvRailItems.slice(0, activeRailVisibleCount),
+    [activeTvRailItems, activeRailVisibleCount]
   );
   const visibleActiveAnimeRailItems = useMemo(
-    () => activeAnimeRailItems.slice(0, visibleRailCount),
-    [activeAnimeRailItems, visibleRailCount]
+    () => activeAnimeRailItems.slice(0, activeRailVisibleCount),
+    [activeAnimeRailItems, activeRailVisibleCount]
   );
   const visibleFavoriteMovieRailItems = useMemo(
     () => favoriteMovieRailItems.slice(0, visibleRailCount),
     [favoriteMovieRailItems, visibleRailCount]
   );
   const visibleMovieRailItems = useMemo(
-    () => activeMovieRailItems.slice(0, visibleRailCount),
-    [activeMovieRailItems, visibleRailCount]
+    () => activeMovieRailItems.slice(0, activeRailVisibleCount),
+    [activeMovieRailItems, activeRailVisibleCount]
   );
 
   useEffect(() => {
@@ -976,6 +1004,8 @@ export default function ProfileScreen() {
             title="TV Shows"
             icon="tv-outline"
             rightLabel={`${activeTvRailItems.length} TRACKED`}
+            actionLabel="Show all"
+            actionHref="/library?media=tv"
           />
           <PosterRail
             items={visibleActiveTvRailItems}
@@ -989,6 +1019,8 @@ export default function ProfileScreen() {
             title="Anime"
             icon="planet-outline"
             rightLabel={`${activeAnimeRailItems.length} TRACKED`}
+            actionLabel="Show all"
+            actionHref="/library?media=anime"
           />
           <PosterRail
             items={visibleActiveAnimeRailItems}
@@ -1001,13 +1033,41 @@ export default function ProfileScreen() {
           <SectionHeader
             title="Movies"
             icon="film-outline"
-            rightLabel={`${dashboard?.movies?.length ?? 0} TRACKED`}
+            rightLabel={`${activeMovieRailItems.length} TRACKED`}
+            actionLabel="Show all"
+            actionHref="/library?media=movie"
           />
           <PosterRail
             items={visibleMovieRailItems}
             emptyMessage="Add movies to your library to see them here"
             isDesktop={isDesktop}
           />
+        </View>
+
+        <View className="mt-8">
+          <SectionHeader title="Data" icon="download-outline" />
+          <Link href="/import" asChild>
+            <Pressable className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
+              <LinearGradient
+                colors={["rgba(239,68,68,0.12)", "rgba(239,68,68,0.03)"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={{ paddingHorizontal: 14, paddingVertical: 12 }}
+              >
+                <View className="flex-row items-center gap-3">
+                  <View className="h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+                    <Ionicons name="cloud-upload-outline" size={16} color="#ef4444" />
+                  </View>
+                  <View>
+                    <Text className="text-sm font-bold text-text-primary">Import from TV Time</Text>
+                    <Text className="text-[11px] text-text-muted">
+                      Paste or upload your export JSON
+                    </Text>
+                  </View>
+                </View>
+              </LinearGradient>
+            </Pressable>
+          </Link>
         </View>
 
         {hasMoreRails ? (

@@ -65,15 +65,12 @@ export function matchesStatusFilter(
   }
 
   const status = normalizeTrackingStatus(item.status);
-  const watchedEpisodes =
-    typeof item.watchedEpisodes === "number" ? item.watchedEpisodes : 0;
-
   if (filter === "watched") {
-    return status === "completed" || watchedEpisodes > 0;
+    return status === "completed";
   }
 
   if (filter === "not_watched") {
-    return status !== "completed" && watchedEpisodes <= 0;
+    return status !== "completed";
   }
 
   return status === filter;

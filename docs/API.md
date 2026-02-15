@@ -1,4 +1,6 @@
-# ShowTracker API Reference
+# API Reference
+
+External API documentation for ShowTracker.
 
 ## TMDB (The Movie Database)
 
@@ -23,8 +25,6 @@
 
 ### Image URL Construction
 
-TMDB serves images via their CDN. Construct URLs as:
-
 ```
 https://image.tmdb.org/t/p/{size}{path}
 ```
@@ -33,20 +33,7 @@ https://image.tmdb.org/t/p/{size}{path}
 **Backdrop sizes**: `w300`, `w780`, `w1280`, `original`
 **Still sizes** (episodes): `w92`, `w185`, `w300`, `original`
 
-Example:
-```
-https://image.tmdb.org/t/p/w500/path-from-api.jpg
-```
-
-### Common Query Parameters
-
-| Param | Description |
-|-------|-------------|
-| `api_key` | Your TMDB API key |
-| `language` | Response language (default: en-US) |
-| `page` | Pagination (1-based, max 500) |
-| `query` | Search query string |
-| `include_adult` | Include adult content (default: false) |
+Example: `https://image.tmdb.org/t/p/w500/path-from-api.jpg`
 
 ---
 
@@ -71,24 +58,10 @@ https://image.tmdb.org/t/p/w500/path-from-api.jpg
 
 ### Embed Parameters
 
-TVMaze supports embedding related resources to reduce API calls:
-
 ```
 /shows/1?embed=episodes         # Show + all episodes
 /shows/1?embed[]=episodes&embed[]=seasons  # Show + episodes + seasons
 ```
-
-### Schedule Response Shape
-
-Each schedule entry includes:
-- `id`: Episode ID
-- `name`: Episode name
-- `season`: Season number
-- `number`: Episode number
-- `airdate`: "2026-02-08"
-- `airtime`: "20:00"
-- `runtime`: Minutes
-- `show`: Embedded show object with name, image, etc.
 
 ---
 
@@ -97,13 +70,13 @@ Each schedule entry includes:
 **Endpoint**: `https://graphql.anilist.co`
 **Method**: POST (GraphQL)
 **Auth**: None required for read operations
-**Rate Limit**: 30 requests/minute (degraded from 90)
+**Rate Limit**: 30 requests/minute
 **Docs**: [docs.anilist.co](https://docs.anilist.co)
 
 ### Key Queries
 
-#### Search Anime
 ```graphql
+# Search Anime
 query SearchAnime($search: String, $page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
     pageInfo { total currentPage lastPage hasNextPage }
@@ -123,10 +96,8 @@ query SearchAnime($search: String, $page: Int, $perPage: Int) {
     }
   }
 }
-```
 
-#### Trending Anime
-```graphql
+# Trending Anime
 query TrendingAnime($page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
     media(type: ANIME, sort: TRENDING_DESC) {
@@ -143,61 +114,31 @@ query TrendingAnime($page: Int, $perPage: Int) {
 }
 ```
 
-#### Airing Schedule
-```graphql
-query AiringSchedule($airingAtGreater: Int, $airingAtLesser: Int) {
-  Page(page: 1, perPage: 50) {
-    airingSchedules(
-      airingAt_greater: $airingAtGreater
-      airingAt_lesser: $airingAtLesser
-      sort: TIME
-    ) {
-      airingAt
-      episode
-      media {
-        id
-        title { romaji english }
-        coverImage { large }
-      }
-    }
-  }
-}
-```
-
-Note: `airingAt_greater` and `airingAt_lesser` use Unix timestamps.
-
 ### Rate Limit Headers
 
-AniList returns rate limit info in response headers:
 - `X-RateLimit-Limit`: Max requests per minute
 - `X-RateLimit-Remaining`: Remaining requests
 - `Retry-After`: Seconds to wait (on 429)
 
 ---
 
-## Jikan v4 (MyAnimeList Unofficial)
+## Jikan v4
 
 **Base URL**: `https://api.jikan.moe/v4`
 **Auth**: None required
 **Rate Limit**: 60 requests/minute, 3 requests/second
 **Use Case**: Fallback when AniList rate limits are hit
-**Docs**: [docs.api.jikan.moe](https://docs.api.jikan.moe)
 
 ### Key Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/anime?q=query&page=1` | GET | Search anime |
-| `/anime/{id}` | GET | Anime details |
-| `/anime/{id}/episodes` | GET | Episode list |
-| `/top/anime` | GET | Top anime |
-| `/seasons/now` | GET | Currently airing anime |
-| `/schedules?filter=monday` | GET | Airing schedule by day |
-
-### When to Use Jikan vs AniList
-- **Default**: Use AniList (better data structure, GraphQL flexibility)
-- **Fallback**: Switch to Jikan when AniList returns 429 (rate limited)
-- **Schedule by day**: Jikan's `/schedules` endpoint is simpler for day-based schedule views
+| Endpoint | Description |
+|----------|-------------|
+| `/anime?q=query&page=1` | Search anime |
+| `/anime/{id}` | Anime details |
+| `/anime/{id}/episodes` | Episode list |
+| `/top/anime` | Top anime |
+| `/seasons/now` | Currently airing anime |
+| `/schedules?filter=monday` | Airing schedule by day |
 
 ---
 
@@ -205,23 +146,18 @@ AniList returns rate limit info in response headers:
 
 **Base URL**: `https://data.simkl.in`
 **Auth**: None
-**Rate Limit**: None (CDN-hosted static files)
+**Rate Limit**: None (CDN-hosted)
 **Update Frequency**: Every 6 hours
-**Use Case**: Pre-built schedule data covering TV + anime + movies
 
-### Calendar URLs
-
-```
+```text
 https://data.simkl.in/calendar/tv.json       # TV show schedule
 https://data.simkl.in/calendar/anime.json     # Anime schedule
 https://data.simkl.in/calendar/movies.json    # Movie releases
 ```
 
-These are static JSON files updated periodically. Good for bulk schedule loading without hitting per-request rate limits.
-
 ---
 
-## Unified Type Mappings
+## Normalized Type Mappings
 
 All API responses are normalized to shared types in `lib/api/types.ts`.
 
@@ -229,7 +165,7 @@ All API responses are normalized to shared types in `lib/api/types.ts`.
 
 | Field | TMDB | AniList | TVMaze | Jikan |
 |-------|------|---------|--------|-------|
-| `id` | `id` (number) | `id` (number) | `id` (number) | `mal_id` (number) |
+| `id` | `id` | `id` | `id` | `mal_id` |
 | `title` | `name` or `title` | `title.english` or `title.romaji` | `name` | `title` |
 | `overview` | `overview` | `description` (strip HTML) | `summary` (strip HTML) | `synopsis` |
 | `posterUrl` | `image.tmdb.org/t/p/w500{poster_path}` | `coverImage.large` | `image.medium` | `images.jpg.large_image_url` |
@@ -237,10 +173,7 @@ All API responses are normalized to shared types in `lib/api/types.ts`.
 | `mediaType` | `media_type` field | Always `"anime"` | Always `"tv"` | Always `"anime"` |
 | `status` | `status` | `status` | `status` | `status` |
 | `rating` | `vote_average` (0-10) | `averageScore` (0-100, divide by 10) | `rating.average` | `score` (0-10) |
-| `totalEpisodes` | `number_of_episodes` | `episodes` | — (count from episodes list) | `episodes` |
-| `genres` | `genre_ids` → lookup | `genres[]` | `genres[]` | `genres[].name` |
-| `source` | `"tmdb"` | `"anilist"` | `"tvmaze"` | `"jikan"` |
-| `externalId` | TMDB ID | AniList ID | TVMaze ID | MAL ID |
+| `totalEpisodes` | `number_of_episodes` | `episodes` | — | `episodes` |
 
 ### NormalizedEpisode
 
@@ -253,3 +186,67 @@ All API responses are normalized to shared types in `lib/api/types.ts`.
 | `airDate` | `air_date` | Unix timestamp → ISO string | `airdate` |
 | `stillUrl` | `image.tmdb.org/t/p/w300{still_path}` | — | `image.medium` |
 | `runtime` | `runtime` | — | `runtime` |
+
+---
+
+## Status Normalization
+
+All API statuses normalized to consistent format:
+
+```typescript
+// Input → Output
+"Returning Series" → "returning"
+"Ended" → "ended"
+"RELEASING" → "airing"
+"FINISHED" → "finished"
+"Currently Airing" → "airing"
+```
+
+---
+
+## Fallback Strategy
+
+### Missing Air Dates
+- Default: Episode treated as "released" (optimistic)
+- UI shows: "Air date TBA"
+
+### Missing Runtime
+- TV/Anime: 24 minutes (default episode length)
+- Movie: 110 minutes (average movie)
+
+### Missing Episode Count
+- TV: Calculated from seasons array
+- Anime: Default 12 episodes (standard season)
+
+### Missing Images
+1. Episode stillUrl
+2. Show backdropUrl
+3. Show posterUrl
+4. Generic placeholder with episode number
+
+---
+
+## API-Specific Behaviors
+
+- **TMDB (TV)**: Best episode images (stills), complete season/episode data
+- **TMDB (Movies)**: Full runtime always available, no episode structure
+- **AniList**: No episode-level data in basic queries, relations graph for franchise continuity
+- **Jikan**: Episode list with titles and air dates, no episode images
+- **TVMaze**: Episode images via TV recordings, accurate air dates
+
+---
+
+## Validation
+
+```typescript
+function validateNormalizedShow(show: NormalizedShow): string[] {
+  const errors: string[] = [];
+  if (!show.id) errors.push("Missing id");
+  if (!show.mediaType) errors.push("Missing mediaType");
+  if (!show.title) errors.push("Missing title");
+  if (!show.episodeRuntime || show.episodeRuntime <= 0) {
+    errors.push("Missing or invalid episodeRuntime");
+  }
+  return errors;
+}
+```

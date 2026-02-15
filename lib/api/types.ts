@@ -15,6 +15,7 @@ export type NormalizedShow = {
   rating?: number;
   firstAired?: string;
   tmdbId?: number;
+  tvdbId?: number;
   anilistId?: number;
   malId?: number;
   tvmazeId?: number;

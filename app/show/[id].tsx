@@ -86,7 +86,7 @@ type WatchActionTarget =
       releasedEpisodes: NormalizedEpisode[];
     };
 
-const trackingStatusOptions: {
+const seriesTrackingStatusOptions: {
   value: ShowTrackingStatus;
   label: string;
   description: string;
@@ -115,6 +115,28 @@ const trackingStatusOptions: {
     value: "completed",
     label: "Completed",
     description: "Finished the entire title",
+  },
+];
+
+const movieTrackingStatusOptions: {
+  value: ShowTrackingStatus;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "plan_to_watch",
+    label: "Planned",
+    description: "Saved for later",
+  },
+  {
+    value: "completed",
+    label: "Watched",
+    description: "Already watched this movie",
+  },
+  {
+    value: "dropped",
+    label: "Dropped",
+    description: "No longer in your movie queue",
   },
 ];
 
@@ -655,6 +677,29 @@ export function ShowDetailScreen() {
   const activeTrackingStatus: ShowTrackingStatus = isTrackingStatus(tracking?.status)
     ? tracking.status
     : "plan_to_watch";
+
+  const trackingStatusOptions = useMemo(
+    () =>
+      show?.mediaType === "movie"
+        ? movieTrackingStatusOptions
+        : seriesTrackingStatusOptions,
+    [show?.mediaType]
+  );
+
+  const activeTrackingStatusForMenu = useMemo<ShowTrackingStatus>(() => {
+    const isCurrentStatusInMenu = trackingStatusOptions.some(
+      (option) => option.value === activeTrackingStatus
+    );
+    if (isCurrentStatusInMenu) {
+      return activeTrackingStatus;
+    }
+
+    if (show?.mediaType === "movie") {
+      return "plan_to_watch";
+    }
+
+    return activeTrackingStatus;
+  }, [activeTrackingStatus, show?.mediaType, trackingStatusOptions]);
 
   const relatedAnimeTrackingArgs = useMemo(() => {
     if (!show || show.mediaType !== "anime") {
@@ -1983,8 +2028,9 @@ export function ShowDetailScreen() {
   const isWatchlistActionPending = isAddingToWatchlist || isRemovingFromWatchlist;
   const isStatusMenuBusy = isSettingStatus || isWatchlistActionPending;
   const activeTrackingOption =
-    trackingStatusOptions.find((option) => option.value === activeTrackingStatus) ??
-    trackingStatusOptions[1];
+    trackingStatusOptions.find((option) => option.value === activeTrackingStatusForMenu) ??
+    trackingStatusOptions.find((option) => option.value === "plan_to_watch") ??
+    trackingStatusOptions[0];
   const watchlistActionLabel = isAddingToWatchlist
     ? "Adding..."
     : isRemovingFromWatchlist
@@ -2704,7 +2750,7 @@ export function ShowDetailScreen() {
           <View className="w-full max-w-sm overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
             <View className="border-b border-border-default px-4 pb-3 pt-4">
               <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Edit Tracking
+                {show.mediaType === "movie" ? "Edit Movie Status" : "Edit Tracking"}
               </Text>
               <Text className="mt-1 text-lg font-black text-text-primary" numberOfLines={2}>
                 {cleanedShowTitle}
@@ -2712,7 +2758,9 @@ export function ShowDetailScreen() {
               <Text className="mt-2 text-sm text-text-secondary">
                 {tracking?.inWatchlist
                   ? `Current status: ${activeTrackingOption.label}`
-                  : "Pick a status to add this title to your watchlist."}
+                  : show.mediaType === "movie"
+                    ? "Pick a status to add this movie to your queue."
+                    : "Pick a status to add this title to your watchlist."}
               </Text>
               {show.mediaType === "anime" ? (
                 <Text className="mt-1 text-xs text-text-muted">
@@ -2723,7 +2771,8 @@ export function ShowDetailScreen() {
 
             <View className="gap-2 p-4">
               {trackingStatusOptions.map((option) => {
-                const isActive = !!tracking?.inWatchlist && activeTrackingStatus === option.value;
+                const isActive =
+                  !!tracking?.inWatchlist && activeTrackingStatusForMenu === option.value;
                 return (
                   <Pressable
                     key={option.value}

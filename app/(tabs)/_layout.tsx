@@ -56,6 +56,15 @@ export default function TabsLayout() {
             }}
           />
           <Tabs.Screen
+            name="recommendations"
+            options={{
+              title: "For You",
+              tabBarIcon: ({ color, focused }) => (
+                <Ionicons name={focused ? "sparkles" : "sparkles-outline"} size={22} color={color} />
+              ),
+            }}
+          />
+          <Tabs.Screen
             name="search"
             options={{
               title: "Search",

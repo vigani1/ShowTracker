@@ -14,7 +14,7 @@ export type TvMazeShow = {
   status?: string;
   premiered?: string | null;
   runtime?: number | null;
-  externals?: { imdb?: string | null };
+  externals?: { imdb?: string | null; thetvdb?: number | null };
 };
 
 export type TvMazeEpisode = {
@@ -136,6 +136,25 @@ export async function lookupTvMazeShowByImdb(imdbId: string) {
     return cached;
   }
   const data = await request<TvMazeShow>("/lookup/shows", { imdb: normalizedImdbId });
+  setCached(cacheKey, data, cacheTtlMs);
+  return data;
+}
+
+export async function lookupTvMazeShowByTvdb(tvdbId: number | string) {
+  const normalizedTvdbId = String(tvdbId).trim();
+  if (!normalizedTvdbId || normalizedTvdbId === "-1" || normalizedTvdbId === "0") {
+    throw new Error("Invalid TVDB id for TVMaze lookup");
+  }
+
+  const cacheKey = `tvmaze-lookup-tvdb:${normalizedTvdbId}`;
+  const cached = getCached<TvMazeShow>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const data = await request<TvMazeShow>("/lookup/shows", {
+    thetvdb: normalizedTvdbId,
+  });
   setCached(cacheKey, data, cacheTtlMs);
   return data;
 }

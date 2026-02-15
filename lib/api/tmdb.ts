@@ -1,6 +1,6 @@
 import { getCached, setCached } from "@/lib/api/cache";
-import { normalizeTmdbEpisode } from "@/lib/api/normalize";
-import type { NormalizedEpisode } from "@/lib/api/types";
+import { normalizeTmdbEpisode, normalizeTmdbMedia } from "@/lib/api/normalize";
+import type { NormalizedEpisode, NormalizedShow } from "@/lib/api/types";
 import {
   lookupTvMazeShowByImdb,
   searchTvMazeShows,
@@ -52,6 +52,32 @@ export type TmdbSearchResult = {
   results: TmdbMedia[];
   total_pages: number;
   total_results: number;
+};
+
+export type TmdbNormalizedResult = {
+  page: number;
+  totalPages: number;
+  totalResults: number;
+  items: NormalizedShow[];
+};
+
+function normalizeTmdbSearchResult(data: TmdbSearchResult): TmdbNormalizedResult {
+  return {
+    page: data.page,
+    totalPages: data.total_pages,
+    totalResults: data.total_results,
+    items: data.results
+      .filter((item) => item.media_type !== "person")
+      .map((item) => normalizeTmdbMedia(item)),
+  };
+}
+
+export type TmdbFilterParams = {
+  with_genres?: string;
+  first_air_date_year?: number;
+  primary_release_year?: number;
+  vote_average_gte?: number;
+  with_status?: string;
 };
 
 export type TmdbMedia = {
@@ -112,6 +138,37 @@ export type TmdbEpisode = {
   runtime?: number | null;
 };
 
+type TmdbFindResponse = {
+  movie_results: TmdbMedia[];
+  tv_results: TmdbMedia[];
+  person_results: TmdbMedia[];
+};
+
+export type TmdbFindNormalizedResult = {
+  items: NormalizedShow[];
+};
+
+function normalizeTmdbFindResponse(data: TmdbFindResponse): TmdbFindNormalizedResult {
+  const items = [
+    ...data.movie_results.map((entry) =>
+      normalizeTmdbMedia({ ...entry, media_type: "movie" })
+    ),
+    ...data.tv_results.map((entry) => normalizeTmdbMedia({ ...entry, media_type: "tv" })),
+  ];
+
+  const deduped = new Map<string, NormalizedShow>();
+  for (const item of items) {
+    const key = `${item.mediaType}:${item.tmdbId ?? item.id}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, item);
+    }
+  }
+
+  return {
+    items: Array.from(deduped.values()),
+  };
+}
+
 function assertTmdbCredentials() {
   if (!tmdbApiKey && !tmdbReadAccessToken) {
     throw new Error(
@@ -133,7 +190,15 @@ function buildUrl(path: string, params: Record<string, string | number> = {}) {
   return url;
 }
 
-async function request<T>(path: string, params?: Record<string, string | number>) {
+type RequestOptions = {
+  signal?: AbortSignal;
+};
+
+async function request<T>(
+  path: string,
+  params?: Record<string, string | number>,
+  options?: RequestOptions
+) {
   assertTmdbCredentials();
   const url = buildUrl(path, params);
   const maxAttempts = 4;
@@ -158,7 +223,10 @@ async function request<T>(path: string, params?: Record<string, string | number>
   };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const response = await fetch(url.toString(), { headers });
+    const response = await fetch(url.toString(), {
+      headers,
+      signal: options?.signal,
+    });
     if (response.ok) {
       return (await response.json()) as T;
     }
@@ -266,20 +334,86 @@ async function resolveTmdbTvRuntimeFallback(details: TmdbShowDetails) {
 export async function searchTmdb(
   query: string,
   mediaType: "multi" | "tv" | "movie" = "multi",
-  page = 1
+  page = 1,
+  filters?: TmdbFilterParams
 ) {
-  const cacheKey = `tmdb-search:${mediaType}:${query}:${page}`;
-  const cached = getCached<TmdbSearchResult>(cacheKey);
+  const filterKey = filters
+    ? Object.entries(filters)
+        .map(([k, v]) => `${k}:${v}`)
+        .join(",")
+    : "";
+  const cacheKey = `tmdb-search:${mediaType}:${query}:${page}:${filterKey}`;
+  const cached = getCached<TmdbNormalizedResult>(cacheKey);
   if (cached) {
     return cached;
   }
-  const data = await request<TmdbSearchResult>(`/search/${mediaType}`, {
+
+  const params: Record<string, string | number> = {
     query,
     page,
     include_adult: "false",
-  });
-  setCached(cacheKey, data, cacheTtlMs);
-  return data;
+  };
+
+  if (filters) {
+    if (mediaType === "tv" && filters.first_air_date_year) {
+      params.first_air_date_year = filters.first_air_date_year;
+    }
+    if (mediaType === "movie" && filters.primary_release_year) {
+      params.primary_release_year = filters.primary_release_year;
+    }
+  }
+
+  const data = await request<TmdbSearchResult>(`/search/${mediaType}`, params);
+  const normalized = normalizeTmdbSearchResult(data);
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
+}
+
+// Discover endpoint for filtered browsing (better for filters than search)
+export async function discoverTmdb(
+  mediaType: "tv" | "movie",
+  page = 1,
+  filters?: TmdbFilterParams
+) {
+  const filterKey = filters
+    ? Object.entries(filters)
+        .map(([k, v]) => `${k}:${v}`)
+        .join(",")
+    : "";
+  const cacheKey = `tmdb-discover:${mediaType}:${page}:${filterKey}`;
+  const cached = getCached<TmdbNormalizedResult>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const params: Record<string, string | number> = {
+    page,
+    include_adult: "false",
+    sort_by: "popularity.desc",
+  };
+
+  if (filters) {
+    if (filters.with_genres) {
+      params.with_genres = filters.with_genres;
+    }
+    if (filters.first_air_date_year) {
+      params.first_air_date_year = filters.first_air_date_year;
+    }
+    if (filters.primary_release_year) {
+      params.primary_release_year = filters.primary_release_year;
+    }
+    if (filters.vote_average_gte) {
+      params["vote_average.gte"] = filters.vote_average_gte;
+    }
+    if (filters.with_status) {
+      params.with_status = filters.with_status;
+    }
+  }
+
+  const data = await request<TmdbSearchResult>(`/discover/${mediaType}`, params);
+  const normalized = normalizeTmdbSearchResult(data);
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
 }
 
 export async function getTrendingTmdb(
@@ -288,7 +422,7 @@ export async function getTrendingTmdb(
   page = 1
 ) {
   const cacheKey = `tmdb-trending:${mediaType}:${timeWindow}:${page}`;
-  const cached = getCached<TmdbSearchResult>(cacheKey);
+  const cached = getCached<TmdbNormalizedResult>(cacheKey);
   if (cached) {
     return cached;
   }
@@ -296,8 +430,51 @@ export async function getTrendingTmdb(
     `/trending/${mediaType}/${timeWindow}`,
     { page }
   );
-  setCached(cacheKey, data, cacheTtlMs);
-  return data;
+  const normalized = normalizeTmdbSearchResult(data);
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
+}
+
+export async function findTmdbByImdbId(imdbId: string) {
+  const normalized = imdbId.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const cacheKey = `tmdb-find:imdb:${normalized}`;
+  const cached = getCached<TmdbFindNormalizedResult>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const data = await request<TmdbFindResponse>(`/find/${encodeURIComponent(normalized)}`, {
+    external_source: "imdb_id",
+  });
+
+  const normalizedResult = normalizeTmdbFindResponse(data);
+  setCached(cacheKey, normalizedResult, cacheTtlMs);
+  return normalizedResult;
+}
+
+export async function findTmdbByTvdbId(tvdbId: number | string) {
+  const normalized = String(tvdbId).trim();
+  if (!normalized || normalized === "-1" || normalized === "0") {
+    return null;
+  }
+
+  const cacheKey = `tmdb-find:tvdb:${normalized}`;
+  const cached = getCached<TmdbFindNormalizedResult>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const data = await request<TmdbFindResponse>(`/find/${encodeURIComponent(normalized)}`, {
+    external_source: "tvdb_id",
+  });
+
+  const normalizedResult = normalizeTmdbFindResponse(data);
+  setCached(cacheKey, normalizedResult, cacheTtlMs);
+  return normalizedResult;
 }
 
 export async function getTmdbShowDetails(
@@ -334,4 +511,96 @@ export async function getTmdbEpisodeDetails(
     `/tv/${id}/season/${seasonNumber}/episode/${episodeNumber}`
   );
   return normalizeTmdbEpisode(response);
+}
+
+// Get recommendations based on a movie
+export async function getMovieRecommendations(
+  movieId: number,
+  page = 1,
+  options?: RequestOptions
+): Promise<NormalizedShow[]> {
+  const cacheKey = `tmdb-movie-recommendations:${movieId}:${page}`;
+  const cached = getCached<NormalizedShow[]>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const data = await request<TmdbSearchResult>(
+    `/movie/${movieId}/recommendations`,
+    { page },
+    options
+  );
+  const normalized = data.results
+    .filter((item) => item.media_type !== "person")
+    .map((item) => normalizeTmdbMedia(item));
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
+}
+
+// Get recommendations based on a TV show
+export async function getTvRecommendations(
+  tvId: number,
+  page = 1,
+  options?: RequestOptions
+): Promise<NormalizedShow[]> {
+  const cacheKey = `tmdb-tv-recommendations:${tvId}:${page}`;
+  const cached = getCached<NormalizedShow[]>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const data = await request<TmdbSearchResult>(
+    `/tv/${tvId}/recommendations`,
+    { page },
+    options
+  );
+  const normalized = data.results
+    .filter((item) => item.media_type !== "person")
+    .map((item) => normalizeTmdbMedia(item));
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
+}
+
+// Get similar movies
+export async function getSimilarMovies(
+  movieId: number,
+  page = 1,
+  options?: RequestOptions
+): Promise<NormalizedShow[]> {
+  const cacheKey = `tmdb-similar-movies:${movieId}:${page}`;
+  const cached = getCached<NormalizedShow[]>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const data = await request<TmdbSearchResult>(
+    `/movie/${movieId}/similar`,
+    { page },
+    options
+  );
+  const normalized = data.results
+    .filter((item) => item.media_type !== "person")
+    .map((item) => normalizeTmdbMedia(item));
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
+}
+
+// Get similar TV shows
+export async function getSimilarTv(
+  tvId: number,
+  page = 1,
+  options?: RequestOptions
+): Promise<NormalizedShow[]> {
+  const cacheKey = `tmdb-similar-tv:${tvId}:${page}`;
+  const cached = getCached<NormalizedShow[]>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const data = await request<TmdbSearchResult>(
+    `/tv/${tvId}/similar`,
+    { page },
+    options
+  );
+  const normalized = data.results
+    .filter((item) => item.media_type !== "person")
+    .map((item) => normalizeTmdbMedia(item));
+  setCached(cacheKey, normalized, cacheTtlMs);
+  return normalized;
 }

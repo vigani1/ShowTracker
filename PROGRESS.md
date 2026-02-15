@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 10: Reliability & Quality Hardening
+Phase 12: Notifications
 
 ## Completed
 
@@ -169,13 +169,6 @@ Phase 10: Reliability & Quality Hardening
   - [x] Fixed anime watch time not counting (fallback to show-level `episodeRuntime`)
   - [x] Fixed all watched-episode mutations to persist runtime for anime via show-level fallback
   - [x] Anime season canonicalization: normalize franchises so season-based entries are grouped correctly (avoid split rows like "Title Season 1" + "Title Season 2" unless intended)
-
-## PR Readiness Snapshot (current branch)
-
-- [x] `npx expo lint` passes
-- [x] `npx tsc --noEmit` passes
-
-- [x] Phase 10: Reliability & Quality Hardening
   - [x] Metadata completeness hardening with comprehensive fallback system (`lib/metadata-utils.ts`)
   - [x] Anime episode image validation and fallback documentation (`lib/anime-episode-images.ts`)
   - [x] Watch actions regression checklist (`docs/REGRESSION_WATCH_ACTIONS.md`)
@@ -190,20 +183,21 @@ Phase 10: Reliability & Quality Hardening
   - [x] Enhanced normalization with defaults and validation (`lib/api/normalize.ts`)
   - [x] On Mobile view we need to remove some of the spacing on some pages like the show details and the custom list view as its to much and makes the view seem to narrow on the sides, on the show/anime/movie details page the header is good but things under it have more margins so it looks to narrow under the header. (Fixed: reduced px-3 to px-1 in show detail, reduced containerPadding from 16 to 12 in list detail)
   - [x] When trying to open shows from the custom lists i get errors saying invalid show ID (Fixed: updated externalId format in convex/lists.ts to include mediaType)
+  - [x] Recommendations now use watch-history seeds with normalized API responses
+  - [x] Discover + For You exclude already tracked TV shows and movies
+  - [x] Import merge logic dedupes across identifier aliases (tmdb/tvdb/imdb/anilist/mal/tvmaze) + title/year fallback
+  - [x] Convex show lookup adds imdb/title/year fallback matching to prevent duplicate show rows during import
+  - [x] Delete-list flow now respects browser/app back history first (fallback to Home only when no prior route)
+
+## PR Readiness Snapshot (current branch)
+
+- [x] `npx expo lint` passes
+- [x] `npx tsc --noEmit` passes
 
 ## Pending
 
-### Phase 11: Platform Upgrade & Expansion
+### Phase 12: Notifications
 
-- [ ] Add filters from api data like category of show/movie etc whatever we can.
 - [ ] Notifications for new episodes (push notifications)
-- [ ] Import from TVTime/Trakt
-- [ ] Recommendations based on watch history
 
-## Known Issues
-
-- React Native Web emits `props.pointerEvents is deprecated. Use style.pointerEvents` warning from upstream internals.
-- Some API records still arrive without complete metadata (air dates, runtimes, or totals), requiring additional fallback validation.
-- Duplicate anime entries can appear when TMDB show feeds overlap with AniList/Jikan results.
-- Anime source mismatch: TMDB can return anime without season structure while AniList can expose seasonized entries as separate shows, causing split titles.
-- Continue UX QA pass for non-tab/detail screens on very small mobile heights.
+### Phase 13: UI/UX Polish and Manual QA

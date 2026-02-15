@@ -1,4 +1,6 @@
-# ShowTracker Tech Stack & Development Guide
+# Development Guide
+
+Setup, environment, and development workflows.
 
 ## Prerequisites
 
@@ -20,7 +22,7 @@ cd ShowTracker
 # 2. Install dependencies
 npm install
 
-# 3. Initialize Convex (if not already done)
+# 3. Initialize Convex
 npx convex init
 
 # 4. Set up environment variables
@@ -68,6 +70,8 @@ For server-side secrets (Convex actions that call external APIs), set them via t
 npx convex env set TMDB_API_KEY your_key_here
 ```
 
+---
+
 ## Running Development
 
 You need **two terminals** running simultaneously:
@@ -95,6 +99,8 @@ npx expo start --android
 # Clear cache and start fresh
 npx expo start --clear
 ```
+
+---
 
 ## Building & Deploying
 
@@ -124,6 +130,8 @@ eas build --platform android
 npx expo export --platform web
 ```
 
+---
+
 ## Project Dependencies
 
 ### Core
@@ -144,19 +152,94 @@ npx expo export --platform web
 | react-native-reanimated | Animations |
 | react-native-gesture-handler | Touch gestures |
 
-## Image Rendering Standard
-
-- Use `Image` from `react-native` for core media surfaces (posters, backdrops, and hero images) in app screens.
-- Normalize external image URLs with `toHttpsImageUrl(...)` before passing to `source={{ uri }}`.
-- Use `resizeMode="cover"` for poster/backdrop fills unless a specific screen needs different behavior.
-- If an image URL is missing or empty, render a placeholder view rather than mounting an image with an empty URI.
-- Treat `expo-image` as optional for targeted use cases, not the default for core show/movie poster rendering.
-
 ### State & Storage
 | Package | Purpose |
 |---------|---------|
 | zustand | Client state management |
 | react-native-mmkv | Fast key-value storage |
+
+---
+
+## Testing with Browser Automation
+
+### Prerequisites
+
+1. **Start the Expo dev server:**
+   ```bash
+   npx expo start --web
+   ```
+
+2. **Start Convex dev server (if testing backend features):**
+   ```bash
+   npx convex dev
+   ```
+
+### Test Credentials
+
+Test credentials are stored in `.env.test` (do not commit this file).
+Copy `.env.example` to `.env.test` and fill in your test credentials:
+
+```
+TEST_EMAIL=your-test-email@example.com
+TEST_PASSWORD=your-test-password
+```
+
+### Basic Commands
+
+```bash
+# Open a page
+agent-browser open http://localhost:8081
+
+# Wait for page to load
+agent-browser wait --load networkidle
+
+# Get interactive elements
+agent-browser snapshot -i
+
+# Click an element
+agent-browser click @e1
+
+# Fill a textbox
+agent-browser fill @e1 "text"
+
+# Take a screenshot
+agent-browser screenshot
+
+# Get current URL
+agent-browser get url
+
+# Close browser
+agent-browser close
+```
+
+### Login Flow
+
+```bash
+# Navigate to login
+agent-browser open http://localhost:8081/login
+agent-browser wait --load networkidle
+agent-browser snapshot -i
+
+# Fill credentials (use values from .env.test)
+agent-browser fill @e1 "$TEST_EMAIL"  # Email
+agent-browser fill @e2 "$TEST_PASSWORD"        # Password
+
+# Submit
+agent-browser press Enter
+
+# Wait for redirect
+agent-browser wait --url "**/home"
+```
+
+### Guest Login
+
+```bash
+agent-browser open http://localhost:8081/login
+agent-browser find text "Continue as Guest" click
+agent-browser wait --url "**/home"
+```
+
+---
 
 ## Common Errors & Fixes
 
@@ -192,8 +275,6 @@ npx convex dev --once
 ```bash
 # Regenerate Convex types
 npx convex dev --once
-
-# This creates/updates convex/_generated/ directory
 ```
 
 ### Poster/Backdrop Image Not Loading
@@ -209,6 +290,8 @@ npx expo start --clear
 rm -rf .expo
 ```
 
+---
+
 ## Development Workflow
 
 1. Start Convex dev backend (`npx convex dev`)
@@ -217,6 +300,8 @@ rm -rf .expo
 4. If changing Convex schema, the `convex dev` watcher auto-pushes changes
 5. Run linter before committing: `npx expo lint`
 6. Test on web first (fastest iteration), then mobile
+
+---
 
 ## Useful Commands Reference
 
@@ -230,3 +315,4 @@ rm -rf .expo
 | `npx convex dashboard` | Open Convex dashboard |
 | `npx expo lint` | Run linter |
 | `npx expo export --platform web` | Export for web deployment |
+| `npx tsc --noEmit` | TypeScript type check |

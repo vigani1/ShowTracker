@@ -47,6 +47,12 @@ function ShowItemRow({
     <Pressable
       onPress={onPress}
       disabled={isAlreadyInList || isAdding}
+      accessibilityRole="button"
+      accessibilityLabel={
+        isAlreadyInList
+          ? `${show.title} already in list`
+          : `Add ${show.title} to list`
+      }
       className={`flex-row items-center gap-3 rounded-xl border p-3 mb-2 ${
         isAlreadyInList
           ? "border-success/30 bg-success/5"

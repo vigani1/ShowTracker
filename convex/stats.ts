@@ -1,64 +1,72 @@
-import { mutation, query } from "./_generated/server";
-import type { MutationCtx, QueryCtx } from "./_generated/server.js";
-import type { Id } from "./_generated/dataModel";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { mutation, query } from "@/convex/_generated/server";
+import type { MutationCtx, QueryCtx } from "@/convex/_generated/server";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { v } from "convex/values";
-import { auth } from "./auth";
 
 async function getCurrentUserId(ctx: QueryCtx | MutationCtx) {
-  const userId = await auth.getUserId(ctx);
+  const userId = await getAuthUserId(ctx);
   if (!userId) {
     throw new Error("Unauthorized");
   }
-  return userId;
+
+  return userId as Id<"users">;
 }
 
 function formatDuration(minutes: number): string {
   if (minutes <= 0) return "0min";
 
-  const y = Math.floor(minutes / (365.25 * 24 * 60));
-  let rem = minutes - y * 365.25 * 24 * 60;
-  const mo = Math.floor(rem / (30.44 * 24 * 60));
-  rem -= mo * 30.44 * 24 * 60;
-  const w = Math.floor(rem / (7 * 24 * 60));
-  rem -= w * 7 * 24 * 60;
-  const d = Math.floor(rem / (24 * 60));
-  rem -= d * 24 * 60;
-  const h = Math.floor(rem / 60);
-  const m = Math.round(rem - h * 60);
+  const breakdown = formatDurationBreakdown(minutes);
 
-  const units: [number, string][] = [
-    [y, "y"], [mo, "mo"], [w, "w"], [d, "d"], [h, "h"], [m, "min"],
-  ];
-
-  const firstIdx = units.findIndex(([v]) => v > 0);
-  if (firstIdx === -1) return "0min";
-
-  const result = `${units[firstIdx][0]}${units[firstIdx][1]}`;
-  if (firstIdx + 1 < units.length && units[firstIdx + 1][0] > 0) {
-    return `${result} ${units[firstIdx + 1][0]}${units[firstIdx + 1][1]}`;
+  if (breakdown.months > 0) {
+    return `${breakdown.months}mo ${breakdown.days}d ${breakdown.hours}h`;
   }
-  return result;
+
+  if (breakdown.days > 0) {
+    return `${breakdown.days}d ${breakdown.hours}h ${breakdown.minutes}min`;
+  }
+
+  if (breakdown.hours > 0) {
+    return `${breakdown.hours}h ${breakdown.minutes}min`;
+  }
+
+  return `${breakdown.minutes}min`;
 }
 
 function formatDurationBreakdown(minutes: number): {
-  years: number;
   months: number;
-  weeks: number;
   days: number;
   hours: number;
   minutes: number;
 } {
-  const y = Math.floor(minutes / (365.25 * 24 * 60));
-  let rem = minutes - y * 365.25 * 24 * 60;
-  const mo = Math.floor(rem / (30.44 * 24 * 60));
-  rem -= mo * 30.44 * 24 * 60;
-  const w = Math.floor(rem / (7 * 24 * 60));
-  rem -= w * 7 * 24 * 60;
-  const d = Math.floor(rem / (24 * 60));
-  rem -= d * 24 * 60;
-  const h = Math.floor(rem / 60);
-  const m = Math.round(rem - h * 60);
-  return { years: y, months: mo, weeks: w, days: d, hours: h, minutes: m };
+  const monthMinutes = 30.44 * 24 * 60;
+  let rem = minutes;
+
+  let months = Math.floor(rem / monthMinutes);
+  rem -= months * monthMinutes;
+
+  let days = Math.floor(rem / (24 * 60));
+  rem -= days * 24 * 60;
+
+  let hours = Math.floor(rem / 60);
+  let mins = Math.round(rem - hours * 60);
+
+  if (mins === 60) {
+    mins = 0;
+    hours += 1;
+  }
+
+  if (hours === 24) {
+    hours = 0;
+    days += 1;
+  }
+
+  if (days >= 30) {
+    months += Math.floor(days / 30);
+    days %= 30;
+  }
+
+  return { months, days, hours, minutes: mins };
 }
 
 function prettifyHandle(raw: string): string {
@@ -189,84 +197,108 @@ export const getUserStats = query({
   handler: async (ctx) => {
     const userId = await getCurrentUserId(ctx);
 
-    // Get all watched episodes
-    const watchedEpisodes = await ctx.db
-      .query("watchedEpisodes")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .collect();
-
-    // Get all user shows
+    // Get all user shows with precomputed watch aggregates.
     const userShows = await ctx.db
       .query("userShows")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
 
+    // Resolve all referenced shows once to avoid repeated reads.
+    const uniqueShowIds = Array.from(
+      new Set<Id<"shows">>(userShows.map((userShow) => userShow.showId))
+    );
+
+    const showDocs = await Promise.all(uniqueShowIds.map((showId) => ctx.db.get(showId)));
+    const showById = new Map<string, Doc<"shows">>();
+    uniqueShowIds.forEach((showId, index) => {
+      const show = showDocs[index];
+      if (show) {
+        showById.set(showId.toString(), show);
+      }
+    });
+
     // Calculate basic counts
     let uniqueEpisodesWatched = 0;
-    let totalRewatches = 0;
-    let totalWatchTimeMinutes = 0;
+    let totalWatchEvents = 0;
     let tvEpisodes = 0;
     let tvWatchTimeMinutes = 0;
     let animeEpisodes = 0;
     let animeWatchTimeMinutes = 0;
     let movieCount = 0;
+    let movieWatchTimeMinutes = 0;
 
-    const watchedTimestamps: number[] = [];
     const showWatchCounts = new Map<string, number>();
 
-    for (const episode of watchedEpisodes) {
-      const watchCount = episode.watchCount ?? 1;
-
-      uniqueEpisodesWatched += 1;
-      totalRewatches += watchCount - 1;
-
-      // Get show details to resolve runtime fallback
-      const show = await ctx.db.get(episode.showId);
-      const runtime = episode.runtime ?? show?.episodeRuntime ?? 0;
-      totalWatchTimeMinutes += runtime * watchCount;
-
-      if (show) {
-        if (show.mediaType === "tv") {
-          tvEpisodes += watchCount;
-          tvWatchTimeMinutes += runtime * watchCount;
-        } else if (show.mediaType === "anime") {
-          animeEpisodes += watchCount;
-          animeWatchTimeMinutes += runtime * watchCount;
-        }
-
-        // Track per-show watch counts for "most re-watched"
-        const currentShowCount = showWatchCounts.get(show._id.toString()) ?? 0;
-        showWatchCounts.set(show._id.toString(), currentShowCount + watchCount);
+    for (const userShow of userShows) {
+      const show = showById.get(userShow.showId.toString());
+      if (!show) {
+        continue;
       }
 
-      // Track timestamps for streak calculation
+      const watchedEpisodesCount = Math.max(
+        0,
+        Math.floor(userShow.watchedEpisodesCount ?? 0)
+      );
+      const watchedTotalCount = Math.max(
+        watchedEpisodesCount,
+        Math.floor(userShow.watchedTotalCount ?? watchedEpisodesCount)
+      );
+      const rewatchCount = Math.max(watchedTotalCount - watchedEpisodesCount, 0);
+      const fallbackRuntimeMinutes =
+        Math.max(0, show.episodeRuntime ?? 0) * watchedTotalCount;
+      const watchedRuntimeMinutes = Math.max(
+        0,
+        Math.floor(
+          typeof userShow.watchedRuntimeMinutes === "number"
+            ? userShow.watchedRuntimeMinutes
+            : fallbackRuntimeMinutes
+        )
+      );
+
+      uniqueEpisodesWatched += watchedEpisodesCount;
+      totalWatchEvents += rewatchCount;
+
+      if (rewatchCount > 0) {
+        showWatchCounts.set(show._id.toString(), rewatchCount);
+      }
+
+      if (show.mediaType === "tv") {
+        tvEpisodes += watchedTotalCount;
+        tvWatchTimeMinutes += watchedRuntimeMinutes;
+        continue;
+      }
+
+      if (show.mediaType === "anime") {
+        animeEpisodes += watchedTotalCount;
+        animeWatchTimeMinutes += watchedRuntimeMinutes;
+        continue;
+      }
+
+      if (show.mediaType === "movie") {
+        if (userShow.status === "completed") {
+          movieCount += 1;
+        }
+        movieWatchTimeMinutes += watchedRuntimeMinutes;
+      }
+    }
+
+    const totalRewatches = Math.max(totalWatchEvents, 0);
+
+    // Bound streak computation to recent episode rows so large accounts stay under query limits.
+    const streakEpisodeSamples = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_watchedAt", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(10000);
+
+    const watchedTimestamps: number[] = [];
+    for (const episode of streakEpisodeSamples) {
       watchedTimestamps.push(episode.watchedAt);
       if (episode.watchHistory) {
         for (const timestamp of episode.watchHistory) {
           watchedTimestamps.push(timestamp);
         }
       }
-    }
-
-    // Count movies (shows with mediaType === "movie" and status === "completed")
-    const movieShows = [];
-    for (const userShow of userShows) {
-      const show = await ctx.db.get(userShow.showId);
-      if (show && show.mediaType === "movie") {
-        if (userShow.status === "completed") {
-          movieCount++;
-          movieShows.push({
-            title: show.title,
-            runtime: show.episodeRuntime ?? 0,
-          });
-        }
-      }
-    }
-
-    // Calculate movie watch time
-    let movieWatchTimeMinutes = 0;
-    for (const movie of movieShows) {
-      movieWatchTimeMinutes += movie.runtime;
     }
 
     // Calculate streaks
@@ -276,16 +308,14 @@ export const getUserStats = query({
     const topRewatchedEntries = Array.from(showWatchCounts.entries())
       .sort(([, a], [, b]) => b - a)
       .slice(0, 5);
-    
-    const topRewatchedShows = await Promise.all(
-      topRewatchedEntries.map(async ([showId, count]) => {
-        const show = await ctx.db.get(showId as any);
-        return {
-          title: (show as any)?.title ?? "Unknown",
-          watchCount: count,
-        };
-      })
-    );
+
+    const topRewatchedShows = topRewatchedEntries.map(([showId, count]) => {
+      const show = showById.get(showId);
+      return {
+        title: show?.title ?? "Unknown",
+        watchCount: count,
+      };
+    });
 
     // Count completed shows
     const completedShows = userShows.filter((us) => us.status === "completed").length;

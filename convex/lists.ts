@@ -1,14 +1,16 @@
-import { query, mutation } from "./_generated/server";
-import type { QueryCtx, MutationCtx } from "./_generated/server.js";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { query, mutation } from "@/convex/_generated/server";
+import type { QueryCtx, MutationCtx } from "@/convex/_generated/server";
+import type { Id } from "@/convex/_generated/dataModel";
 import { v } from "convex/values";
-import { auth } from "./auth";
 
 async function getCurrentUserId(ctx: QueryCtx | MutationCtx) {
-  const userId = await auth.getUserId(ctx);
+  const userId = await getAuthUserId(ctx);
   if (!userId) {
     throw new Error("Unauthorized");
   }
-  return userId;
+
+  return userId as Id<"users">;
 }
 
 export const createList = mutation({

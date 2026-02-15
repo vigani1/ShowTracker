@@ -4,13 +4,16 @@ import {
   Image,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   View,
   useWindowDimensions,
   type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { Link } from "expo-router";
+import { Link, useLocalSearchParams } from "expo-router";
 import { useQuery } from "convex/react";
 import { FlashList } from "@shopify/flash-list";
 import { api } from "@/convex/_generated/api";
@@ -25,7 +28,7 @@ import {
 } from "@/lib/filters/tracking-filters";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
-type LibraryMediaTab = "tv" | "anime" | "movie";
+type LibraryMediaTab = "all" | "tv" | "anime" | "movie";
 type LibraryStatusFilter = TrackingStatusFilter;
 
 type LibraryItem = {
@@ -47,6 +50,8 @@ type LibraryItem = {
   remainingEpisodes: number | null;
   progressPercent: number | null;
   lastActivityAt: number;
+  genres: string[];
+  rating?: number | null;
 };
 
 type LibraryDashboardItem = LibraryItem;
@@ -54,20 +59,26 @@ type LibraryDashboardItem = LibraryItem;
 const GRID_GAP = 12;
 
 const tabOptions = [
+  { value: "all" as const, label: "All" },
   { value: "tv" as const, label: "TV" },
   { value: "anime" as const, label: "Anime" },
   { value: "movie" as const, label: "Movies" },
 ];
 
-const statusOptions: { value: LibraryStatusFilter; label: string }[] = [
+const seriesStatusOptions: { value: LibraryStatusFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "watching", label: "Watching" },
   { value: "plan_to_watch", label: "Planned" },
   { value: "paused", label: "Paused" },
   { value: "completed", label: "Completed" },
   { value: "dropped", label: "Dropped" },
+];
+
+const movieStatusOptions: { value: LibraryStatusFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "plan_to_watch", label: "Planned" },
   { value: "watched", label: "Watched" },
-  { value: "not_watched", label: "Not Watched" },
+  { value: "dropped", label: "Dropped" },
 ];
 
 function getRouteId(item: LibraryItem) {
@@ -96,10 +107,30 @@ function getItemKey(item: LibraryItem) {
 
 function formatStatus(status: string) {
   const normalized = status.trim().toLowerCase();
-  if (normalized === "watchig") return "Watching";
+  if (normalized === "watching") return "Watching";
   if (normalized === "plan_to_watch") return "Plan to Watch";
   const spaced = normalized.replaceAll("_", " ");
   return spaced.slice(0, 1).toUpperCase() + spaced.slice(1);
+}
+
+function formatLibraryCardStatus(item: Pick<LibraryItem, "mediaType" | "status">) {
+  const normalized = item.status.trim().toLowerCase();
+  if (item.mediaType === "movie" && normalized === "completed") {
+    return "Watched";
+  }
+  return formatStatus(item.status);
+}
+
+function parseMediaTab(value: string | string[] | undefined): LibraryMediaTab | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "all" || normalized === "tv" || normalized === "anime" || normalized === "movie") {
+    return normalized;
+  }
+  return null;
 }
 
 function getHomeColumnCount(width: number, isWeb: boolean) {
@@ -145,7 +176,7 @@ function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boole
           end={{ x: 0.5, y: 1 }}
           style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 96 }}
         />
-        {typeof item.remainingEpisodes === "number" && item.remainingEpisodes > 0 ? (
+        {!isMovie && typeof item.remainingEpisodes === "number" && item.remainingEpisodes > 0 ? (
           <View className="absolute right-2 top-2 rounded-md border-2 border-white/20 bg-black/80 px-2.5 py-1.5">
             <Text className="text-[11px] font-black uppercase tracking-wide text-white">
               {item.remainingEpisodes} left
@@ -157,7 +188,7 @@ function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boole
             {item.title}
           </Text>
           <Text className="text-xs text-zinc-400" numberOfLines={1}>
-            {item.firstAired?.slice(0, 4) ?? "TBA"} · {formatStatus(item.status)}
+            {item.firstAired?.slice(0, 4) ?? "TBA"} · {formatLibraryCardStatus(item)}
           </Text>
           {!isMovie && progress > 0 ? (
             <View className="mt-1.5 h-1 overflow-hidden bg-white/15">
@@ -190,50 +221,115 @@ function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boole
 }
 
 export default function LibraryScreen() {
-  const [activeTab, setActiveTab] = useState<LibraryMediaTab>("tv");
+  const params = useLocalSearchParams<{ media?: string | string[] }>();
+  const [activeTab, setActiveTab] = useState<LibraryMediaTab>("all");
   const [statusFilter, setStatusFilter] = useState<LibraryStatusFilter>("all");
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+  const [selectedYear, setSelectedYear] = useState<string>("");
+  const [selectedRating, setSelectedRating] = useState<string>("");
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(8);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
   const [gridWidth, setGridWidth] = useState(0);
-  const dashboard = useQuery(api.shows.getHomeDashboard, {});
+  const libraryItems = useQuery(api.shows.getLibrary, {});
   const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canLoadMoreFromEdgeRef = useRef(true);
 
   const onGridLayout = useCallback((e: LayoutChangeEvent) => {
     setGridWidth(e.nativeEvent.layout.width);
   }, []);
 
+  useEffect(() => {
+    const nextTab = parseMediaTab(params.media);
+    if (nextTab) {
+      setActiveTab(nextTab);
+    }
+  }, [params.media]);
+
   const sourceItems = useMemo(() => {
-    if (!dashboard) return [] as LibraryDashboardItem[];
-    return [...dashboard.shows, ...dashboard.movies] as LibraryDashboardItem[];
-  }, [dashboard]);
+    if (!libraryItems) return [] as LibraryDashboardItem[];
+    return libraryItems as LibraryDashboardItem[];
+  }, [libraryItems]);
 
   const mediaItems = useMemo(
-    () => sourceItems.filter((item) => item.mediaType === activeTab),
+    () =>
+      activeTab === "all"
+        ? sourceItems
+        : sourceItems.filter((item) => item.mediaType === activeTab),
     [activeTab, sourceItems]
   );
 
-  const activeItems = useMemo(
-    () =>
-      applyTrackingFilters(mediaItems, {
-        media: "all",
-        status: statusFilter,
-      }),
-    [mediaItems, statusFilter]
+  const statusOptions = useMemo(
+    () => (activeTab === "movie" ? movieStatusOptions : seriesStatusOptions),
+    [activeTab]
   );
+
+  const availableGenres = useMemo(() => {
+    const genres = new Set<string>();
+    mediaItems.forEach((item) => {
+      item.genres?.forEach((genre) => genres.add(genre));
+    });
+    return Array.from(genres).sort();
+  }, [mediaItems]);
+
+  const activeItems = useMemo(() => {
+    let items = applyTrackingFilters(mediaItems, {
+      media: "all",
+      status: statusFilter,
+    });
+
+    if (selectedGenres.length > 0) {
+      items = items.filter((item) =>
+        selectedGenres.some((genre) => item.genres?.includes(genre))
+      );
+    }
+
+    if (selectedYear) {
+      items = items.filter((item) => item.firstAired?.slice(0, 4) === selectedYear);
+    }
+
+    if (selectedRating) {
+      const minRating = Number(selectedRating);
+      items = items.filter((item) => (item.rating ?? 0) >= minRating);
+    }
+
+    return items;
+  }, [mediaItems, selectedGenres, selectedRating, selectedYear, statusFilter]);
+
+  const toggleGenre = (genre: string) => {
+    setSelectedGenres((prev) =>
+      prev.includes(genre) ? prev.filter((entry) => entry !== genre) : [...prev, genre]
+    );
+  };
+
+  const clearFilters = () => {
+    setSelectedGenres([]);
+    setSelectedYear("");
+    setSelectedRating("");
+    setOpenDropdown(null);
+  };
+
+  const hasActiveFilters =
+    selectedGenres.length > 0 || selectedYear !== "" || selectedRating !== "";
 
   const statusOptionsWithCounts = useMemo(
     () =>
       statusOptions.map((option) => ({
         ...option,
-        count: mediaItems.filter((item) => matchesStatusFilter(item, option.value))
-          .length,
+        count: mediaItems.filter((item) => matchesStatusFilter(item, option.value)).length,
       })),
-    [mediaItems]
+    [mediaItems, statusOptions]
   );
 
-  const isLoading = dashboard === undefined;
+  useEffect(() => {
+    if (!statusOptionsWithCounts.some((option) => option.value === statusFilter)) {
+      setStatusFilter("all");
+    }
+  }, [statusFilter, statusOptionsWithCounts]);
+
+  const isLoading = libraryItems === undefined;
   const effectiveWidth = gridWidth || width;
   const columns = getHomeColumnCount(effectiveWidth, isWeb);
   const pageSize = Math.max(columns * 3, 6);
@@ -242,7 +338,16 @@ export default function LibraryScreen() {
   useEffect(() => {
     setVisibleCount(Math.min(pageSize, activeItems.length));
     setIsLoadingMore(false);
-  }, [activeItems.length, activeTab, pageSize, statusFilter]);
+    canLoadMoreFromEdgeRef.current = true;
+  }, [
+    activeItems.length,
+    activeTab,
+    pageSize,
+    selectedGenres,
+    selectedRating,
+    selectedYear,
+    statusFilter,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -255,14 +360,40 @@ export default function LibraryScreen() {
     [activeItems, visibleCount]
   );
 
-  const loadMoreItems = () => {
-    if (!hasMore || isLoadingMore || isLoading) return;
+  const loadMoreItems = useCallback(() => {
+    if (!hasMore || isLoadingMore || isLoading) {
+      return;
+    }
     setIsLoadingMore(true);
     loadMoreTimerRef.current = setTimeout(() => {
       setVisibleCount((prev) => Math.min(prev + pageSize, activeItems.length));
       setIsLoadingMore(false);
     }, 140);
-  };
+  }, [activeItems.length, hasMore, isLoading, isLoadingMore, pageSize]);
+
+  const onLibraryScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const y = event.nativeEvent.contentOffset.y;
+      const viewportHeight = event.nativeEvent.layoutMeasurement.height;
+      const contentHeight = event.nativeEvent.contentSize.height;
+      const distanceFromBottom = contentHeight - (y + viewportHeight);
+
+      if (distanceFromBottom > 320) {
+        canLoadMoreFromEdgeRef.current = true;
+      }
+
+      if (
+        distanceFromBottom <= 180 &&
+        canLoadMoreFromEdgeRef.current &&
+        !isLoadingMore &&
+        !isLoading
+      ) {
+        canLoadMoreFromEdgeRef.current = false;
+        loadMoreItems();
+      }
+    },
+    [isLoading, isLoadingMore, loadMoreItems]
+  );
 
   const renderLibraryItem = useCallback(
     ({ item, index }: { item: LibraryDashboardItem; index: number }) => {
@@ -285,7 +416,9 @@ export default function LibraryScreen() {
   );
 
   const headerText =
-    activeTab === "tv"
+    activeTab === "all"
+      ? { title: "Library", subtitle: "All tracked TV, anime, and movies" }
+      : activeTab === "tv"
       ? { title: "TV Library", subtitle: "Your tracked TV shows" }
       : activeTab === "anime"
         ? { title: "Anime Library", subtitle: "Your tracked anime" }
@@ -296,14 +429,22 @@ export default function LibraryScreen() {
       <View className="flex-1" onLayout={onGridLayout}>
         {gridWidth > 0 ? (
           <FlashList
-            key={`${activeTab}-${statusFilter}`}
+            key={`${activeTab}-${statusFilter}-${selectedGenres.join(",")}`}
             data={visibleItems}
             keyExtractor={getItemKey}
             renderItem={renderLibraryItem}
             numColumns={columns}
             ItemSeparatorComponent={() => <View style={{ height: GRID_GAP }} />}
-            onEndReached={loadMoreItems}
+            onEndReached={() => {
+              if (!canLoadMoreFromEdgeRef.current) {
+                return;
+              }
+              canLoadMoreFromEdgeRef.current = false;
+              loadMoreItems();
+            }}
             onEndReachedThreshold={0.5}
+            onScroll={onLibraryScroll}
+            scrollEventThrottle={16}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 16 }}
             ListHeaderComponent={
@@ -331,11 +472,193 @@ export default function LibraryScreen() {
                 />
 
                 <FilterChipGroup
-                  className="mb-4"
+                  className="mb-3"
                   options={statusOptionsWithCounts}
                   value={statusFilter}
                   onValueChange={(value) => setStatusFilter(value)}
                 />
+
+                {/* Filter Buttons */}
+                <View className="mb-3">
+                  <View className="flex-row flex-wrap gap-2">
+                    {/* Genre Button */}
+                    {availableGenres.length > 0 && (
+                      <Pressable
+                        onPress={() => setOpenDropdown(openDropdown === "genres" ? null : "genres")}
+                        className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
+                          selectedGenres.length > 0
+                            ? "border-primary bg-primary"
+                            : "border-border-default bg-bg-surface"
+                        }`}
+                      >
+                        <Text className={`text-sm font-semibold ${selectedGenres.length > 0 ? "text-white" : "text-text-secondary"}`}>
+                          {selectedGenres.length > 0 ? `${selectedGenres.length} Genre${selectedGenres.length > 1 ? "s" : ""}` : "Genre"}
+                        </Text>
+                        <Text className={selectedGenres.length > 0 ? "text-white" : "text-text-secondary"}>
+                          {openDropdown === "genres" ? "▲" : "▼"}
+                        </Text>
+                      </Pressable>
+                    )}
+
+                    {/* Year Button */}
+                    <Pressable
+                      onPress={() => setOpenDropdown(openDropdown === "year" ? null : "year")}
+                      className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
+                        selectedYear ? "border-primary bg-primary" : "border-border-default bg-bg-surface"
+                      }`}
+                    >
+                      <Text className={`text-sm font-semibold ${selectedYear ? "text-white" : "text-text-secondary"}`}>
+                        {selectedYear || "Year"}
+                      </Text>
+                      <Text className={selectedYear ? "text-white" : "text-text-secondary"}>
+                        {openDropdown === "year" ? "▲" : "▼"}
+                      </Text>
+                    </Pressable>
+
+                    {/* Rating Button */}
+                    <Pressable
+                      onPress={() => setOpenDropdown(openDropdown === "rating" ? null : "rating")}
+                      className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
+                        selectedRating ? "border-primary bg-primary" : "border-border-default bg-bg-surface"
+                      }`}
+                    >
+                      <Text className={`text-sm font-semibold ${selectedRating ? "text-white" : "text-text-secondary"}`}>
+                        {selectedRating ? `${selectedRating}+ ⭐` : "Rating"}
+                      </Text>
+                      <Text className={selectedRating ? "text-white" : "text-text-secondary"}>
+                        {openDropdown === "rating" ? "▲" : "▼"}
+                      </Text>
+                    </Pressable>
+
+                    {/* Clear Button */}
+                    {hasActiveFilters && (
+                      <Pressable
+                        onPress={clearFilters}
+                        className="rounded-full border border-border-default bg-bg-surface px-4 py-2"
+                      >
+                        <Text className="text-sm font-semibold text-text-secondary">Clear</Text>
+                      </Pressable>
+                    )}
+                  </View>
+
+                  {/* Genre Dropdown */}
+                  {openDropdown === "genres" && availableGenres.length > 0 && (
+                    <View className="mt-2 rounded-xl border border-border-default bg-bg-surface p-3">
+                      <Text className="mb-2 text-xs font-bold uppercase text-text-secondary">Select Genres</Text>
+                      <View className="flex-row flex-wrap gap-2">
+                        {availableGenres.map((genre) => (
+                          <Pressable
+                            key={genre}
+                            onPress={() => toggleGenre(genre)}
+                            className={`rounded-full border px-3 py-1.5 ${
+                              selectedGenres.includes(genre)
+                                ? "border-primary bg-primary"
+                                : "border-border-default bg-bg-primary"
+                            }`}
+                          >
+                            <Text className={`text-xs ${selectedGenres.includes(genre) ? "text-white" : "text-text-secondary"}`}>
+                              {genre}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Year Dropdown */}
+                  {openDropdown === "year" && (
+                    <View className="mt-2 rounded-xl border border-border-default bg-bg-surface p-3">
+                      <Text className="mb-2 text-xs font-bold uppercase text-text-secondary">Select Year</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <View className="flex-row gap-2">
+                          <Pressable
+                            onPress={() => { setSelectedYear(""); setOpenDropdown(null); }}
+                            className={`rounded-full border px-4 py-2 ${!selectedYear ? "border-primary bg-primary" : "border-border-default bg-bg-primary"}`}
+                          >
+                            <Text className={`text-sm ${!selectedYear ? "text-white" : "text-text-secondary"}`}>Any</Text>
+                          </Pressable>
+                          {Array.from({ length: 30 }, (_, i) => (new Date().getFullYear() - i).toString()).map((year) => (
+                            <Pressable
+                              key={year}
+                              onPress={() => { setSelectedYear(year); setOpenDropdown(null); }}
+                              className={`rounded-full border px-4 py-2 ${selectedYear === year ? "border-primary bg-primary" : "border-border-default bg-bg-primary"}`}
+                            >
+                              <Text className={`text-sm ${selectedYear === year ? "text-white" : "text-text-secondary"}`}>
+                                {year}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  {/* Rating Dropdown */}
+                  {openDropdown === "rating" && (
+                    <View className="mt-2 rounded-xl border border-border-default bg-bg-surface p-3">
+                      <Text className="mb-2 text-xs font-bold uppercase text-text-secondary">Min Rating</Text>
+                      <View className="flex-row gap-2">
+                        <Pressable
+                          onPress={() => { setSelectedRating(""); setOpenDropdown(null); }}
+                          className={`flex-1 rounded-lg border py-2 ${!selectedRating ? "border-primary bg-primary" : "border-border-default bg-bg-primary"}`}
+                        >
+                          <Text className={`text-center text-sm ${!selectedRating ? "text-white" : "text-text-secondary"}`}>Any</Text>
+                        </Pressable>
+                        {["8", "7", "6", "5"].map((rating) => (
+                          <Pressable
+                            key={rating}
+                            onPress={() => { setSelectedRating(rating); setOpenDropdown(null); }}
+                            className={`flex-1 rounded-lg border py-2 ${selectedRating === rating ? "border-primary bg-primary" : "border-border-default bg-bg-primary"}`}
+                          >
+                            <Text className={`text-center text-sm ${selectedRating === rating ? "text-white" : "text-text-secondary"}`}>
+                              {rating}+
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Selected Genre Tags */}
+                  {selectedGenres.length > 0 && (
+                    <View className="mt-2 flex-row flex-wrap gap-2">
+                      {selectedGenres.map((genre) => (
+                        <Pressable
+                          key={genre}
+                          onPress={() => toggleGenre(genre)}
+                          className="flex-row items-center gap-1 rounded-full bg-primary px-3 py-1"
+                        >
+                          <Text className="text-xs font-medium text-white">{genre}</Text>
+                          <Text className="text-xs text-white">×</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Selected Year & Rating Tags */}
+                  {(selectedYear || selectedRating) && (
+                    <View className="mt-2 flex-row flex-wrap gap-2">
+                      {selectedYear && (
+                        <Pressable
+                          onPress={() => setSelectedYear("")}
+                          className="flex-row items-center gap-1 rounded-full bg-primary px-3 py-1"
+                        >
+                          <Text className="text-xs font-medium text-white">{selectedYear}</Text>
+                          <Text className="text-xs text-white">×</Text>
+                        </Pressable>
+                      )}
+                      {selectedRating && (
+                        <Pressable
+                          onPress={() => setSelectedRating("")}
+                          className="flex-row items-center gap-1 rounded-full bg-primary px-3 py-1"
+                        >
+                          <Text className="text-xs font-medium text-white">{selectedRating}+ ⭐</Text>
+                          <Text className="text-xs text-white">×</Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  )}
+                </View>
 
                 {isLoading ? (
                   <View className="items-center gap-2 rounded-xl border-2 border-border-default bg-bg-surface py-8">
@@ -352,7 +675,7 @@ export default function LibraryScreen() {
                       No titles for these filters
                     </Text>
                     <Text className="mt-1 text-sm leading-relaxed text-text-secondary">
-                      Try another media tab or status filter.
+                      Try adjusting your status or genre filters.
                     </Text>
                   </View>
                 ) : null}
@@ -360,15 +683,15 @@ export default function LibraryScreen() {
             }
             ListFooterComponent={
               !isLoading && hasMore ? (
-                <Pressable onPress={loadMoreItems} className="items-center py-4">
+                <View className="items-center py-4">
                   <ActivityIndicator
                     size="small"
                     color={isLoadingMore ? "#ef4444" : "#52525b"}
                   />
                   <Text className="mt-1 text-xs text-text-secondary">
-                    {isLoadingMore ? "Loading more..." : "Tap to load more"}
+                    {isLoadingMore ? "Loading more..." : "Scroll for more"}
                   </Text>
-                </Pressable>
+                </View>
               ) : null
             }
           />

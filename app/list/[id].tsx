@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
   Pressable,
   Text,
   TextInput,
@@ -31,6 +32,10 @@ type ShowItem = {
   overview?: string;
   rating?: number;
 };
+
+type ConfirmActionState =
+  | { type: "delete-list" }
+  | { type: "remove-show"; showId: string };
 
 function ListShowCard({
   show,
@@ -82,6 +87,8 @@ function ListShowCard({
           <Pressable
             onPress={onMoveUp}
             disabled={index === 0}
+            accessibilityRole="button"
+            accessibilityLabel="Move show up"
             className={`rounded-lg p-2.5 ${index === 0 ? 'opacity-30' : 'bg-bg-elevated active:bg-bg-base'}`}
           >
             <Ionicons name="arrow-up" size={20} color="#a1a1aa" />
@@ -89,12 +96,16 @@ function ListShowCard({
           <Pressable
             onPress={onMoveDown}
             disabled={index === totalCount - 1}
+            accessibilityRole="button"
+            accessibilityLabel="Move show down"
             className={`rounded-lg p-2.5 ${index === totalCount - 1 ? 'opacity-30' : 'bg-bg-elevated active:bg-bg-base'}`}
           >
             <Ionicons name="arrow-down" size={20} color="#a1a1aa" />
           </Pressable>
           <Pressable
             onPress={onRemove}
+            accessibilityRole="button"
+            accessibilityLabel="Remove show from list"
             className="rounded-lg bg-primary/10 p-2.5 active:bg-primary/20"
           >
             <Ionicons name="trash-outline" size={20} color="#ef4444" />
@@ -235,6 +246,10 @@ export function ListDetailScreen() {
   const [localShows, setLocalShows] = useState<ShowItem[]>([]);
   const [gridWidth, setGridWidth] = useState(0);
   const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
+  const [confirmActionState, setConfirmActionState] = useState<ConfirmActionState | null>(
+    null
+  );
+  const [isConfirmingAction, setIsConfirmingAction] = useState(false);
   const { width: windowWidth } = useWindowDimensions();
 
   const list = useQuery(api.lists.getListDetail, listId ? { listId } : "skip");
@@ -242,6 +257,14 @@ export function ListDetailScreen() {
   const deleteList = useMutation(api.lists.deleteList);
   const reorderItems = useMutation(api.lists.reorderListItems);
   const removeShow = useMutation(api.lists.removeShowFromList);
+
+  const goBackToPreviousPage = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace("/home");
+  }, []);
 
   // Grid calculations
   const isDesktop = windowWidth >= 768;
@@ -330,53 +353,51 @@ export function ListDetailScreen() {
     });
   }, []);
 
-  const handleRemove = async (showId: string) => {
-    Alert.alert(
-      "Remove Show",
-      "Are you sure you want to remove this show from the list?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
-            if (!listId) return;
-            try {
-              await removeShow({ listId, showId: showId as any });
-              setLocalShows((prev) => prev.filter((s) => s.id !== showId));
-            } catch (err) {
-              console.error("Failed to remove show:", err);
-              Alert.alert("Error", "Failed to remove show. Please try again.");
-            }
-          },
-        },
-      ]
-    );
+  const handleRemove = (showId: string) => {
+    setConfirmActionState({ type: "remove-show", showId });
   };
 
   const handleDeleteList = () => {
-    Alert.alert(
-      "Delete List",
-      `Are you sure you want to delete "${list?.name}"? This action cannot be undone.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            if (!listId) return;
-            try {
-              await deleteList({ listId });
-              router.replace("/home");
-            } catch (err) {
-              console.error("Failed to delete list:", err);
-              Alert.alert("Error", "Failed to delete list. Please try again.");
-            }
-          },
-        },
-      ]
-    );
+    setConfirmActionState({ type: "delete-list" });
   };
+
+  const handleConfirmAction = async () => {
+    if (!confirmActionState || !listId || isConfirmingAction) {
+      return;
+    }
+
+    setIsConfirmingAction(true);
+    try {
+      if (confirmActionState.type === "remove-show") {
+        await removeShow({ listId, showId: confirmActionState.showId as any });
+        setLocalShows((prev) => prev.filter((s) => s.id !== confirmActionState.showId));
+      } else {
+        await deleteList({ listId });
+        goBackToPreviousPage();
+      }
+
+      setConfirmActionState(null);
+    } catch (err) {
+      if (confirmActionState.type === "remove-show") {
+        console.error("Failed to remove show:", err);
+        Alert.alert("Error", "Failed to remove show. Please try again.");
+      } else {
+        console.error("Failed to delete list:", err);
+        Alert.alert("Error", "Failed to delete list. Please try again.");
+      }
+    } finally {
+      setIsConfirmingAction(false);
+    }
+  };
+
+  const confirmTitle =
+    confirmActionState?.type === "delete-list" ? "Delete List?" : "Remove Show?";
+  const confirmMessage =
+    confirmActionState?.type === "delete-list"
+      ? `Are you sure you want to delete "${list?.name}"? This action cannot be undone.`
+      : "Are you sure you want to remove this show from the list?";
+  const confirmButtonLabel =
+    confirmActionState?.type === "delete-list" ? "Delete" : "Remove";
 
   const shows = list && list.shows ? (isEditing ? localShows : (list.shows.filter(Boolean) as ShowItem[])) : [];
 
@@ -408,6 +429,8 @@ export function ListDetailScreen() {
             <View className="-mt-1 mb-1 flex-row justify-end gap-2">
               <Pressable
                 onPress={() => setIsSearchModalVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Add shows to list"
                 className="flex-row items-center gap-2 rounded-xl border border-border-default bg-bg-surface px-3 py-2"
               >
                 <Ionicons name="add" size={20} color="#a1a1aa" />
@@ -415,12 +438,18 @@ export function ListDetailScreen() {
               </Pressable>
               <Pressable
                 onPress={startEditing}
+                accessibilityRole="button"
+                accessibilityLabel="Edit list"
                 className="rounded-xl border border-border-default bg-bg-surface p-3"
               >
                 <Ionicons name="create-outline" size={20} color="#a1a1aa" />
               </Pressable>
               <Pressable
-                onPress={handleDeleteList}
+                onPress={() => {
+                  handleDeleteList();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Delete list"
                 className="rounded-xl border border-border-default bg-bg-surface p-3"
               >
                 <Ionicons name="trash-outline" size={20} color="#ef4444" />
@@ -550,6 +579,79 @@ export function ListDetailScreen() {
           }}
         />
       )}
+
+      <Modal
+        visible={!!confirmActionState}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isConfirmingAction) {
+            setConfirmActionState(null);
+          }
+        }}
+      >
+        <View className="flex-1 items-center justify-center bg-black/70 px-5">
+          <Pressable
+            className="absolute inset-0"
+            disabled={isConfirmingAction}
+            onPress={() => {
+              if (!isConfirmingAction) {
+                setConfirmActionState(null);
+              }
+            }}
+          />
+
+          <View
+            className={`w-full overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface ${
+              isDesktop ? "max-w-md" : ""
+            }`}
+          >
+            <View className="items-center px-6 py-8">
+              <View className="mb-4 h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+                <Ionicons name="trash-outline" size={32} color="#ef4444" />
+              </View>
+
+              <Text className="text-xl font-black text-text-primary">{confirmTitle}</Text>
+              <Text className="mt-2 text-center text-sm text-text-secondary">{confirmMessage}</Text>
+
+              <View className="mt-6 w-full flex-row gap-3">
+                <Pressable
+                  onPress={() => setConfirmActionState(null)}
+                  disabled={isConfirmingAction}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel destructive action"
+                  className="flex-1 items-center justify-center rounded-lg border-2 border-border-default bg-bg-elevated py-3.5"
+                >
+                  <Text className="text-sm font-bold text-text-primary">Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    void handleConfirmAction();
+                  }}
+                  disabled={isConfirmingAction}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    confirmActionState?.type === "delete-list"
+                      ? "Confirm delete list"
+                      : "Confirm remove show"
+                  }
+                  className={`flex-1 items-center justify-center rounded-lg border-2 border-primary bg-primary py-3.5 ${
+                    isConfirmingAction ? "opacity-60" : "opacity-100"
+                  }`}
+                >
+                  {isConfirmingAction ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text className="text-sm font-black uppercase tracking-wide text-white">
+                      {confirmButtonLabel}
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Search Shows Modal */}
       {listId && (
