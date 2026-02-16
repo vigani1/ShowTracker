@@ -1,5 +1,11 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { action, mutation, query } from "@/convex/_generated/server";
+import {
+  action,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "@/convex/_generated/server";
 import type { Doc } from "@/convex/_generated/dataModel";
 import type { ActionCtx } from "@/convex/_generated/server";
 import { v } from "convex/values";
@@ -10,11 +16,13 @@ import {
 } from "../lib/api/normalize";
 import type { NormalizedScheduleEntry } from "../lib/api/types";
 import { getTvMazeScheduleByDate } from "../lib/api/tvmaze";
-import { api } from "@/convex/_generated/api";
+import { api, internal } from "@/convex/_generated/api";
 
 const HYDRATE_BATCH_SIZE = 3;
 const SCHEDULE_CACHE_FRESH_MS = 1000 * 60 * 60 * 6;
 const MAX_ANILIST_SCHEDULE_PAGES = 8;
+const ANILIST_SCHEDULE_RATE_LIMIT_COOLDOWN_MS = 90_000;
+const ANILIST_SCHEDULE_RATE_LIMIT_KEY = "anilistSchedule";
 
 type DateCacheStatus = {
   tvCount: number;
@@ -36,12 +44,101 @@ type CompactScheduleEntry = {
   episode: CompactScheduleEpisode;
 };
 
+export const getRateLimitState = internalQuery({
+  args: {
+    key: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Unauthorized");
+    }
+
+    const existing = await ctx.db
+      .query("rateLimits")
+      .withIndex("by_key", (q) => q.eq("key", args.key))
+      .unique();
+
+    return {
+      lastAttemptTime: existing?.lastAttemptTime ?? 0,
+      nextRetryTime: existing?.nextRetryTime ?? 0,
+    };
+  },
+});
+
+export const setRateLimitState = internalMutation({
+  args: {
+    key: v.string(),
+    lastAttemptTime: v.number(),
+    nextRetryTime: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Unauthorized");
+    }
+
+    const existing = await ctx.db
+      .query("rateLimits")
+      .withIndex("by_key", (q) => q.eq("key", args.key))
+      .unique();
+
+    const payload = {
+      key: args.key,
+      lastAttemptTime: args.lastAttemptTime,
+      nextRetryTime: args.nextRetryTime,
+      updatedAt: Date.now(),
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, payload);
+      return;
+    }
+
+    await ctx.db.insert("rateLimits", payload);
+  },
+});
+
+function getErrorStatusCode(error: unknown) {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+
+  if ("status" in error && typeof (error as { status?: unknown }).status === "number") {
+    return (error as { status: number }).status;
+  }
+
+  if (
+    "body" in error &&
+    typeof (error as { body?: unknown }).body === "object" &&
+    (error as { body?: unknown }).body !== null
+  ) {
+    const body = (error as { body: Record<string, unknown> }).body;
+    if (Array.isArray(body.errors) && body.errors.length > 0) {
+      const first = body.errors[0];
+      if (
+        typeof first === "object" &&
+        first !== null &&
+        "status" in first &&
+        typeof (first as { status?: unknown }).status === "number"
+      ) {
+        return (first as { status: number }).status;
+      }
+    }
+  }
+
+  return null;
+}
+
 function formatDate(date: Date) {
-  return date.toISOString().split("T")[0];
+  const year = date.getUTCFullYear();
+  const month = `${date.getUTCMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getUTCDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 function normalizeTitle(title: string) {
@@ -301,6 +398,7 @@ async function hydrateOneDate(
 
   let tvEntries: NormalizedScheduleEntry[] = [];
   let animeEntries: NormalizedScheduleEntry[] = [];
+  let animeFetchRateLimited = false;
 
   try {
     const tvSchedule = await getTvMazeScheduleByDate(date, "US");
@@ -309,25 +407,47 @@ async function hydrateOneDate(
     console.error(`Failed TV schedule fetch for ${date}`, error);
   }
 
-  try {
+  const rateLimitState = await ctx.runQuery(internal.schedule.getRateLimitState, {
+    key: ANILIST_SCHEDULE_RATE_LIMIT_KEY,
+  });
+
+  if (now < rateLimitState.nextRetryTime) {
+    animeFetchRateLimited = true;
+  } else {
     for (
       let page = 1;
       page <= MAX_ANILIST_SCHEDULE_PAGES;
       page += 1
     ) {
-      const animeSchedule = await getAniListAiringSchedule(page, 50, start, end);
-      animeEntries.push(
-        ...animeSchedule.data.Page.airingSchedules.map((entry) =>
-          normalizeAniListScheduleEntry(entry)
-        )
-      );
+      try {
+        const animeSchedule = await getAniListAiringSchedule(page, 50, start, end);
+        animeEntries.push(
+          ...animeSchedule.data.Page.airingSchedules.map((entry) =>
+            normalizeAniListScheduleEntry(entry)
+          )
+        );
 
-      if (!animeSchedule.data.Page.pageInfo?.hasNextPage) {
+        if (!animeSchedule.data.Page.pageInfo?.hasNextPage) {
+          break;
+        }
+      } catch (error) {
+        const statusCode = getErrorStatusCode(error);
+        if (statusCode === 429) {
+          animeFetchRateLimited = true;
+          const retryUntil = Date.now() + ANILIST_SCHEDULE_RATE_LIMIT_COOLDOWN_MS;
+          await ctx.runMutation(internal.schedule.setRateLimitState, {
+            key: ANILIST_SCHEDULE_RATE_LIMIT_KEY,
+            lastAttemptTime: Date.now(),
+            nextRetryTime: retryUntil,
+          });
+          console.warn(`AniList schedule rate limited for ${date}; using cached anime schedule.`);
+          break;
+        }
+
+        console.error(`Failed anime schedule fetch for ${date}`, error);
         break;
       }
     }
-  } catch (error) {
-    console.error(`Failed anime schedule fetch for ${date}`, error);
   }
 
   const compactTvEntries = compactScheduleEntries(tvEntries);
@@ -340,17 +460,22 @@ async function hydrateOneDate(
     lastUpdated: now,
   });
 
-  await ctx.runMutation(api.schedule.upsertScheduleBucket, {
-    date,
-    mediaType: "anime",
-    episodes: JSON.stringify(compactAnimeEntries),
-    lastUpdated: now,
-  });
+  if (!animeFetchRateLimited || compactAnimeEntries.length > 0) {
+    await ctx.runMutation(api.schedule.upsertScheduleBucket, {
+      date,
+      mediaType: "anime",
+      episodes: JSON.stringify(compactAnimeEntries),
+      lastUpdated: now,
+    });
+  }
 
   return {
     date,
     tvCount: compactTvEntries.length,
-    animeCount: compactAnimeEntries.length,
+    animeCount:
+      animeFetchRateLimited && compactAnimeEntries.length === 0
+        ? cacheStatus.animeCount
+        : compactAnimeEntries.length,
     cached: false,
   };
 }
@@ -360,6 +485,10 @@ export const hydrateScheduleDate = action({
     date: v.string(),
   },
   handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Unauthorized");
+    }
     return hydrateOneDate(ctx, args.date);
   },
 });
@@ -370,6 +499,11 @@ export const hydrateScheduleRange = action({
     days: v.number(),
   },
   handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Unauthorized");
+    }
+
     const startDate = new Date(args.startDate);
     const safeDays = Math.max(1, Math.min(args.days, 30));
     const dateKeys = Array.from({ length: safeDays }, (_, index) => {

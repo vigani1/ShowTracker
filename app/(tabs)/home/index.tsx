@@ -13,21 +13,15 @@ import { Link } from "expo-router";
 import { useAction, useQuery } from "convex/react";
 import { FlashList } from "@shopify/flash-list";
 import { api } from "@/convex/_generated/api";
-import { FilterChipGroup } from "@/components/FilterChipGroup";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import { getTmdbShowDetails, type TmdbShowDetails } from "@/lib/api/tmdb";
 import type { MediaType } from "@/lib/api/types";
-import {
-  applyTrackingFilters,
-  matchesStatusFilter,
-  type TrackingStatusFilter,
-} from "@/lib/filters/tracking-filters";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
 type HomeTab = "watchlist" | "upcoming";
 type HomeMediaFilter = "all" | "tv" | "anime";
-type HomeStatusFilter = TrackingStatusFilter;
 
 type WatchlistItem = {
   id: string;
@@ -85,15 +79,110 @@ const RANGE_EXTENSION_DAYS = 8;
 const SCROLL_EDGE_THRESHOLD = 180;
 const INITIAL_UPCOMING_HYDRATION_TIMEOUT_MS = 8000;
 const EDGE_LOAD_COOLDOWN_MS = 320;
+const TMDB_AIRED_LOOKUP_BATCH_SIZE = 8;
+const WATCHLIST_FUTURE_FALLBACK_DAYS = 30;
 
-const watchlistStatusOptions: { value: HomeStatusFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "watching", label: "Watching" },
-  { value: "plan_to_watch", label: "Planned" },
-  { value: "paused", label: "Paused" },
-  { value: "dropped", label: "Dropped" },
-  { value: "completed", label: "Completed" },
-];
+function estimateAiredEpisodesFromTmdb(details: TmdbShowDetails) {
+  const today = new Date();
+  const startOfToday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+    0,
+    0,
+    0,
+    0
+  );
+
+  const parseEpisodeAirDate = (airDate?: string | null) => {
+    if (!airDate) {
+      return null;
+    }
+
+    const parsedLocal = parseLocalDate(airDate.slice(0, 10));
+    if (parsedLocal) {
+      return parsedLocal;
+    }
+
+    const parsed = new Date(airDate);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+
+    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 0, 0, 0, 0);
+  };
+
+  const isFutureEpisode = (airDate?: string | null) => {
+    const parsed = parseEpisodeAirDate(airDate);
+    if (!parsed) {
+      return false;
+    }
+    return parsed.getTime() > startOfToday.getTime();
+  };
+
+  const nonSpecialSeasons = (details.seasons ?? []).filter(
+    (season) => season.season_number >= 1
+  );
+
+  const getEpisodeOffset = (seasonNumber: number, episodeNumber: number) => {
+    const episodesBeforeSeason = nonSpecialSeasons.reduce((sum, season) => {
+      if (season.season_number < seasonNumber) {
+        return sum + Math.max(season.episode_count ?? 0, 0);
+      }
+      return sum;
+    }, 0);
+
+    return episodesBeforeSeason + Math.max(episodeNumber, 0);
+  };
+
+  const nextEpisode = details.next_episode_to_air;
+  if (
+    typeof nextEpisode?.season_number === "number" &&
+    typeof nextEpisode.episode_number === "number" &&
+    isFutureEpisode(nextEpisode.air_date)
+  ) {
+    const airedBeforeNext = getEpisodeOffset(
+      nextEpisode.season_number,
+      nextEpisode.episode_number - 1
+    );
+
+    if (airedBeforeNext > 0) {
+      return airedBeforeNext;
+    }
+  }
+
+  const lastEpisode = details.last_episode_to_air;
+  const lastSeasonNumber = lastEpisode?.season_number;
+  const lastEpisodeNumber = lastEpisode?.episode_number;
+  if (
+    typeof lastSeasonNumber === "number" &&
+    typeof lastEpisodeNumber === "number"
+  ) {
+    if (nonSpecialSeasons.length === 0) {
+      const adjustedEpisodeNumber = isFutureEpisode(lastEpisode?.air_date)
+        ? lastEpisodeNumber - 1
+        : lastEpisodeNumber;
+      return Math.max(adjustedEpisodeNumber, 0);
+    }
+
+    const adjustedEpisodeNumber = isFutureEpisode(lastEpisode?.air_date)
+      ? lastEpisodeNumber - 1
+      : lastEpisodeNumber;
+    const airedAcrossSeasons = getEpisodeOffset(lastSeasonNumber, adjustedEpisodeNumber);
+
+    if (airedAcrossSeasons > 0) {
+      return airedAcrossSeasons;
+    }
+
+    return Math.max(adjustedEpisodeNumber, 0);
+  }
+
+  if (typeof details.number_of_episodes === "number" && details.number_of_episodes > 0) {
+    return details.number_of_episodes;
+  }
+
+  return null;
+}
 
 function parseLocalDate(dateString: string) {
   const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -362,7 +451,6 @@ function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boo
 export function HomeScreen() {
   const [activeTab, setActiveTab] = useState<HomeTab>("watchlist");
   const [mediaFilter, setMediaFilter] = useState<HomeMediaFilter>("all");
-  const [statusFilter, setStatusFilter] = useState<HomeStatusFilter>("all");
   const [watchlistVisibleCount, setWatchlistVisibleCount] = useState(0);
   const [isLoadingMoreWatchlist, setIsLoadingMoreWatchlist] = useState(false);
   const [isHydratingInitialUpcoming, setIsHydratingInitialUpcoming] = useState(false);
@@ -381,6 +469,11 @@ export function HomeScreen() {
   const [rangeEndDate, setRangeEndDate] = useState(() =>
     addDaysToDateString(todayKey, INITIAL_FUTURE_DAYS)
   );
+  const watchlistFutureStartDate = todayKey;
+  const watchlistFutureEndDate = useMemo(
+    () => addDaysToDateString(todayKey, WATCHLIST_FUTURE_FALLBACK_DAYS),
+    [todayKey]
+  );
 
   const upcomingScrollRef = useRef<any>(null);
   const didStartInitialUpcomingHydrationRef = useRef(false);
@@ -393,6 +486,12 @@ export function HomeScreen() {
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const relationSyncTriggeredRef = useRef(false);
   const [upcomingSnapshot, setUpcomingSnapshot] = useState<UpcomingGroup[]>([]);
+  const [tmdbAiredEpisodeCountById, setTmdbAiredEpisodeCountById] = useState<
+    Record<number, number>
+  >({});
+  const [tmdbAiredLookupFailuresById, setTmdbAiredLookupFailuresById] = useState<
+    Record<number, number>
+  >({});
 
   const watchlist = useQuery(api.shows.getWatchlist, {});
   const upcoming = useQuery(
@@ -401,6 +500,16 @@ export function HomeScreen() {
       ? {
           startDate: rangeStartDate,
           endDate: rangeEndDate,
+          mediaFilter: mediaFilter === "all" ? undefined : mediaFilter,
+        }
+      : "skip"
+  );
+  const watchlistFutureUpcoming = useQuery(
+    api.schedule.getUpcomingSchedule,
+    activeTab === "watchlist"
+      ? {
+          startDate: watchlistFutureStartDate,
+          endDate: watchlistFutureEndDate,
           mediaFilter: mediaFilter === "all" ? undefined : mediaFilter,
         }
       : "skip"
@@ -577,40 +686,143 @@ export function HomeScreen() {
 
   const watchlistItems = useMemo(() => (watchlist ?? []) as WatchlistItem[], [watchlist]);
 
-  const mediaScopedWatchlist = useMemo(
-    () =>
-      applyTrackingFilters(watchlistItems, {
-        media: mediaFilter,
-        status: "all",
-      }),
-    [mediaFilter, watchlistItems]
+  const watchlistFutureUpcomingGroups = useMemo(
+    () => (watchlistFutureUpcoming ?? []) as UpcomingGroup[],
+    [watchlistFutureUpcoming]
   );
 
-  const filteredWatchlist = useMemo(
-    () =>
-      applyTrackingFilters(mediaScopedWatchlist, {
-        media: "all",
-        status: statusFilter,
-      }),
-    [mediaScopedWatchlist, statusFilter]
-  );
+  const futureUpcomingCountByRoute = useMemo(() => {
+    const counts = new Map<string, number>();
 
-  const watchlistStatusOptionsWithCount = useMemo(
-    () =>
-      watchlistStatusOptions.map((option) => ({
-        ...option,
-        count: mediaScopedWatchlist.filter((item) =>
-          matchesStatusFilter(item, option.value)
-        ).length,
-      })),
-    [mediaScopedWatchlist]
-  );
+    for (const group of watchlistFutureUpcomingGroups) {
+      for (const entry of group.episodes) {
+        if (!entry.routeId || entry.daysUntil <= 0) {
+          continue;
+        }
+        counts.set(entry.routeId, (counts.get(entry.routeId) ?? 0) + 1);
+      }
+    }
+
+    return counts;
+  }, [watchlistFutureUpcomingGroups]);
 
   useEffect(() => {
-    if (!watchlistStatusOptionsWithCount.some((option) => option.value === statusFilter)) {
-      setStatusFilter("all");
+    if (activeTab !== "watchlist") {
+      return;
     }
-  }, [statusFilter, watchlistStatusOptionsWithCount]);
+
+    const tmdbIdsToFetch = watchlistItems
+      .filter(
+        (item) =>
+          item.mediaType === "tv" &&
+          typeof item.tmdbId === "number" &&
+          item.remainingEpisodes !== null &&
+          item.remainingEpisodes > 0 &&
+          tmdbAiredEpisodeCountById[item.tmdbId] === undefined &&
+          (tmdbAiredLookupFailuresById[item.tmdbId] ?? 0) < 3
+      )
+      .map((item) => item.tmdbId as number);
+
+    if (tmdbIdsToFetch.length === 0) {
+      return;
+    }
+
+    const uniqueIds = Array.from(new Set(tmdbIdsToFetch)).slice(0, TMDB_AIRED_LOOKUP_BATCH_SIZE);
+    let isCancelled = false;
+
+    const fetchAiredCounts = async () => {
+      const updates: Record<number, number> = {};
+      const failedIds: number[] = [];
+
+      await Promise.all(
+        uniqueIds.map(async (tmdbId) => {
+          try {
+            const details = await getTmdbShowDetails("tv", tmdbId);
+            const airedEpisodes = estimateAiredEpisodesFromTmdb(details);
+            if (typeof airedEpisodes === "number") {
+              updates[tmdbId] = airedEpisodes;
+              return;
+            }
+          } catch (error) {
+            console.warn(`Failed to fetch aired episode count for TMDB ${tmdbId}`, error);
+          }
+
+          failedIds.push(tmdbId);
+        })
+      );
+
+      if (isCancelled) {
+        return;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        setTmdbAiredEpisodeCountById((prev) => ({
+          ...prev,
+          ...updates,
+        }));
+      }
+
+      if (failedIds.length > 0) {
+        setTmdbAiredLookupFailuresById((prev) => {
+          const next = { ...prev };
+          for (const tmdbId of failedIds) {
+            next[tmdbId] = (next[tmdbId] ?? 0) + 1;
+          }
+          return next;
+        });
+      }
+    };
+
+    void fetchAiredCounts();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    activeTab,
+    tmdbAiredEpisodeCountById,
+    tmdbAiredLookupFailuresById,
+    watchlistItems,
+  ]);
+
+  const filteredWatchlist = useMemo(() => {
+    return watchlistItems.filter((item) => {
+      if (item.watchedEpisodes <= 0) return false;
+      if (item.status === "paused") return false;
+      if (item.status === "dropped") return false;
+      if (item.status === "completed") return false;
+      if (item.trackingState === "upcoming") return false;
+      if (typeof item.remainingEpisodes === "number" && item.remainingEpisodes <= 0) {
+        return false;
+      }
+
+      if (item.mediaType === "tv" && typeof item.tmdbId === "number") {
+        const airedEpisodes = tmdbAiredEpisodeCountById[item.tmdbId];
+        if (typeof airedEpisodes === "number") {
+          const releasedRemaining = Math.max(airedEpisodes - item.watchedEpisodes, 0);
+          if (releasedRemaining <= 0) {
+            return false;
+          }
+        } else if (typeof item.remainingEpisodes === "number" && item.remainingEpisodes > 0) {
+          const routeId = getWatchlistRouteId(item);
+          if (routeId) {
+            const futureUpcomingCount = futureUpcomingCountByRoute.get(routeId) ?? 0;
+            if (futureUpcomingCount >= item.remainingEpisodes) {
+              return false;
+            }
+          }
+        }
+      }
+
+      if (mediaFilter !== "all" && item.mediaType !== mediaFilter) return false;
+      return true;
+    });
+  }, [
+    futureUpcomingCountByRoute,
+    mediaFilter,
+    tmdbAiredEpisodeCountById,
+    watchlistItems,
+  ]);
 
   const upcomingGroups = useMemo(
     () => ((upcoming ?? upcomingSnapshot) as UpcomingGroup[]),
@@ -916,18 +1128,11 @@ export function HomeScreen() {
                     className="mb-3"
                     options={[
                       { value: "all", label: "All" },
-                      { value: "tv", label: "TV" },
+                      { value: "tv", label: "TV Shows" },
                       { value: "anime", label: "Anime" },
                     ]}
                     value={mediaFilter}
                     onValueChange={(value: HomeMediaFilter) => setMediaFilter(value)}
-                  />
-
-                  <FilterChipGroup
-                    className="mb-3"
-                    options={watchlistStatusOptionsWithCount}
-                    value={statusFilter}
-                    onValueChange={(value) => setStatusFilter(value)}
                   />
 
                   {isWatchlistLoading ? (
@@ -939,10 +1144,10 @@ export function HomeScreen() {
                   {!isWatchlistLoading && filteredWatchlist.length === 0 ? (
                     <View className="mt-6 items-center rounded-xl border-2 border-border-default bg-bg-surface px-6 py-12">
                       <Text className="text-lg font-semibold text-text-primary">
-                        No results for these filters
+                        No active shows
                       </Text>
                       <Text className="mt-1 text-center text-sm text-text-secondary">
-                        Try changing media or status filters.
+                        Start tracking shows to see them here.
                       </Text>
                     </View>
                   ) : null}
@@ -984,7 +1189,7 @@ export function HomeScreen() {
                 <SegmentedControl
                   options={[
                     { value: "all", label: "All" },
-                    { value: "tv", label: "TV" },
+                    { value: "tv", label: "TV Shows" },
                     { value: "anime", label: "Anime" },
                   ]}
                   value={mediaFilter}

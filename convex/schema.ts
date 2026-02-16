@@ -39,6 +39,7 @@ export default defineSchema({
     imdbId: v.optional(v.string()),
     mediaType: v.union(v.literal("tv"), v.literal("anime"), v.literal("movie")),
     title: v.string(),
+    titleLower: v.optional(v.string()),
     overview: v.optional(v.string()),
     posterUrl: v.optional(v.string()),
     backdropUrl: v.optional(v.string()),
@@ -61,6 +62,7 @@ export default defineSchema({
     .index("by_tvdbId", ["tvdbId"])
     .index("by_anilistId", ["anilistId"])
     .index("by_malId", ["malId"])
+    .index("by_title", ["titleLower"])
     .index("by_rootAnilistId", ["rootAnilistId"])
     .index("by_tvmazeId", ["tvmazeId"])
     .index("by_mediaType", ["mediaType"]),
@@ -91,6 +93,7 @@ export default defineSchema({
     .index("by_user_status", ["userId", "status"])
     .index("by_user_relation_root", ["userId", "relationRootAnilistId"])
     .index("by_user_show", ["userId", "showId"])
+    .index("by_showId", ["showId"])
     .index("by_user_status_changed", ["userId", "statusChangedAt"])
     .index("by_status_last_watched", ["status", "lastWatchedAt"]),
   watchedEpisodes: defineTable({
@@ -124,4 +127,10 @@ export default defineSchema({
     .index("by_date", ["date"])
     .index("by_date_type", ["date", "mediaType"])
     .index("by_type_date", ["mediaType", "date"]),
+  rateLimits: defineTable({
+    key: v.string(),
+    lastAttemptTime: v.number(),
+    nextRetryTime: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
 });

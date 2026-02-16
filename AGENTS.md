@@ -3,9 +3,11 @@
 Cross-platform show/anime/movie tracking app built with Expo (React Native + Web), Convex backend, NativeWind styling. Replaces TVTime with better performance and cleaner UX.
 
 ## Project Goal
+
 Build a fast, minimal show tracker that lets users: discover trending shows/anime/movies, search across all media types, track episodes watched per show, manage watchlists with unwatched episode counts, view a personal schedule of upcoming episodes, create custom lists, and see watch statistics. Runs on web + iOS + Android from one codebase. Open source.
 
 ## Tech Stack
+
 - **Runtime**: Expo SDK 52+ (React Native + React Native Web)
 - **Language**: TypeScript (strict mode)
 - **Routing**: Expo Router v4 (file-based)
@@ -15,6 +17,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - **APIs**: TMDB (movies/TV), TVMaze (schedule), AniList (anime), Jikan (fallback)
 
 ## Key Commands
+
 - `npx expo start` — Start dev server (web + mobile)
 - `npx expo start --web` — Web only
 - `npx convex dev` — Start Convex dev backend (run alongside expo)
@@ -22,6 +25,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - `npx expo lint` — Lint the project
 
 ## Project Structure
+
 - `app/` — Expo Router screens and layouts
 - `components/` — Reusable UI components
 - `lib/` — Business logic, API clients, utilities
@@ -34,6 +38,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - `docs/` — Architecture, API reference, tech stack docs
 
 ## Code Conventions
+
 - Functional components only, prefer named exports
 - Use NativeWind className for all styling (no StyleSheet.create)
 - Use React Native `Image` from `react-native` for all app/component images (never `expo-image`)
@@ -44,11 +49,22 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - Imports: absolute paths via `@/` alias (e.g., `@/components/ShowCard`)
 
 ## Documentation Update Rule (Important)
+
 - If an implementation issue reveals that project docs/rules are outdated or incorrect, the agent must pause and ask the user before changing docs.
 - The agent should propose the exact doc/rule update and only apply it after explicit user confirmation.
 - After confirmation, update all relevant sources of truth consistently (e.g., `AGENTS.md`, rule files, review config, and `PROGRESS.md` when status changes).
 
+## Feature Owner Mode
+
+- This mode is active only when the user explicitly says the agent is the "feature owner" (or equivalent wording).
+- In Feature Owner Mode, the agent is expected to run end-to-end ownership: plan, implement, verify, fix, and close the loop without handoff.
+- The agent should proactively run robust verification, including browser-based checks with the `agent-browser` skill when the feature touches web UX.
+- The agent may create focused helper scripts, run targeted diagnostics, and call APIs/tools needed to validate behavior from start to finish.
+- The agent may use credentials already available in local environment/session for verification, but must never expose, log, or commit secrets.
+- The agent should keep iterating until done, and only stop when blocked by a true external dependency (missing credential/access, irreversible decision, or explicit user stop).
+
 ## Git Workflow
+
 - **Never commit directly to main** — always create a feature branch and open a PR
 - **Never commit unless the user explicitly asks** — only stage/commit/push when instructed
 - **All changes go through PRs** — CodeRabbit reviews every PR before merge
@@ -57,6 +73,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - **Squash merge only** — keep main history clean (repo enforces this)
 
 ## Boundaries — Never Do These
+
 - Never commit API keys or secrets (use .env + Convex environment variables)
 - Never make API calls directly from components — always go through lib/api/ clients
 - Never store images in Convex — always use URL references to external CDNs (TMDB, AniList)
@@ -66,6 +83,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - User runs their own frontend/backend server instances: never start/restart local app/backend servers (e.g., `npx expo start`, `npx convex dev`) unless the user explicitly asks, or it is mandatory to validate a required fix.
 
 ## Detailed Docs
+
 - See docs/PLAN.md for implementation phases and feature breakdown
 - See docs/ARCHITECTURE.md for system design and data flow
 - See docs/TECH_STACK.md for setup, build, run, and debug instructions

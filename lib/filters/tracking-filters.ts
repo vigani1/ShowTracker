@@ -11,6 +11,7 @@ export type TrackingMediaFilter = "all" | MediaType;
 
 export type TrackingStatusFilter =
   | "all"
+  | "active"
   | "watching"
   | "plan_to_watch"
   | "paused"
@@ -65,6 +66,10 @@ export function matchesStatusFilter(
   }
 
   const status = normalizeTrackingStatus(item.status);
+  if (filter === "active") {
+    return status === "watching" || status === "plan_to_watch";
+  }
+
   if (filter === "watched") {
     return status === "completed";
   }

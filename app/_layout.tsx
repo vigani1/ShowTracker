@@ -3,6 +3,7 @@ import { Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { LogBox, Platform, View, useWindowDimensions } from "react-native";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
+import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import { AuthGate } from "@/components/AuthGate";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { Sidebar } from "@/components/Sidebar";
@@ -35,14 +36,16 @@ function RootLayoutContent() {
     <View className="flex-1 flex-row" style={{ backgroundColor: "#09090b" }}>
       {shouldShowDesktopSidebar ? <Sidebar /> : null}
       <View className="flex-1 min-w-0">
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            gestureEnabled: true,
-            fullScreenGestureEnabled: false,
-            animationMatchesGesture: Platform.OS === "ios",
-          }}
-        />
+        <AppErrorBoundary resetKey={pathname}>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              gestureEnabled: true,
+              fullScreenGestureEnabled: false,
+              animationMatchesGesture: Platform.OS === "ios",
+            }}
+          />
+        </AppErrorBoundary>
       </View>
     </View>
   );
@@ -50,7 +53,14 @@ function RootLayoutContent() {
 
 export function RootLayout() {
   return (
-    <ConvexAuthProvider client={convex} storage={tokenStorage}>
+    <ConvexAuthProvider
+      client={convex}
+      storage={tokenStorage}
+      // App currently uses password + anonymous auth only.
+      // Disable auth code handling to avoid verifyCode runtime failures
+      // when stale `code` params are present.
+      shouldHandleCode={false}
+    >
       <ThemeProvider>
         <AuthGate>
           <StatusBar style="light" />

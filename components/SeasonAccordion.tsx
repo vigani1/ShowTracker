@@ -183,7 +183,7 @@ export function SeasonAccordion({
                 </Text>
               </View>
             ) : (
-                <View className="gap-3">
+              <View className="gap-3">
                 {episodes.map((episode) => {
                   const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
                   const watched = watchedEpisodeKeys.has(key);

@@ -39,6 +39,34 @@ type RailItem = {
   badge?: string;
 };
 
+type ProfileLibraryEntry = {
+  id: string;
+  title: string;
+  mediaType: "tv" | "anime" | "movie";
+  status: "watching" | "paused" | "dropped" | "completed" | "plan_to_watch";
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  overview?: string | null;
+  firstAired: string | null;
+  tmdbId: number | null;
+  anilistId: number | null;
+  malId: number | null;
+  tvmazeId?: number | null;
+  imdbId?: string | null;
+  isAutoTracked?: boolean;
+  watchedEpisodes?: number;
+  totalEpisodes?: number | null;
+  progressPercent?: number | null;
+  genres?: string[];
+  rating?: number | null;
+  remainingEpisodes: number | null;
+  lastActivityAt: number;
+  relationRootAnilistId?: number | null;
+  anilistFormat?: string | null;
+  animeSeason?: string | null;
+  animeSeasonYear?: number | null;
+};
+
 type ProfileStats = {
   totalWatchTimeFormatted?: string;
   totalWatchTimeBreakdown?: TimeBreakdown;
@@ -91,6 +119,118 @@ function getRouteId(args: {
   return null;
 }
 
+const animeSeasonMonthOffsetByName: Record<string, number> = {
+  WINTER: 0,
+  SPRING: 3,
+  SUMMER: 6,
+  FALL: 9,
+};
+
+const animeFormatWeightByType: Record<string, number> = {
+  TV: 0,
+  TV_SHORT: 1,
+  MOVIE: 2,
+  ONA: 3,
+  OVA: 4,
+  SPECIAL: 5,
+  MUSIC: 6,
+};
+
+const mainlineAnimeFormats = new Set(["TV", "TV_SHORT"]);
+
+function getAnimeChronologyValue(entry: Pick<ProfileLibraryEntry, "firstAired" | "animeSeason" | "animeSeasonYear">) {
+  const firstAired = entry.firstAired?.trim();
+  if (firstAired) {
+    const directDateMatch = firstAired.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (directDateMatch) {
+      const year = Number.parseInt(directDateMatch[1], 10);
+      const month = Number.parseInt(directDateMatch[2], 10) - 1;
+      const day = Number.parseInt(directDateMatch[3], 10);
+      const asDate = Date.UTC(year, month, day);
+      if (Number.isFinite(asDate)) {
+        return asDate;
+      }
+    }
+  }
+
+  if (typeof entry.animeSeasonYear === "number") {
+    const season = entry.animeSeason?.toUpperCase() ?? "";
+    const monthOffset = animeSeasonMonthOffsetByName[season] ?? 0;
+    return Date.UTC(entry.animeSeasonYear, monthOffset, 1);
+  }
+
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function getAnimeFormatWeight(entry: Pick<ProfileLibraryEntry, "anilistFormat">) {
+  const format = entry.anilistFormat?.toUpperCase();
+  if (!format) {
+    return 99;
+  }
+  return animeFormatWeightByType[format] ?? 99;
+}
+
+function isMainlineAnime(entry: Pick<ProfileLibraryEntry, "anilistFormat">) {
+  const format = entry.anilistFormat?.toUpperCase();
+  if (!format) {
+    return true;
+  }
+  return mainlineAnimeFormats.has(format);
+}
+
+function selectPrimaryAnimeEntries(entries: ProfileLibraryEntry[]) {
+  const grouped = new Map<string, ProfileLibraryEntry[]>();
+
+  for (const entry of entries) {
+    const groupKey =
+      typeof entry.relationRootAnilistId === "number"
+        ? `root:${entry.relationRootAnilistId}`
+        : typeof entry.anilistId === "number"
+          ? `anilist:${entry.anilistId}`
+          : typeof entry.malId === "number"
+            ? `mal:${entry.malId}`
+            : `show:${entry.id}`;
+
+    const group = grouped.get(groupKey) ?? [];
+    group.push(entry);
+    grouped.set(groupKey, group);
+  }
+
+  const selected: ProfileLibraryEntry[] = [];
+
+  for (const group of grouped.values()) {
+    const mainline = group.filter((entry) => isMainlineAnime(entry));
+    const pool = mainline.length > 0 ? mainline : group;
+    const sorted = [...pool].sort((a, b) => {
+      const chronologyA = getAnimeChronologyValue(a);
+      const chronologyB = getAnimeChronologyValue(b);
+      if (chronologyA !== chronologyB) {
+        return chronologyA - chronologyB;
+      }
+
+      const formatA = getAnimeFormatWeight(a);
+      const formatB = getAnimeFormatWeight(b);
+      if (formatA !== formatB) {
+        return formatA - formatB;
+      }
+
+      if (a.title !== b.title) {
+        return a.title.localeCompare(b.title);
+      }
+
+      const idA = a.anilistId ?? a.malId ?? Number.MAX_SAFE_INTEGER;
+      const idB = b.anilistId ?? b.malId ?? Number.MAX_SAFE_INTEGER;
+      return idA - idB;
+    });
+
+    if (sorted[0]) {
+      selected.push(sorted[0]);
+    }
+  }
+
+  return selected.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+}
+
 function SectionHeader({
   title,
   icon,
@@ -141,6 +281,7 @@ function StatsPanelUnified({
   stats: ProfileStats;
   isDesktop: boolean;
 }) {
+  const isMobile = !isDesktop;
   const completed = stats.completedShows ?? 0;
   const total = stats.totalTrackedShows ?? 0;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -203,15 +344,27 @@ function StatsPanelUnified({
           <View
             key={m.label}
             className="items-center py-2"
-            style={{ flexBasis: isDesktop ? "11.5%" : "22%", flexGrow: 1 }}
+            style={{
+              flexBasis: isDesktop ? "11.5%" : "48%",
+              flexGrow: isDesktop ? 1 : 0,
+              minHeight: isMobile ? 94 : undefined,
+            }}
           >
             <View className="mb-2 h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
               <Ionicons name={m.icon} size={16} color="#ef4444" />
             </View>
-            <Text className="text-lg font-black text-text-primary">
+            <Text
+              className={`${isMobile ? "text-base" : "text-lg"} font-black text-text-primary leading-tight text-center`}
+              numberOfLines={2}
+              minimumFontScale={0.85}
+              adjustsFontSizeToFit
+            >
               {m.value}
             </Text>
-            <Text className="mt-0.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+            <Text
+              className="mt-0.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted text-center"
+              numberOfLines={2}
+            >
               {m.label}
             </Text>
           </View>
@@ -480,9 +633,25 @@ export default function ProfileScreen() {
   const isLoading =
     stats === undefined || favorites === undefined || lists === undefined || library === undefined;
 
+  const favoriteEntries = useMemo(
+    () => favorites ?? [],
+    [favorites]
+  );
+  const libraryEntries = useMemo(
+    () => library ?? [],
+    [library]
+  );
+  const primaryAnimeLibraryEntries = useMemo(
+    () =>
+      selectPrimaryAnimeEntries(
+        libraryEntries.filter((entry) => entry.mediaType === "anime")
+      ),
+    [libraryEntries]
+  );
+
   const heroBackdrop =
     stats?.bannerUrl ??
-    library?.find((entry) => typeof entry.backdropUrl === "string" && entry.backdropUrl.length > 0)
+    libraryEntries.find((entry) => typeof entry.backdropUrl === "string" && entry.backdropUrl.length > 0)
       ?.backdropUrl ??
     null;
   const heroBackdropUrl = toHttpsImageUrl(heroBackdrop);
@@ -490,49 +659,64 @@ export default function ProfileScreen() {
 
   const favoriteTvRailItems = useMemo<RailItem[]>(
     () =>
-      (favorites ?? [])
+      favoriteEntries
         .filter((entry) => entry.mediaType === "tv")
         .map((entry) => ({
           key: `fav-tv-${String(entry.id)}`,
-          routeId: null,
+          routeId: getRouteId({
+            mediaType: entry.mediaType,
+            tmdbId: entry.tmdbId,
+            anilistId: entry.anilistId,
+            malId: entry.malId,
+          }),
           title: entry.title,
           posterUrl: entry.posterUrl,
           badge: "Favorite",
         })),
-    [favorites]
+    [favoriteEntries]
   );
 
   const favoriteAnimeRailItems = useMemo<RailItem[]>(
     () =>
-      (favorites ?? [])
+      favoriteEntries
         .filter((entry) => entry.mediaType === "anime")
         .map((entry) => ({
           key: `fav-anime-${String(entry.id)}`,
-          routeId: null,
+          routeId: getRouteId({
+            mediaType: entry.mediaType,
+            tmdbId: entry.tmdbId,
+            anilistId: entry.anilistId,
+            malId: entry.malId,
+          }),
           title: entry.title,
           posterUrl: entry.posterUrl,
           badge: "Favorite",
         })),
-    [favorites]
+    [favoriteEntries]
   );
 
   const favoriteMovieRailItems = useMemo<RailItem[]>(
     () =>
-      (favorites ?? [])
+      favoriteEntries
         .filter((entry) => entry.mediaType === "movie")
         .map((entry) => ({
           key: `fav-movie-${String(entry.id)}`,
-          routeId: null,
+          routeId: getRouteId({
+            mediaType: entry.mediaType,
+            tmdbId: entry.tmdbId,
+            anilistId: entry.anilistId,
+            malId: entry.malId,
+          }),
           title: entry.title,
           posterUrl: entry.posterUrl,
           badge: "Favorite",
         })),
-    [favorites]
+    [favoriteEntries]
   );
 
   const activeTvRailItems = useMemo<RailItem[]>(
     () =>
-      (library ?? [])
+      libraryEntries
         .filter((entry) => entry.mediaType === "tv")
         .map((entry) => ({
           key: `active-tv-${entry.id ?? entry.title}`,
@@ -551,13 +735,12 @@ export default function ProfileScreen() {
               : formatStatus(entry.status),
           badge: "TV",
         })),
-    [library]
+    [libraryEntries]
   );
 
   const activeAnimeRailItems = useMemo<RailItem[]>(
     () =>
-      (library ?? [])
-        .filter((entry) => entry.mediaType === "anime")
+      primaryAnimeLibraryEntries
         .map((entry) => ({
           key: `active-anime-${entry.id ?? entry.title}`,
           routeId: getRouteId({
@@ -575,12 +758,12 @@ export default function ProfileScreen() {
               : formatStatus(entry.status),
           badge: "Anime",
         })),
-    [library]
+    [primaryAnimeLibraryEntries]
   );
 
   const activeMovieRailItems = useMemo<RailItem[]>(
     () =>
-      (library ?? [])
+      libraryEntries
         .filter((entry) => entry.mediaType === "movie")
         .map((entry) => ({
         key: `active-movie-${entry.id ?? entry.title}`,
@@ -595,7 +778,7 @@ export default function ProfileScreen() {
         meta: formatStatus(entry.status),
         badge: "Movie",
       })),
-    [library]
+    [libraryEntries]
   );
 
   const railPageSize = isDesktop ? 14 : 8;
@@ -1070,9 +1253,9 @@ export default function ProfileScreen() {
           </Link>
         </View>
 
-        {hasMoreRails ? (
+        {isLoadingMoreRails ? (
           <View className="items-center py-2">
-            <ActivityIndicator size="small" color={isLoadingMoreRails ? "#ef4444" : "#52525b"} />
+            <ActivityIndicator size="small" color="#ef4444" />
           </View>
         ) : null}
 

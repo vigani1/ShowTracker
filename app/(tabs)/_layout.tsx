@@ -1,14 +1,21 @@
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 import { Platform, View, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
 
 export default function TabsLayout() {
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const isDesktop = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
-  const mobileTabBarHeight = Platform.OS === "ios" ? 70 : 62;
-  const mobileTabBarPaddingBottom = Platform.OS === "ios" ? 10 : 6;
-  const mobileTabBarPaddingTop = Platform.OS === "ios" ? 4 : 6;
+  const iosBottomInset = Math.max(insets.bottom, 14);
+  const mobileTabBarPaddingBottom =
+    Platform.OS === "ios" ? iosBottomInset + 5 : 6;
+  const mobileTabBarPaddingTop = Platform.OS === "ios" ? 2 : 6;
+  const mobileTabBarHeight =
+    Platform.OS === "ios"
+      ? Math.max(78, 50 + mobileTabBarPaddingTop + mobileTabBarPaddingBottom)
+      : 62;
 
   return (
     <View className="flex-1" style={{ backgroundColor: "#09090b" }}>
@@ -28,11 +35,20 @@ export default function TabsLayout() {
                 },
             tabBarActiveTintColor: "#ef4444",
             tabBarInactiveTintColor: "#a1a1aa",
+            tabBarItemStyle:
+              Platform.OS === "ios"
+                ? {
+                    paddingTop: 0,
+                    paddingBottom: 2,
+                  }
+                : undefined,
+            tabBarIconStyle: Platform.OS === "ios" ? { marginTop: -2 } : undefined,
             tabBarLabelStyle: {
               fontSize: 10,
               fontWeight: "900",
               textTransform: "uppercase" as const,
               letterSpacing: 0.5,
+              marginBottom: Platform.OS === "ios" ? 2 : 0,
             },
             tabBarShowLabel: true,
           }}
@@ -68,6 +84,7 @@ export default function TabsLayout() {
             name="search"
             options={{
               title: "Search",
+              href: isDesktop ? undefined : null,
               tabBarIcon: ({ color }) => <Feather name="search" size={20} color={color} />,
             }}
           />

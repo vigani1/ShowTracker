@@ -12,6 +12,7 @@ Agent-first documentation for ShowTracker.
 | **[DEVELOPMENT.md](DEVELOPMENT.md)** | Setup, environment variables, dev workflow |
 | **[QUALITY.md](QUALITY.md)** | Performance, loading states, error handling, fallbacks |
 | **[WATCHING.md](WATCHING.md)** | Watch actions, status automation, testing checklist |
+| **[CONVEX_BANDWIDTH_OWNERSHIP_PLAN.md](CONVEX_BANDWIDTH_OWNERSHIP_PLAN.md)** | End-to-end plan to reduce Convex reads while preserving Home/Upcoming behavior |
 
 ## Testing
 

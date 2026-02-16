@@ -111,6 +111,36 @@ export type TmdbShowDetails = {
   first_air_date?: string;
   release_date?: string;
   imdb_id?: string | null;
+  last_episode_to_air?: {
+    id?: number;
+    name?: string | null;
+    overview?: string | null;
+    vote_average?: number | null;
+    vote_count?: number | null;
+    episode_type?: string | null;
+    production_code?: string | null;
+    runtime?: number | null;
+    show_id?: number | null;
+    still_path?: string | null;
+    season_number?: number;
+    episode_number?: number;
+    air_date?: string | null;
+  } | null;
+  next_episode_to_air?: {
+    id?: number;
+    name?: string | null;
+    overview?: string | null;
+    vote_average?: number | null;
+    vote_count?: number | null;
+    episode_type?: string | null;
+    production_code?: string | null;
+    runtime?: number | null;
+    show_id?: number | null;
+    still_path?: string | null;
+    season_number?: number;
+    episode_number?: number;
+    air_date?: string | null;
+  } | null;
   seasons?: {
     season_number: number;
     name?: string;

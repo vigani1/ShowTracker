@@ -110,7 +110,9 @@ function resolveDisplayName(args: {
   const explicitProfileName = args.profileUsername?.trim() ?? "";
   if (explicitProfileName) return explicitProfileName;
 
-  const tokenCandidate = extractCandidateFromTokenIdentifier(args.profileTokenIdentifier);
+  const tokenCandidate = extractCandidateFromTokenIdentifier(
+    args.profileTokenIdentifier,
+  );
   if (tokenCandidate) return prettifyHandle(tokenCandidate);
 
   return "ShowTracker User";
@@ -125,12 +127,18 @@ function calculateStreak(watchedDates: number[]): {
   }
 
   // Get unique dates (only count one watch per day for streaks)
-  const uniqueDates = Array.from(new Set(
-    watchedDates.map((timestamp) => {
-      const date = new Date(timestamp);
-      return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-    })
-  )).sort((a, b) => a - b);
+  const uniqueDates = Array.from(
+    new Set(
+      watchedDates.map((timestamp) => {
+        const date = new Date(timestamp);
+        return new Date(
+          date.getFullYear(),
+          date.getMonth(),
+          date.getDate(),
+        ).getTime();
+      }),
+    ),
+  ).sort((a, b) => a - b);
 
   let currentStreak = 0;
   let longestStreak = 0;
@@ -148,7 +156,7 @@ function calculateStreak(watchedDates: number[]): {
     currentStreak = 1;
     let checkDate = new Date(today);
     checkDate.setDate(checkDate.getDate() - 1);
-    
+
     while (uniqueDates.includes(checkDate.getTime())) {
       currentStreak++;
       checkDate.setDate(checkDate.getDate() - 1);
@@ -157,12 +165,12 @@ function calculateStreak(watchedDates: number[]): {
     // Check if yesterday had activity (streak could still be active)
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    
+
     if (uniqueDates.includes(yesterday.getTime())) {
       currentStreak = 1;
       let checkDate = new Date(yesterday);
       checkDate.setDate(checkDate.getDate() - 1);
-      
+
       while (uniqueDates.includes(checkDate.getTime())) {
         currentStreak++;
         checkDate.setDate(checkDate.getDate() - 1);
@@ -177,8 +185,9 @@ function calculateStreak(watchedDates: number[]): {
     } else {
       const prevDate = new Date(uniqueDates[i - 1]);
       const currDate = new Date(uniqueDates[i]);
-      const diffDays = (currDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24);
-      
+      const diffDays =
+        (currDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24);
+
       if (diffDays === 1) {
         currentCount++;
       } else {
@@ -205,10 +214,12 @@ export const getUserStats = query({
 
     // Resolve all referenced shows once to avoid repeated reads.
     const uniqueShowIds = Array.from(
-      new Set<Id<"shows">>(userShows.map((userShow) => userShow.showId))
+      new Set<Id<"shows">>(userShows.map((userShow) => userShow.showId)),
     );
 
-    const showDocs = await Promise.all(uniqueShowIds.map((showId) => ctx.db.get(showId)));
+    const showDocs = await Promise.all(
+      uniqueShowIds.map((showId) => ctx.db.get(showId)),
+    );
     const showById = new Map<string, Doc<"shows">>();
     uniqueShowIds.forEach((showId, index) => {
       const show = showDocs[index];
@@ -237,13 +248,16 @@ export const getUserStats = query({
 
       const watchedEpisodesCount = Math.max(
         0,
-        Math.floor(userShow.watchedEpisodesCount ?? 0)
+        Math.floor(userShow.watchedEpisodesCount ?? 0),
       );
       const watchedTotalCount = Math.max(
         watchedEpisodesCount,
-        Math.floor(userShow.watchedTotalCount ?? watchedEpisodesCount)
+        Math.floor(userShow.watchedTotalCount ?? watchedEpisodesCount),
       );
-      const rewatchCount = Math.max(watchedTotalCount - watchedEpisodesCount, 0);
+      const rewatchCount = Math.max(
+        watchedTotalCount - watchedEpisodesCount,
+        0,
+      );
       const fallbackRuntimeMinutes =
         Math.max(0, show.episodeRuntime ?? 0) * watchedTotalCount;
       const watchedRuntimeMinutes = Math.max(
@@ -251,8 +265,8 @@ export const getUserStats = query({
         Math.floor(
           typeof userShow.watchedRuntimeMinutes === "number"
             ? userShow.watchedRuntimeMinutes
-            : fallbackRuntimeMinutes
-        )
+            : fallbackRuntimeMinutes,
+        ),
       );
 
       uniqueEpisodesWatched += watchedEpisodesCount;
@@ -318,7 +332,9 @@ export const getUserStats = query({
     });
 
     // Count completed shows
-    const completedShows = userShows.filter((us) => us.status === "completed").length;
+    const completedShows = userShows.filter(
+      (us) => us.status === "completed",
+    ).length;
 
     // Get user profile for social stats
     const userProfile = await ctx.db
@@ -337,7 +353,8 @@ export const getUserStats = query({
     });
 
     // Calculate total across all types
-    const allWatchTimeMinutes = tvWatchTimeMinutes + animeWatchTimeMinutes + movieWatchTimeMinutes;
+    const allWatchTimeMinutes =
+      tvWatchTimeMinutes + animeWatchTimeMinutes + movieWatchTimeMinutes;
 
     return {
       // Episode stats
@@ -369,23 +386,23 @@ export const getUserStats = query({
       movieWatchTimeMinutes,
       movieWatchTimeFormatted: formatDuration(movieWatchTimeMinutes),
       movieWatchTimeBreakdown: formatDurationBreakdown(movieWatchTimeMinutes),
-      
+
       // Streaks
       currentStreak,
       longestStreak,
-      
+
       // Show completion
       completedShows,
       totalTrackedShows: userShows.length,
-      
+
       // Top re-watched
       topRewatchedShows,
-      
+
       // Social stats
       followingCount: userSocial?.followingCount ?? 0,
       followersCount: userSocial?.followersCount ?? 0,
       commentsCount: userSocial?.commentsCount ?? 0,
-      
+
       // Profile info
       username: displayName,
       bio: userProfile?.bio ?? "",
@@ -446,7 +463,9 @@ export const upsertUserProfile = mutation({
 
 export const getUserFavorites = query({
   args: {
-    mediaType: v.optional(v.union(v.literal("tv"), v.literal("anime"), v.literal("movie"))),
+    mediaType: v.optional(
+      v.union(v.literal("tv"), v.literal("anime"), v.literal("movie")),
+    ),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -458,7 +477,9 @@ export const getUserFavorites = query({
     if (mediaTypeFilter) {
       favorites = await ctx.db
         .query("userFavorites")
-        .withIndex("by_user_mediaType", (q) => q.eq("userId", userId).eq("mediaType", mediaTypeFilter))
+        .withIndex("by_user_mediaType", (q) =>
+          q.eq("userId", userId).eq("mediaType", mediaTypeFilter),
+        )
         .order("desc")
         .take(limit);
     } else {
@@ -478,8 +499,11 @@ export const getUserFavorites = query({
           posterUrl: show?.posterUrl,
           backdropUrl: show?.backdropUrl,
           mediaType: show?.mediaType ?? fav.mediaType,
+          tmdbId: show?.tmdbId ?? null,
+          anilistId: show?.anilistId ?? null,
+          malId: show?.malId ?? null,
         };
-      })
+      }),
     );
 
     return shows;
@@ -513,7 +537,7 @@ export const getWatchHistory = query({
           watchCount: entry.watchCount ?? 1,
           watchHistory: entry.watchHistory ?? [entry.watchedAt],
         };
-      })
+      }),
     );
 
     return history;

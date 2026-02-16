@@ -28,7 +28,7 @@ type SearchFilter = "all" | "tv" | "anime" | "movie";
 
 const filterOptions = [
   { value: "all" as const, label: "All" },
-  { value: "tv" as const, label: "TV" },
+  { value: "tv" as const, label: "TV Shows" },
   { value: "anime" as const, label: "Anime" },
   { value: "movie" as const, label: "Movies" },
 ];

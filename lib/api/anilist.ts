@@ -525,3 +525,83 @@ export async function getAniListAnimeRelations(
   setCached(cacheKey, result, cacheTtlMs);
   return result;
 }
+
+export async function getAniListRecommendations(
+  anilistId: number,
+  page: number = 1,
+  perPage: number = 10
+): Promise<AniListNormalizedResult> {
+  const cacheKey = `anilist-recommendations:${anilistId}:${page}:${perPage}`;
+  const cached = getCached<AniListNormalizedResult>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const data = await request<{
+    data: {
+      Media: {
+        recommendations: {
+          pageInfo: {
+            total: number;
+            currentPage: number;
+            lastPage: number;
+          };
+          nodes: {
+            mediaRecommendation?: AniListMedia | null;
+          }[];
+        };
+      } | null;
+    };
+  }>(
+    `query ($id: Int, $page: Int, $perPage: Int) {
+      Media(id: $id, type: ANIME) {
+        recommendations(page: $page, perPage: $perPage) {
+          pageInfo {
+            total
+            currentPage
+            lastPage
+          }
+          nodes {
+            mediaRecommendation {
+              ${anilistMediaSelection}
+            }
+          }
+        }
+      }
+    }`,
+    { id: anilistId, page, perPage }
+  );
+
+  const media = data.data.Media;
+  if (!media) {
+    return {
+      items: [],
+      pageInfo: { total: 0, currentPage: page, lastPage: page },
+    };
+  }
+
+  const recommendations = media.recommendations?.nodes ?? [];
+  const items: NormalizedShow[] = [];
+
+  for (const node of recommendations) {
+    const recMedia = node?.mediaRecommendation;
+    if (recMedia && recMedia.type === "ANIME") {
+      const normalized = await normalizeAniListMediaWithFallback(recMedia);
+      items.push(normalized);
+    }
+  }
+
+  const pageInfo = media.recommendations?.pageInfo ?? {
+    total: items.length,
+    currentPage: page,
+    lastPage: page,
+  };
+
+  const result: AniListNormalizedResult = {
+    items,
+    pageInfo,
+  };
+
+  setCached(cacheKey, result, cacheTtlMs);
+  return result;
+}

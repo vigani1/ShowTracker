@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Feather } from "@expo/vector-icons";
 import {
   ActivityIndicator,
   Platform,
@@ -19,13 +20,14 @@ import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
 import { getTrendingAniList, searchAniList } from "@/lib/api/anilist";
 import { discoverTmdb, getTrendingTmdb, type TmdbFilterParams } from "@/lib/api/tmdb";
 import type { NormalizedShow } from "@/lib/api/types";
 import { createShowRouteId } from "@/lib/show-route";
 import { getFiltersForMediaType } from "@/lib/filters";
 
-type DiscoverTab = "tv" | "anime" | "movie";
+type DiscoverTab = "all" | "tv" | "anime" | "movie";
 
 type TabState = {
   items: NormalizedShow[];
@@ -41,6 +43,7 @@ const LOAD_MORE_THRESHOLD = 0.5;
 const GRID_GAP = 12;
 
 const tabOptions = [
+  { value: "all" as const, label: "All" },
   { value: "tv" as const, label: "TV Shows" },
   { value: "anime" as const, label: "Anime" },
   { value: "movie" as const, label: "Movies" },
@@ -80,6 +83,23 @@ function filterTrackedTmdbItems(items: NormalizedShow[], trackedTmdbKeys: Set<st
   });
 }
 
+function interleaveDiscoverItems(
+  tvItems: NormalizedShow[],
+  animeItems: NormalizedShow[],
+  movieItems: NormalizedShow[]
+): NormalizedShow[] {
+  const result: NormalizedShow[] = [];
+  const maxLen = Math.max(tvItems.length, animeItems.length, movieItems.length);
+
+  for (let i = 0; i < maxLen; i += 1) {
+    if (i < tvItems.length) result.push(tvItems[i]);
+    if (i < animeItems.length) result.push(animeItems[i]);
+    if (i < movieItems.length) result.push(movieItems[i]);
+  }
+
+  return result;
+}
+
 function SectionHeader({ title, count }: { title: string; count: number }) {
   return (
     <View className="mb-3 flex-row items-center justify-between">
@@ -99,9 +119,10 @@ function SectionHeader({ title, count }: { title: string; count: number }) {
 }
 
 export function DiscoverScreen() {
-  const [activeTab, setActiveTab] = useState<DiscoverTab>("tv");
+  const [activeTab, setActiveTab] = useState<DiscoverTab>("all");
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
+  const isDesktop = isWeb && width >= DESKTOP_SIDEBAR_BREAKPOINT;
   const [gridWidth, setGridWidth] = useState(0);
 
   // Filter states
@@ -150,15 +171,37 @@ export function DiscoverScreen() {
   }, [trackedLibrary]);
   const isTrackedLibraryLoading = trackedLibrary === undefined;
 
+  const allTabItems = useMemo(
+    () => interleaveDiscoverItems(tvState.items, animeState.items, movieState.items),
+    [animeState.items, movieState.items, tvState.items]
+  );
+
   const activeState = useMemo(() => {
+    if (activeTab === "all") {
+      const isLoading = tvState.isLoading || animeState.isLoading || movieState.isLoading;
+      const isLoadingMore = tvState.isLoadingMore || animeState.isLoadingMore || movieState.isLoadingMore;
+      const error = tvState.error || animeState.error || movieState.error;
+      return {
+        items: allTabItems,
+        isLoading,
+        isLoadingMore,
+        error,
+        currentPage: Math.max(tvState.currentPage, animeState.currentPage, movieState.currentPage),
+        hasMore: tvState.hasMore || animeState.hasMore || movieState.hasMore,
+      };
+    }
     if (activeTab === "anime") return animeState;
     if (activeTab === "movie") return movieState;
     return tvState;
-  }, [activeTab, animeState, movieState, tvState]);
+  }, [activeTab, allTabItems, animeState, movieState, tvState]);
 
   const setActiveState = useCallback(
     (updater: (prev: TabState) => TabState) => {
-      if (activeTab === "anime") {
+      if (activeTab === "all") {
+        setTvState(updater);
+        setAnimeState(updater);
+        setMovieState(updater);
+      } else if (activeTab === "anime") {
         setAnimeState(updater);
       } else if (activeTab === "movie") {
         setMovieState(updater);
@@ -381,7 +424,93 @@ export function DiscoverScreen() {
     const nextPage = activeState.currentPage + 1;
 
     try {
-      if (activeTab === "anime") {
+      if (activeTab === "all") {
+        // Fetch each category independently with error handling for partial success
+        let tvResult: { items: any[]; page: number; totalPages: number } | null = null;
+        let animeResult: { items: any[]; pageInfo: { currentPage: number; lastPage: number } } | null = null;
+        let movieResult: { items: any[]; page: number; totalPages: number } | null = null;
+
+        // Only fetch TV if hasMore is true
+        if (tvState.hasMore) {
+          try {
+            tvResult = hasActiveFilters
+              ? await discoverTmdb("tv", nextPage, {
+                  with_genres: selectedGenres.join(","),
+                  first_air_date_year: selectedYear ? Number(selectedYear) : undefined,
+                  vote_average_gte: selectedRating ? Number(selectedRating) : undefined,
+                })
+              : await getTrendingTmdb("tv", "week", nextPage);
+          } catch (err) {
+            console.warn("Failed to fetch TV shows:", err);
+          }
+        }
+
+        // Only fetch Anime if hasMore is true
+        if (animeState.hasMore) {
+          try {
+            animeResult = hasActiveFilters
+              ? await searchAniList("", nextPage, INITIAL_ITEMS_PER_PAGE, {
+                  genres: selectedGenres.length > 0 ? selectedGenres : undefined,
+                  seasonYear: selectedYear ? Number(selectedYear) : undefined,
+                  minScore: selectedRating ? Number(selectedRating) * 10 : undefined,
+                })
+              : await getTrendingAniList(nextPage, INITIAL_ITEMS_PER_PAGE);
+          } catch (err) {
+            console.warn("Failed to fetch anime:", err);
+          }
+        }
+
+        // Only fetch Movies if hasMore is true
+        if (movieState.hasMore) {
+          try {
+            movieResult = hasActiveFilters
+              ? await discoverTmdb("movie", nextPage, {
+                  with_genres: selectedGenres.join(","),
+                  primary_release_year: selectedYear ? Number(selectedYear) : undefined,
+                  vote_average_gte: selectedRating ? Number(selectedRating) : undefined,
+                })
+              : await getTrendingTmdb("movie", "week", nextPage);
+          } catch (err) {
+            console.warn("Failed to fetch movies:", err);
+          }
+        }
+
+        // Update state for each category that returned results
+        if (tvResult) {
+          const newTvItems = filterTrackedTmdbItems(tvResult.items, trackedTmdbKeys);
+          setTvState((prev) => ({
+            ...prev,
+            items: [...prev.items, ...newTvItems],
+            currentPage: nextPage,
+            hasMore: tvResult!.page < tvResult!.totalPages,
+          }));
+        }
+
+        if (animeResult) {
+          const newAnimeItems = animeResult.items;
+          setAnimeState((prev) => ({
+            ...prev,
+            items: [...prev.items, ...newAnimeItems],
+            currentPage: nextPage,
+            hasMore: animeResult!.pageInfo.currentPage < animeResult!.pageInfo.lastPage,
+          }));
+        }
+
+        if (movieResult) {
+          const newMovieItems = filterTrackedTmdbItems(movieResult.items, trackedTmdbKeys);
+          setMovieState((prev) => ({
+            ...prev,
+            items: [...prev.items, ...newMovieItems],
+            currentPage: nextPage,
+            hasMore: movieResult!.page < movieResult!.totalPages,
+          }));
+        }
+
+        setActiveState((prev) => ({
+          ...prev,
+          isLoadingMore: false,
+        }));
+      } else if (activeTab === "anime") {
         let result;
         if (hasActiveFilters) {
           const filters = {
@@ -453,7 +582,9 @@ export function DiscoverScreen() {
               ? "anime"
               : activeTab === "movie"
                 ? "movies"
-                : "TV shows"
+                : activeTab === "all"
+                  ? "content"
+                  : "TV shows"
           }.`
         ),
       }));
@@ -461,12 +592,18 @@ export function DiscoverScreen() {
   }, [
     activeState,
     activeTab,
+    animeState.hasMore,
     hasActiveFilters,
+    movieState.hasMore,
     selectedGenres,
     selectedRating,
     selectedYear,
     setActiveState,
+    setTvState,
+    setAnimeState,
+    setMovieState,
     trackedTmdbKeys,
+    tvState.hasMore,
   ]);
 
   const heroShow = activeState.items[0] ?? null;
@@ -541,6 +678,21 @@ export function DiscoverScreen() {
           }
           className="mb-4"
         />
+
+        {!isDesktop ? (
+          <Link href="/search" asChild>
+            <Pressable className="mb-4 flex-row items-center gap-3 rounded-xl border-2 border-border-default bg-bg-surface px-3 py-2.5">
+              <View className="h-8 w-8 items-center justify-center rounded-lg bg-bg-base/70">
+                <Feather name="search" size={15} color="#ef4444" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-sm font-bold text-text-primary">Search</Text>
+                <Text className="text-xs text-text-secondary">Find shows, anime, and movies</Text>
+              </View>
+              <Feather name="chevron-right" size={16} color="#71717a" />
+            </Pressable>
+          </Link>
+        ) : null}
 
         {heroShow && !hasActiveFilters ? (
           <View className="mb-5 overflow-hidden rounded-xl border-2 border-border-default">
@@ -759,14 +911,29 @@ export function DiscoverScreen() {
                 ? "Anime"
                 : activeTab === "movie"
                   ? "Movies"
-                  : "TV Shows"
+                  : activeTab === "tv"
+                    ? "TV Shows"
+                    : "Content"
             }`}
             count={activeState.items.length}
           />
         ) : null}
       </View>
     ),
-    [heroShow, activeTab, activeState.items.length, hasActiveFilters, selectedGenres, selectedYear, selectedRating, openDropdown, genreOptions, yearOptions, ratingOptions]
+    [
+      heroShow,
+      activeTab,
+      activeState.items.length,
+      hasActiveFilters,
+      isDesktop,
+      selectedGenres,
+      selectedYear,
+      selectedRating,
+      openDropdown,
+      genreOptions,
+      yearOptions,
+      ratingOptions,
+    ]
   );
 
   return (
@@ -784,7 +951,7 @@ export function DiscoverScreen() {
           ListHeaderComponent={ListHeader}
           ListFooterComponent={renderFooter}
           ListEmptyComponent={renderEmpty}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
+          contentContainerStyle={{ paddingBottom: 32 }}
         />
       </View>
     </ScreenWrapper>
