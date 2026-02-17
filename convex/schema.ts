@@ -30,6 +30,24 @@ export default defineSchema({
     followersCount: v.optional(v.number()),
     commentsCount: v.optional(v.number()),
   }).index("by_user", ["userId"]),
+  userAnimeHomeSettings: defineTable({
+    userId: v.id("users"),
+    relationMode: v.union(v.literal("core_only"), v.literal("all_relations")),
+    completionBehavior: v.union(
+      v.literal("ask_every_time"),
+      v.literal("auto_open_next"),
+      v.literal("auto_pause_others_keep_next")
+    ),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+  userAnimeFranchiseSettings: defineTable({
+    userId: v.id("users"),
+    relationRootAnilistId: v.number(),
+    relationMode: v.union(v.literal("core_only"), v.literal("all_relations")),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_root", ["userId", "relationRootAnilistId"]),
   shows: defineTable({
     tmdbId: v.optional(v.number()),
     tvdbId: v.optional(v.number()),
@@ -76,6 +94,9 @@ export default defineSchema({
       v.literal("completed"),
       v.literal("plan_to_watch")
     ),
+    mediaType: v.optional(
+      v.union(v.literal("tv"), v.literal("anime"), v.literal("movie"))
+    ),
     isAutoTracked: v.optional(v.boolean()),
     relationRootAnilistId: v.optional(v.number()),
     lastRelationSyncAt: v.optional(v.number()),
@@ -91,6 +112,8 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_user_status", ["userId", "status"])
+    .index("by_user_status_mediaType", ["userId", "status", "mediaType"])
+    .index("by_user_mediaType", ["userId", "mediaType"])
     .index("by_user_relation_root", ["userId", "relationRootAnilistId"])
     .index("by_user_show", ["userId", "showId"])
     .index("by_showId", ["showId"])
@@ -127,6 +150,52 @@ export default defineSchema({
     .index("by_date", ["date"])
     .index("by_date_type", ["date", "mediaType"])
     .index("by_type_date", ["mediaType", "date"]),
+  // Pre-computed per-user per-show projections for Home/Upcoming feeds.
+  // Eliminates the N+1 join of userShows → shows on every page load.
+  // Updated incrementally by mutations and scheduled refresh jobs.
+  feedProjections: defineTable({
+    userId: v.id("users"),
+    showId: v.id("shows"),
+    userShowId: v.id("userShows"),
+
+    // Denormalized show metadata
+    title: v.string(),
+    mediaType: v.union(v.literal("tv"), v.literal("anime"), v.literal("movie")),
+    posterUrl: v.optional(v.string()),
+    backdropUrl: v.optional(v.string()),
+    tmdbId: v.optional(v.number()),
+    anilistId: v.optional(v.number()),
+    malId: v.optional(v.number()),
+    tvmazeId: v.optional(v.number()),
+    imdbId: v.optional(v.string()),
+    firstAired: v.optional(v.string()),
+    anilistFormat: v.optional(v.string()),
+    animeSeason: v.optional(v.string()),
+    animeSeasonYear: v.optional(v.number()),
+    totalEpisodes: v.optional(v.number()),
+
+    // Denormalized user tracking state
+    status: v.union(
+      v.literal("watching"),
+      v.literal("paused"),
+      v.literal("dropped"),
+      v.literal("completed"),
+      v.literal("plan_to_watch")
+    ),
+    isAutoTracked: v.optional(v.boolean()),
+    relationRootAnilistId: v.optional(v.number()),
+    watchedEpisodesCount: v.number(),
+    remainingEpisodes: v.optional(v.number()),
+    lastWatchedAt: v.number(),
+
+    // Timestamps
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_media", ["userId", "mediaType"])
+    .index("by_user_show", ["userId", "showId"])
+    .index("by_userShow", ["userShowId"]),
+
   rateLimits: defineTable({
     key: v.string(),
     lastAttemptTime: v.number(),

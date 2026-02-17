@@ -166,7 +166,42 @@ async function normalizeAniListMediaWithFallback(media: AniListMedia) {
   return patchAniListWithJikanFallback(normalized, media.idMal ?? undefined);
 }
 
-async function request<T>(query: string, variables: Record<string, unknown>) {
+function createAbortError() {
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+async function waitWithAbort(ms: number, signal?: AbortSignal) {
+  if (!signal) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return;
+  }
+
+  if (signal.aborted) {
+    throw createAbortError();
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      reject(createAbortError());
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function request<T>(
+  query: string,
+  variables: Record<string, unknown>,
+  options?: { signal?: AbortSignal }
+) {
   const maxAttempts = 4;
   const baseDelayMs = 750;
 
@@ -184,10 +219,15 @@ async function request<T>(query: string, variables: Record<string, unknown>) {
   };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (options?.signal?.aborted) {
+      throw createAbortError();
+    }
+
     const response = await fetch(anilistUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, variables }),
+      signal: options?.signal,
     });
     if (response.ok) {
       return (await response.json()) as T;
@@ -208,7 +248,7 @@ async function request<T>(query: string, variables: Record<string, unknown>) {
       ? retryAfterMs
       : baseDelayMs * 2 ** (attempt - 1);
     const jitter = Math.random() * 250;
-    await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
+    await waitWithAbort(delayMs + jitter, options?.signal);
   }
 
   throw new Error("AniList request failed: exceeded retry attempts");
@@ -529,7 +569,8 @@ export async function getAniListAnimeRelations(
 export async function getAniListRecommendations(
   anilistId: number,
   page: number = 1,
-  perPage: number = 10
+  perPage: number = 10,
+  options?: { signal?: AbortSignal }
 ): Promise<AniListNormalizedResult> {
   const cacheKey = `anilist-recommendations:${anilistId}:${page}:${perPage}`;
   const cached = getCached<AniListNormalizedResult>(cacheKey);
@@ -569,7 +610,8 @@ export async function getAniListRecommendations(
         }
       }
     }`,
-    { id: anilistId, page, perPage }
+    { id: anilistId, page, perPage },
+    options
   );
 
   const media = data.data.Media;

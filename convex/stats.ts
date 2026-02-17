@@ -412,6 +412,68 @@ export const getUserStats = query({
   },
 });
 
+export const getUserProfileSummary = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Unauthorized");
+    }
+
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+    const typedUserId = userId as Id<"users">;
+
+    const userShows = await ctx.db
+      .query("userShows")
+      .withIndex("by_user", (q) => q.eq("userId", typedUserId))
+      .collect();
+
+    let totalEpisodesWatched = 0;
+    let completedShows = 0;
+
+    for (const userShow of userShows) {
+      const watchedEpisodesCount = Math.max(
+        0,
+        Math.floor(userShow.watchedEpisodesCount ?? 0),
+      );
+      const watchedTotalCount = Math.max(
+        watchedEpisodesCount,
+        Math.floor(userShow.watchedTotalCount ?? watchedEpisodesCount),
+      );
+
+      totalEpisodesWatched += watchedTotalCount;
+      if (userShow.status === "completed") {
+        completedShows += 1;
+      }
+    }
+
+    const userProfile = await ctx.db
+      .query("userProfiles")
+      .withIndex("by_userId", (q) => q.eq("userId", typedUserId))
+      .first();
+
+    const displayName = resolveDisplayName({
+      profileUsername: userProfile?.username,
+      profileTokenIdentifier: userProfile?.tokenIdentifier,
+    });
+
+    return {
+      username: displayName,
+      bio: userProfile?.bio ?? "",
+      avatarUrl: userProfile?.avatarUrl,
+      bannerUrl: userProfile?.bannerUrl,
+      completedShows,
+      totalTrackedShows: userShows.length,
+      totalEpisodesWatched,
+      currentStreak: 0,
+      longestStreak: 0,
+    };
+  },
+});
+
 export const upsertUserProfile = mutation({
   args: {
     username: v.optional(v.string()),

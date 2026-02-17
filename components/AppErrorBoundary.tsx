@@ -46,7 +46,7 @@ type AppErrorBoundaryState = {
   error: unknown;
 };
 
-export class AppErrorBoundary extends Component<
+class AppErrorBoundaryInternal extends Component<
   AppErrorBoundaryProps,
   AppErrorBoundaryState
 > {
@@ -148,4 +148,10 @@ export class AppErrorBoundary extends Component<
       </View>
     );
   }
+}
+
+export function AppErrorBoundary(props: AppErrorBoundaryProps) {
+  return (
+    <AppErrorBoundaryInternal {...props}>{props.children}</AppErrorBoundaryInternal>
+  );
 }

@@ -17,7 +17,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { Link } from "expo-router";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@/convex/_generated/api";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -85,6 +85,14 @@ type ProfileStats = {
   completedShows?: number;
   totalTrackedShows?: number;
 };
+
+type AnimeHomeFranchiseMode = "core_only" | "all_relations";
+type AnimeCompletionBehavior =
+  | "ask_every_time"
+  | "auto_open_next"
+  | "auto_pause_others_keep_next";
+
+const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
 
 function formatCount(value: number) {
   return value.toLocaleString("en-US");
@@ -618,20 +626,47 @@ export default function ProfileScreen() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
+  const [isAnimeSettingsVisible, setIsAnimeSettingsVisible] = useState(false);
+  const [isSavingAnimeSettings, setIsSavingAnimeSettings] = useState(false);
+  const [animeSettingsError, setAnimeSettingsError] = useState<string | null>(null);
   const [statsVersion, setStatsVersion] = useState<"A" | "B">("A");
+  const [shouldLoadHeavySections, setShouldLoadHeavySections] = useState(false);
   const [visibleRailCount, setVisibleRailCount] = useState(8);
   const [isLoadingMoreRails, setIsLoadingMoreRails] = useState(false);
   const canLoadMoreFromEdgeRef = useRef(true);
   const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const animeSettingsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isSavingAnimeSettingsRef = useRef(false);
+  const deferredLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const stats = useQuery(api.stats.getUserStats);
-  const favorites = useQuery(api.stats.getUserFavorites, { limit: 60 });
-  const lists = useQuery(api.lists.getUserLists);
-  const library = useQuery(api.shows.getLibrary, {});
+  const profileSummary = useQuery(api.stats.getUserProfileSummary);
+  const stats = useQuery(api.stats.getUserStats, shouldLoadHeavySections ? {} : "skip");
+  const favorites = useQuery(
+    api.stats.getUserFavorites,
+    shouldLoadHeavySections ? { limit: 60 } : "skip"
+  );
+  const lists = useQuery(api.lists.getUserLists, shouldLoadHeavySections ? {} : "skip");
+  const library = useQuery(api.shows.getLibrary, shouldLoadHeavySections ? {} : "skip");
+  const animeHomeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
   const upsertUserProfile = useMutation(api.stats.upsertUserProfile);
+  const setUserAnimeHomeSettings = useMutation(api.shows.setUserAnimeHomeSettings);
+  const syncTrackedAnimeRelations = useAction(api.shows.syncTrackedAnimeRelations);
+  const pruneAnimeFranchiseToCoreRelations = useAction(
+    api.shows.pruneAnimeFranchiseToCoreRelations
+  );
 
-  const isLoading =
-    stats === undefined || favorites === undefined || lists === undefined || library === undefined;
+  const animeHomeFranchiseMode =
+    (animeHomeSettings?.relationMode as AnimeHomeFranchiseMode | undefined) ??
+    "core_only";
+  const animeCompletionBehavior =
+    (animeHomeSettings?.completionBehavior as AnimeCompletionBehavior | undefined) ??
+    "ask_every_time";
+
+  const isInitialLoading = profileSummary === undefined || animeHomeSettings === undefined;
+  const isHeavySectionsLoading =
+    shouldLoadHeavySections &&
+    (stats === undefined || favorites === undefined || lists === undefined || library === undefined);
+  const profileIdentity = stats ?? profileSummary;
 
   const favoriteEntries = useMemo(
     () => favorites ?? [],
@@ -648,14 +683,29 @@ export default function ProfileScreen() {
       ),
     [libraryEntries]
   );
+  const trackedAnimeFranchiseRoots = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          libraryEntries
+            .filter(
+              (entry) =>
+                entry.mediaType === "anime" &&
+                typeof entry.relationRootAnilistId === "number"
+            )
+            .map((entry) => entry.relationRootAnilistId as number)
+        )
+      ),
+    [libraryEntries]
+  );
 
   const heroBackdrop =
-    stats?.bannerUrl ??
+    profileIdentity?.bannerUrl ??
     libraryEntries.find((entry) => typeof entry.backdropUrl === "string" && entry.backdropUrl.length > 0)
       ?.backdropUrl ??
     null;
   const heroBackdropUrl = toHttpsImageUrl(heroBackdrop);
-  const avatarUrl = toHttpsImageUrl(stats?.avatarUrl);
+  const avatarUrl = toHttpsImageUrl(profileIdentity?.avatarUrl);
 
   const favoriteTvRailItems = useMemo<RailItem[]>(
     () =>
@@ -829,15 +879,30 @@ export default function ProfileScreen() {
   }, [railPageSize]);
 
   useEffect(() => {
+    deferredLoadTimerRef.current = setTimeout(() => {
+      setShouldLoadHeavySections(true);
+    }, 180);
+
     return () => {
+      if (deferredLoadTimerRef.current) {
+        clearTimeout(deferredLoadTimerRef.current);
+      }
       if (loadMoreTimerRef.current) {
         clearTimeout(loadMoreTimerRef.current);
+      }
+      if (animeSettingsTimeoutRef.current) {
+        clearTimeout(animeSettingsTimeoutRef.current);
       }
     };
   }, []);
 
   const loadMoreRails = useCallback(() => {
-    if (!hasMoreRails || isLoadingMoreRails || isLoading) {
+    if (
+      !hasMoreRails ||
+      isLoadingMoreRails ||
+      isInitialLoading ||
+      isHeavySectionsLoading
+    ) {
       return;
     }
 
@@ -846,7 +911,13 @@ export default function ProfileScreen() {
       setVisibleRailCount((count) => count + railPageSize);
       setIsLoadingMoreRails(false);
     }, 120);
-  }, [hasMoreRails, isLoading, isLoadingMoreRails, railPageSize]);
+  }, [
+    hasMoreRails,
+    isHeavySectionsLoading,
+    isInitialLoading,
+    isLoadingMoreRails,
+    railPageSize,
+  ]);
 
   const onProfileScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -863,20 +934,139 @@ export default function ProfileScreen() {
         distanceFromBottom <= 180 &&
         canLoadMoreFromEdgeRef.current &&
         !isLoadingMoreRails &&
-        !isLoading
+        !isInitialLoading &&
+        !isHeavySectionsLoading
       ) {
         canLoadMoreFromEdgeRef.current = false;
         loadMoreRails();
       }
     },
-    [isLoading, isLoadingMoreRails, loadMoreRails]
+    [isHeavySectionsLoading, isInitialLoading, isLoadingMoreRails, loadMoreRails]
+  );
+
+  const openAnimeSettings = () => {
+    setAnimeSettingsError(null);
+    setIsAnimeSettingsVisible(true);
+  };
+
+  const closeAnimeSettings = () => {
+    if (isSavingAnimeSettings) {
+      return;
+    }
+    setIsAnimeSettingsVisible(false);
+    setAnimeSettingsError(null);
+  };
+
+  const updateAnimeSettings = useCallback(
+    async (args: {
+      relationMode?: AnimeHomeFranchiseMode;
+      completionBehavior?: AnimeCompletionBehavior;
+    }) => {
+      if (isSavingAnimeSettingsRef.current) {
+        return false;
+      }
+      isSavingAnimeSettingsRef.current = true;
+
+      setAnimeSettingsError(null);
+      setIsSavingAnimeSettings(true);
+
+      try {
+        if (animeSettingsTimeoutRef.current) {
+          clearTimeout(animeSettingsTimeoutRef.current);
+          animeSettingsTimeoutRef.current = null;
+        }
+
+        await Promise.race([
+          setUserAnimeHomeSettings(args),
+          new Promise<never>((_, reject) => {
+            animeSettingsTimeoutRef.current = setTimeout(() => {
+              reject(new Error("timeout"));
+            }, ANIME_SETTINGS_UPDATE_TIMEOUT_MS);
+          }),
+        ]);
+        return true;
+      } catch (error) {
+        console.error("Failed to update anime settings", error);
+        const message = error instanceof Error ? error.message : String(error ?? "");
+        setAnimeSettingsError(
+          message.includes("timeout")
+            ? "Update timed out. Please try again."
+            : "Could not save anime settings."
+        );
+        return false;
+      } finally {
+        if (animeSettingsTimeoutRef.current) {
+          clearTimeout(animeSettingsTimeoutRef.current);
+          animeSettingsTimeoutRef.current = null;
+        }
+        isSavingAnimeSettingsRef.current = false;
+        setIsSavingAnimeSettings(false);
+      }
+    },
+    [setUserAnimeHomeSettings]
+  );
+
+  const handleSetHomeFranchiseMode = useCallback(
+    async (relationMode: AnimeHomeFranchiseMode) => {
+      const didUpdate = await updateAnimeSettings({ relationMode });
+      if (!didUpdate) {
+        return;
+      }
+
+      if (relationMode === "all_relations") {
+        void syncTrackedAnimeRelations({ force: true }).catch((error) => {
+          console.warn("Failed to sync tracked anime franchises", error);
+        });
+        return;
+      }
+
+      if (trackedAnimeFranchiseRoots.length === 0) {
+        return;
+      }
+
+      const pruneResults = await Promise.allSettled(
+        trackedAnimeFranchiseRoots.map((relationRootAnilistId) =>
+          pruneAnimeFranchiseToCoreRelations({ relationRootAnilistId })
+        )
+      );
+
+      const rejectedCount = pruneResults.filter(
+        (result) => result.status === "rejected"
+      ).length;
+      if (rejectedCount === 0) {
+        return;
+      }
+
+      console.warn(
+        `Failed to prune ${rejectedCount}/${pruneResults.length} anime franchise entries`
+      );
+      if (rejectedCount === pruneResults.length) {
+        setAnimeSettingsError(
+          "Saved settings, but pruning franchise entries failed. Please try again."
+        );
+      }
+    },
+    [
+      pruneAnimeFranchiseToCoreRelations,
+      setAnimeSettingsError,
+      syncTrackedAnimeRelations,
+      trackedAnimeFranchiseRoots,
+      updateAnimeSettings,
+    ]
+  );
+
+  const handleSetCompletionBehavior = useCallback(
+    async (completionBehavior: AnimeCompletionBehavior) => {
+      await updateAnimeSettings({ completionBehavior });
+    },
+    [updateAnimeSettings]
   );
 
   const openProfileEditor = () => {
-    setDraftUsername(stats?.username ?? "");
-    setDraftBio(stats?.bio ?? "");
-    setDraftAvatarUrl(stats?.avatarUrl ?? "");
-    setDraftBannerUrl(stats?.bannerUrl ?? "");
+    setDraftUsername(profileIdentity?.username ?? "");
+    setDraftBio(profileIdentity?.bio ?? "");
+    setDraftAvatarUrl(profileIdentity?.avatarUrl ?? "");
+    setDraftBannerUrl(profileIdentity?.bannerUrl ?? "");
     setProfileError(null);
     setProfileSuccess(null);
     setIsEditingProfile(true);
@@ -937,7 +1127,7 @@ export default function ProfileScreen() {
     }
   };
 
-  if (isLoading) {
+  if (isInitialLoading) {
     return (
       <ScreenWrapper>
         <View className="flex-1 items-center justify-center">
@@ -992,6 +1182,15 @@ export default function ProfileScreen() {
               >
                 <Text className="text-xs font-bold tracking-wide text-white">EDIT</Text>
               </Pressable>
+              <Pressable
+                onPress={openAnimeSettings}
+                className="rounded-full border border-white/40 bg-black/70 px-4 py-2 shadow-lg"
+              >
+                <View className="flex-row items-center gap-1.5">
+                  <Ionicons name="settings-outline" size={14} color="#e4e4e7" />
+                  <Text className="text-xs font-bold tracking-wide text-white">SETTINGS</Text>
+                </View>
+              </Pressable>
               {isDesktop && (
                 <Pressable
                   onPress={() => setShowSignOutConfirm(true)}
@@ -1026,29 +1225,29 @@ export default function ProfileScreen() {
                     className={`font-black text-white ${isDesktop ? "text-3xl tracking-tight" : "text-2xl"}`}
                     numberOfLines={1}
                   >
-                    {stats?.username || "ShowTracker User"}
+                    {profileIdentity?.username || "ShowTracker User"}
                   </Text>
                   <View className="mt-0.5 flex-row items-center gap-2">
                     <Text className="text-sm text-zinc-300" numberOfLines={1}>
                       {isAuthenticated
-                        ? `${formatCount(stats?.totalEpisodesWatched ?? 0)} episodes logged`
+                        ? `${formatCount(profileIdentity?.totalEpisodesWatched ?? 0)} episodes logged`
                         : "Not authenticated"}
                     </Text>
-                    {(stats?.currentStreak ?? 0) > 0 && (
+                    {(profileIdentity?.currentStreak ?? 0) > 0 && (
                       <>
                         <View className="h-1 w-1 rounded-full bg-zinc-500" />
                         <View className="flex-row items-center gap-1">
                           <Ionicons name="flame" size={12} color="#ef4444" />
                           <Text className="text-sm font-semibold text-zinc-300">
-                            {stats?.currentStreak}d
+                            {profileIdentity?.currentStreak}d
                           </Text>
                         </View>
                       </>
                     )}
                   </View>
-                  {stats?.bio ? (
+                  {profileIdentity?.bio ? (
                     <Text className="mt-0.5 text-xs text-zinc-400" numberOfLines={2}>
-                      {stats.bio}
+                      {profileIdentity.bio}
                     </Text>
                   ) : null}
                 </View>
@@ -1080,12 +1279,30 @@ export default function ProfileScreen() {
               </Text>
             </Pressable>
           </View>
-          {statsVersion === "A" ? (
-            <StatsPanelUnified stats={stats ?? {}} isDesktop={isDesktop} />
+          {stats ? (
+            statsVersion === "A" ? (
+              <StatsPanelUnified stats={stats} isDesktop={isDesktop} />
+            ) : (
+              <StatsPanelCards stats={stats} isDesktop={isDesktop} />
+            )
           ) : (
-            <StatsPanelCards stats={stats ?? {}} isDesktop={isDesktop} />
+            <View className="items-center justify-center rounded-2xl border border-border-default bg-bg-surface py-8">
+              <ActivityIndicator size="small" color="#ef4444" />
+              <Text className="mt-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
+                Loading detailed stats
+              </Text>
+            </View>
           )}
         </View>
+
+        {isHeavySectionsLoading ? (
+          <View className="mt-6 items-center justify-center rounded-xl border border-border-default bg-bg-surface py-5">
+            <ActivityIndicator size="small" color="#ef4444" />
+            <Text className="mt-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
+              Loading library sections
+            </Text>
+          </View>
+        ) : null}
 
         <View className="mt-8">
           <SectionHeader title="Lists" icon="list-outline" rightLabel={`${lists?.length ?? 0} TOTAL`} />
@@ -1419,6 +1636,287 @@ export default function ProfileScreen() {
               </ScrollView>
             </View>
           </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isAnimeSettingsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeAnimeSettings}
+      >
+        <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
+          <Pressable
+            className="absolute inset-0"
+            onPress={closeAnimeSettings}
+            disabled={isSavingAnimeSettings}
+          />
+
+          <View className={`w-full overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface ${isDesktop ? "max-w-md" : ""}`}>
+            <LinearGradient
+              colors={["rgba(239,68,68,0.2)", "rgba(56,189,248,0.06)", "transparent"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={{ height: 4, width: "100%" }}
+            />
+
+            <View className="border-b border-border-default px-4 pb-3 pt-4">
+              <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                Anime Settings
+              </Text>
+              <Text className="mt-1 text-lg font-black text-text-primary">
+                Home and Completion
+              </Text>
+              <Text className="mt-2 text-sm text-text-secondary">
+                These defaults apply to all anime unless you set a franchise override on a show page.
+              </Text>
+            </View>
+
+            <ScrollView
+              className="max-h-[70vh]"
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View className="gap-3 px-4 pb-4 pt-3">
+                <View>
+                  <Text className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    Home Franchise View
+                  </Text>
+
+                  <View className="gap-2">
+                    <Pressable
+                      disabled={isSavingAnimeSettings}
+                      onPress={() => {
+                        void handleSetHomeFranchiseMode("core_only");
+                      }}
+                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                        animeHomeFranchiseMode === "core_only"
+                          ? "border-primary/60 bg-primary/15"
+                          : "border-border-default bg-bg-base"
+                      }`}
+                      style={({ pressed }) => ({
+                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                      })}
+                    >
+                      <View className="flex-1">
+                        <Text
+                          className={`text-sm font-semibold ${
+                            animeHomeFranchiseMode === "core_only"
+                              ? "text-primary"
+                              : "text-text-primary"
+                          }`}
+                        >
+                          Core Franchise Titles
+                        </Text>
+                        <Text className="mt-0.5 text-xs text-text-secondary">
+                          Keep Home focused on the main franchise timeline.
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={
+                          animeHomeFranchiseMode === "core_only"
+                            ? "radio-button-on"
+                            : "radio-button-off"
+                        }
+                        size={18}
+                        color={animeHomeFranchiseMode === "core_only" ? "#ef4444" : "#71717a"}
+                      />
+                    </Pressable>
+
+                    <Pressable
+                      disabled={isSavingAnimeSettings}
+                      onPress={() => {
+                        void handleSetHomeFranchiseMode("all_relations");
+                      }}
+                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                        animeHomeFranchiseMode === "all_relations"
+                          ? "border-primary/60 bg-primary/15"
+                          : "border-border-default bg-bg-base"
+                      }`}
+                      style={({ pressed }) => ({
+                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                      })}
+                    >
+                      <View className="flex-1">
+                        <Text
+                          className={`text-sm font-semibold ${
+                            animeHomeFranchiseMode === "all_relations"
+                              ? "text-primary"
+                              : "text-text-primary"
+                          }`}
+                        >
+                          All Franchise Titles
+                        </Text>
+                        <Text className="mt-0.5 text-xs text-text-secondary">
+                          Include side stories and related titles on Home.
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={
+                          animeHomeFranchiseMode === "all_relations"
+                            ? "radio-button-on"
+                            : "radio-button-off"
+                        }
+                        size={18}
+                        color={animeHomeFranchiseMode === "all_relations" ? "#ef4444" : "#71717a"}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+
+                <View>
+                  <Text className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    On Completion
+                  </Text>
+
+                  <View className="gap-2">
+                    <Pressable
+                      disabled={isSavingAnimeSettings}
+                      onPress={() => {
+                        void handleSetCompletionBehavior("ask_every_time");
+                      }}
+                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                        animeCompletionBehavior === "ask_every_time"
+                          ? "border-primary/60 bg-primary/15"
+                          : "border-border-default bg-bg-base"
+                      }`}
+                      style={({ pressed }) => ({
+                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                      })}
+                    >
+                      <View className="flex-1">
+                        <Text
+                          className={`text-sm font-semibold ${
+                            animeCompletionBehavior === "ask_every_time"
+                              ? "text-primary"
+                              : "text-text-primary"
+                          }`}
+                        >
+                          Ask Every Time
+                        </Text>
+                        <Text className="mt-0.5 text-xs text-text-secondary">
+                          Prompt before moving to the next season.
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={
+                          animeCompletionBehavior === "ask_every_time"
+                            ? "radio-button-on"
+                            : "radio-button-off"
+                        }
+                        size={18}
+                        color={animeCompletionBehavior === "ask_every_time" ? "#ef4444" : "#71717a"}
+                      />
+                    </Pressable>
+
+                    <Pressable
+                      disabled={isSavingAnimeSettings}
+                      onPress={() => {
+                        void handleSetCompletionBehavior("auto_open_next");
+                      }}
+                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                        animeCompletionBehavior === "auto_open_next"
+                          ? "border-primary/60 bg-primary/15"
+                          : "border-border-default bg-bg-base"
+                      }`}
+                      style={({ pressed }) => ({
+                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                      })}
+                    >
+                      <View className="flex-1">
+                        <Text
+                          className={`text-sm font-semibold ${
+                            animeCompletionBehavior === "auto_open_next"
+                              ? "text-primary"
+                              : "text-text-primary"
+                          }`}
+                        >
+                          Open Next Season
+                        </Text>
+                        <Text className="mt-0.5 text-xs text-text-secondary">
+                          Jump directly to the next main franchise season.
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={
+                          animeCompletionBehavior === "auto_open_next"
+                            ? "radio-button-on"
+                            : "radio-button-off"
+                        }
+                        size={18}
+                        color={animeCompletionBehavior === "auto_open_next" ? "#ef4444" : "#71717a"}
+                      />
+                    </Pressable>
+
+                    <Pressable
+                      disabled={isSavingAnimeSettings}
+                      onPress={() => {
+                        void handleSetCompletionBehavior("auto_pause_others_keep_next");
+                      }}
+                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                        animeCompletionBehavior === "auto_pause_others_keep_next"
+                          ? "border-primary/60 bg-primary/15"
+                          : "border-border-default bg-bg-base"
+                      }`}
+                      style={({ pressed }) => ({
+                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                      })}
+                    >
+                      <View className="flex-1">
+                        <Text
+                          className={`text-sm font-semibold ${
+                            animeCompletionBehavior === "auto_pause_others_keep_next"
+                              ? "text-primary"
+                              : "text-text-primary"
+                          }`}
+                        >
+                          Pause Other Franchise Titles
+                        </Text>
+                        <Text className="mt-0.5 text-xs text-text-secondary">
+                          Keep the next season active and pause the rest.
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={
+                          animeCompletionBehavior === "auto_pause_others_keep_next"
+                            ? "radio-button-on"
+                            : "radio-button-off"
+                        }
+                        size={18}
+                        color={animeCompletionBehavior === "auto_pause_others_keep_next" ? "#ef4444" : "#71717a"}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+
+                <Text className="text-xs text-text-muted">
+                  Tip: per-franchise overrides are available from each anime show page.
+                </Text>
+
+                {animeSettingsError ? (
+                  <Text className="text-sm text-primary">{animeSettingsError}</Text>
+                ) : null}
+
+                {isSavingAnimeSettings ? (
+                  <View className="flex-row items-center justify-center gap-2 py-1">
+                    <ActivityIndicator size="small" color="#a1a1aa" />
+                    <Text className="text-xs text-text-secondary">Saving settings...</Text>
+                  </View>
+                ) : null}
+
+                <Pressable
+                  disabled={isSavingAnimeSettings}
+                  onPress={closeAnimeSettings}
+                  className="items-center justify-center rounded-xl border border-border-default bg-bg-elevated py-3"
+                  style={({ pressed }) => ({
+                    opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.88 : 1,
+                  })}
+                >
+                  <Text className="text-sm font-semibold text-text-primary">Done</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </View>
         </View>
       </Modal>
 

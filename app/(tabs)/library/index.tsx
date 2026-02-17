@@ -233,7 +233,15 @@ export default function LibraryScreen() {
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
   const [gridWidth, setGridWidth] = useState(0);
-  const libraryItems = useQuery(api.shows.getLibrary, {});
+  const libraryQueryArgs = useMemo(
+    () =>
+      activeTab === "all"
+        ? {}
+        : { mediaType: activeTab as "tv" | "anime" | "movie" },
+    [activeTab]
+  );
+  const libraryItems = useQuery(api.shows.getLibrary, libraryQueryArgs);
+  const libraryCounts = useQuery(api.shows.getLibraryCounts, {});
   const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canLoadMoreFromEdgeRef = useRef(true);
 
@@ -253,6 +261,8 @@ export default function LibraryScreen() {
     return libraryItems as LibraryDashboardItem[];
   }, [libraryItems]);
 
+  // When mediaType is passed server-side, sourceItems is already filtered.
+  // Keep a client-side guard for safety during transition.
   const mediaItems = useMemo(
     () =>
       activeTab === "all"
@@ -314,14 +324,57 @@ export default function LibraryScreen() {
   const hasActiveFilters =
     selectedGenres.length > 0 || selectedYear !== "" || selectedRating !== "";
 
-  const statusOptionsWithCounts = useMemo(
-    () =>
-      statusOptions.map((option) => ({
+  const statusOptionsWithCounts = useMemo(() => {
+    // Use backend counts when available to avoid iterating all items client-side.
+    if (libraryCounts) {
+      const relevantTypes: string[] =
+        activeTab === "all" ? ["tv", "anime", "movie"] : [activeTab];
+
+      const getCountForFilter = (filter: LibraryStatusFilter): number => {
+        if (filter === "all") {
+          return relevantTypes.reduce(
+            (sum, mt) =>
+              sum +
+              Object.values(libraryCounts[mt] ?? {}).reduce(
+                (s, c) => s + (c as number),
+                0
+              ),
+            0
+          );
+        }
+        // Map compound filter names to underlying statuses
+        const statusKeys: string[] =
+          filter === "active"
+            ? ["watching", "plan_to_watch"]
+            : filter === "watched"
+              ? ["completed"]
+              : filter === "not_watched"
+                ? ["watching", "paused", "dropped", "plan_to_watch"]
+                : [filter];
+
+        return relevantTypes.reduce(
+          (sum, mt) =>
+            sum +
+            statusKeys.reduce(
+              (s, sk) => s + ((libraryCounts[mt]?.[sk] as number) ?? 0),
+              0
+            ),
+          0
+        );
+      };
+
+      return statusOptions.map((option) => ({
         ...option,
-        count: mediaItems.filter((item) => matchesStatusFilter(item, option.value)).length,
-      })),
-    [mediaItems, statusOptions]
-  );
+        count: getCountForFilter(option.value),
+      }));
+    }
+
+    // Fallback: compute from loaded items (pre-migration path)
+    return statusOptions.map((option) => ({
+      ...option,
+      count: mediaItems.filter((item) => matchesStatusFilter(item, option.value)).length,
+    }));
+  }, [activeTab, libraryCounts, mediaItems, statusOptions]);
 
   useEffect(() => {
     if (!statusOptionsWithCounts.some((option) => option.value === statusFilter)) {

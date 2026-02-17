@@ -6,16 +6,16 @@ import {
   mutation,
   query,
 } from "@/convex/_generated/server";
-import type { Doc } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 import type { ActionCtx } from "@/convex/_generated/server";
 import { v } from "convex/values";
-import { getAniListAiringSchedule } from "../lib/api/anilist";
+import { getAniListAiringSchedule } from "@/lib/api/anilist";
 import {
   normalizeAniListScheduleEntry,
   normalizeTvMazeScheduleEntry,
-} from "../lib/api/normalize";
-import type { NormalizedScheduleEntry } from "../lib/api/types";
-import { getTvMazeScheduleByDate } from "../lib/api/tvmaze";
+} from "@/lib/api/normalize";
+import type { NormalizedScheduleEntry } from "@/lib/api/types";
+import { getTvMazeScheduleByDate } from "@/lib/api/tvmaze";
 import { api, internal } from "@/convex/_generated/api";
 
 const HYDRATE_BATCH_SIZE = 3;
@@ -49,11 +49,6 @@ export const getRateLimitState = internalQuery({
     key: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Unauthorized");
-    }
-
     const existing = await ctx.db
       .query("rateLimits")
       .withIndex("by_key", (q) => q.eq("key", args.key))
@@ -73,11 +68,6 @@ export const setRateLimitState = internalMutation({
     nextRetryTime: v.number(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Unauthorized");
-    }
-
     const existing = await ctx.db
       .query("rateLimits")
       .withIndex("by_key", (q) => q.eq("key", args.key))
@@ -249,20 +239,48 @@ function parseCachedScheduleEntries(episodesRaw: string): CompactScheduleEntry[]
   return compacted;
 }
 
-function getRouteIdForShow(show: Doc<"shows">): string | null {
+function getRouteId(args: {
+  mediaType: string;
+  tmdbId?: number;
+  anilistId?: number;
+  malId?: number;
+}): string | null {
   if (
-    typeof show.tmdbId === "number" &&
-    (show.mediaType === "tv" || show.mediaType === "movie")
+    typeof args.tmdbId === "number" &&
+    (args.mediaType === "tv" || args.mediaType === "movie")
   ) {
-    return `tmdb:${show.mediaType}:${show.tmdbId}`;
+    return `tmdb:${args.mediaType}:${args.tmdbId}`;
   }
-  if (typeof show.anilistId === "number" && show.mediaType === "anime") {
-    return `anilist:anime:${show.anilistId}`;
+  if (typeof args.anilistId === "number" && args.mediaType === "anime") {
+    return `anilist:anime:${args.anilistId}`;
   }
-  if (typeof show.malId === "number" && show.mediaType === "anime") {
-    return `jikan:anime:${show.malId}`;
+  if (typeof args.malId === "number" && args.mediaType === "anime") {
+    return `jikan:anime:${args.malId}`;
   }
   return null;
+}
+
+function getRouteIdForShow(show: Doc<"shows">): string | null {
+  return getRouteId({
+    mediaType: show.mediaType,
+    tmdbId: show.tmdbId,
+    anilistId: show.anilistId,
+    malId: show.malId,
+  });
+}
+
+function getRouteIdForProjection(p: {
+  mediaType: string;
+  tmdbId?: number;
+  anilistId?: number;
+  malId?: number;
+}): string | null {
+  return getRouteId({
+    mediaType: p.mediaType,
+    tmdbId: p.tmdbId,
+    anilistId: p.anilistId,
+    malId: p.malId,
+  });
 }
 
 function getUnixRangeForDate(dateString: string) {
@@ -358,13 +376,17 @@ export const getScheduleCacheStatusForDate = query({
     }
 
     const hasFreshTv =
-      typeof tvLastUpdated === "number" && now - tvLastUpdated < SCHEDULE_CACHE_FRESH_MS;
+      (args.date < todayKey && tvLastUpdated !== null) ||
+      (typeof tvLastUpdated === "number" &&
+        now - tvLastUpdated < SCHEDULE_CACHE_FRESH_MS);
     const hasFreshAnimeByTime =
       typeof animeLastUpdated === "number" &&
       now - animeLastUpdated < SCHEDULE_CACHE_FRESH_MS;
     const shouldForceRefreshPastAnimeZero =
-      animeCount === 0 && args.date <= todayKey;
-    const hasFreshAnime = hasFreshAnimeByTime && !shouldForceRefreshPastAnimeZero;
+      animeCount === 0 && args.date === todayKey;
+    const hasFreshAnime =
+      ((args.date < todayKey && animeLastUpdated !== null) || hasFreshAnimeByTime) &&
+      !shouldForceRefreshPastAnimeZero;
 
     return {
       tvCount,
@@ -460,7 +482,7 @@ async function hydrateOneDate(
     lastUpdated: now,
   });
 
-  if (!animeFetchRateLimited || compactAnimeEntries.length > 0) {
+  if (!animeFetchRateLimited) {
     await ctx.runMutation(api.schedule.upsertScheduleBucket, {
       date,
       mediaType: "anime",
@@ -472,10 +494,7 @@ async function hydrateOneDate(
   return {
     date,
     tvCount: compactTvEntries.length,
-    animeCount:
-      animeFetchRateLimited && compactAnimeEntries.length === 0
-        ? cacheStatus.animeCount
-        : compactAnimeEntries.length,
+    animeCount: animeFetchRateLimited ? cacheStatus.animeCount : compactAnimeEntries.length,
     cached: false,
   };
 }
@@ -543,23 +562,46 @@ export const getUpcomingSchedule = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     
-    // Return empty array if user is not authenticated
+    // Intentionally return an empty list for unauthenticated requests.
+    // This keeps pre-auth/SSR rendering paths safe without throwing.
     if (!userId) {
       return [];
     }
+
+    const typedUserId = userId as Id<"users">;
     
     const today = startOfDay(new Date());
 
-    const userShows = await ctx.db
-      .query("userShows")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .collect();
+    // Use feedProjections to avoid N+1 userShows→shows reads.
+    // Each projection already has the denormalized show metadata we need.
+    // Query only TV/Anime projections to avoid scanning movie rows.
+    const mediaFilter = args.mediaFilter;
 
-    // Include all tracked shows (watching, plan_to_watch, paused, completed, dropped)
-    // Filter out movies since they don't have episode schedules
-    const trackedUserShows = userShows;
+    const nonMovieProjections = mediaFilter
+      ? await ctx.db
+          .query("feedProjections")
+          .withIndex("by_user_media", (q) =>
+            q.eq("userId", typedUserId).eq("mediaType", mediaFilter)
+          )
+          .collect()
+      : (
+          await Promise.all([
+            ctx.db
+              .query("feedProjections")
+              .withIndex("by_user_media", (q) =>
+                q.eq("userId", typedUserId).eq("mediaType", "tv")
+              )
+              .collect(),
+            ctx.db
+              .query("feedProjections")
+              .withIndex("by_user_media", (q) =>
+                q.eq("userId", typedUserId).eq("mediaType", "anime")
+              )
+              .collect(),
+          ])
+        ).flat();
 
-    if (trackedUserShows.length === 0) {
+    if (nonMovieProjections.length === 0) {
       return [] as {
         date: string;
         episodes: {
@@ -578,30 +620,21 @@ export const getUpcomingSchedule = query({
       }[];
     }
 
-    const trackedShows = await Promise.all(
-      trackedUserShows.map(async (userShow) => {
-        const show = await ctx.db.get(userShow.showId);
-        if (!show || show.mediaType === "movie") {
-          return null;
-        }
-        const routeId = getRouteIdForShow(show);
-        return {
-          title: show.title,
-          normalizedTitle: normalizeTitle(show.title),
-          mediaType: show.mediaType,
-          posterUrl: show.posterUrl ?? undefined,
-          routeId,
-          anilistId: show.anilistId,
-          tvmazeId: show.tvmazeId,
-        };
-      })
-    );
+    // Build lookup maps from projection data (zero extra reads).
+    const trackedShows = nonMovieProjections.map((p) => ({
+      title: p.title,
+      normalizedTitle: normalizeTitle(p.title),
+      mediaType: p.mediaType as "tv" | "anime",
+      posterUrl: p.posterUrl ?? undefined,
+      routeId: getRouteIdForProjection(p),
+      anilistId: p.anilistId,
+      tvmazeId: p.tvmazeId,
+    }));
 
-    const byExternalKey = new Map<string, NonNullable<(typeof trackedShows)[number]>>();
-    const byTitle = new Map<string, NonNullable<(typeof trackedShows)[number]>>();
+    const byExternalKey = new Map<string, (typeof trackedShows)[number]>();
+    const byTitle = new Map<string, (typeof trackedShows)[number]>();
 
     for (const tracked of trackedShows) {
-      if (!tracked) continue;
       if (typeof tracked.anilistId === "number") {
         byExternalKey.set(`anilist:${tracked.anilistId}`, tracked);
       }
@@ -611,7 +644,6 @@ export const getUpcomingSchedule = query({
       byTitle.set(tracked.normalizedTitle, tracked);
     }
 
-    const mediaFilter = args.mediaFilter;
     const rows = mediaFilter
       ? await ctx.db
           .query("scheduleCache")

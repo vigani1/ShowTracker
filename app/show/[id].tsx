@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -68,6 +68,26 @@ type NextSeasonPrompt = {
   nextTitle: string;
   nextRouteId: string;
 };
+
+type AnimeHomeRelationMode = "core_only" | "all_relations";
+type AnimeCompletionBehavior =
+  | "ask_every_time"
+  | "auto_open_next"
+  | "auto_pause_others_keep_next";
+
+function isValidAnimeHomeRelationMode(value: unknown): value is AnimeHomeRelationMode {
+  return value === "core_only" || value === "all_relations";
+}
+
+function isValidAnimeCompletionBehavior(value: unknown): value is AnimeCompletionBehavior {
+  return (
+    value === "ask_every_time" ||
+    value === "auto_open_next" ||
+    value === "auto_pause_others_keep_next"
+  );
+}
+
+const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
 
 type WatchActionTarget =
   | { kind: "movie"; title: string; subtitle: string }
@@ -232,6 +252,44 @@ function buildShowPayload(show: NormalizedShow) {
     lastRelationSyncAt: show.lastRelationSyncAt,
     lastUpdated: Date.now(),
   };
+}
+
+function buildShowLookupArgs(show: NormalizedShow | null) {
+  if (!show) return "skip" as const;
+
+  const lookupArgs: {
+    tmdbId?: number;
+    anilistId?: number;
+    malId?: number;
+    tvmazeId?: number;
+    mediaType: "tv" | "anime" | "movie";
+  } = {
+    mediaType: show.mediaType,
+  };
+
+  if (typeof show.tmdbId === "number") {
+    lookupArgs.tmdbId = show.tmdbId;
+  }
+  if (typeof show.anilistId === "number") {
+    lookupArgs.anilistId = show.anilistId;
+  }
+  if (typeof show.malId === "number") {
+    lookupArgs.malId = show.malId;
+  }
+  if (typeof show.tvmazeId === "number") {
+    lookupArgs.tvmazeId = show.tvmazeId;
+  }
+
+  if (
+    typeof lookupArgs.tmdbId !== "number" &&
+    typeof lookupArgs.anilistId !== "number" &&
+    typeof lookupArgs.malId !== "number" &&
+    typeof lookupArgs.tvmazeId !== "number"
+  ) {
+    return "skip" as const;
+  }
+
+  return lookupArgs;
 }
 
 function buildTrackingArgs(show: NormalizedShow | null) {
@@ -646,6 +704,7 @@ export function ShowDetailScreen() {
   const [isStatusMenuVisible, setIsStatusMenuVisible] = useState(false);
   const [isMarkingShow, setIsMarkingShow] = useState(false);
   const [trackingError, setTrackingError] = useState<string | null>(null);
+  const [trackingNotice, setTrackingNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isAddToListModalVisible, setIsAddToListModalVisible] = useState(false);
@@ -658,6 +717,15 @@ export function ShowDetailScreen() {
   const [isWatchActionRunning, setIsWatchActionRunning] = useState(false);
   const [nextSeasonPrompt, setNextSeasonPrompt] = useState<NextSeasonPrompt | null>(null);
   const [isNavigatingToNextSeason, setIsNavigatingToNextSeason] = useState(false);
+  const [isPausingRelatedEntries, setIsPausingRelatedEntries] = useState(false);
+  const [isUpdatingAnimeSettings, setIsUpdatingAnimeSettings] = useState(false);
+  const [isFranchiseSettingsModalVisible, setIsFranchiseSettingsModalVisible] =
+    useState(false);
+  const animeSettingsUpdateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const animeSettingsOpIdRef = useRef(0);
+  const expandedSeasonsRef = useRef(expandedSeasons);
+  const seasonWatchedKeysRef = useRef(seasonWatchedKeys);
+  const loadingSeasonsRef = useRef<Set<number>>(new Set());
   const [apiRelatedAnime, setApiRelatedAnime] = useState<AniListRelatedShow[]>([]);
   const [isLoadingRelatedAnime, setIsLoadingRelatedAnime] = useState(false);
 
@@ -676,9 +744,21 @@ export function ShowDetailScreen() {
   const markSeasonWatched = useMutation(api.shows.markSeasonWatched);
   const unmarkSeasonWatched = useMutation(api.shows.unmarkSeasonWatched);
   const clearShowWatched = useMutation(api.shows.clearShowWatched);
+  const clearRelatedAnimeWatched = useMutation(api.shows.clearRelatedAnimeWatched);
+  const pauseOtherRelatedAnimeEntries = useMutation(
+    api.shows.pauseOtherRelatedAnimeEntries
+  );
+  const setAnimeFranchiseRelationMode = useMutation(
+    api.shows.setAnimeFranchiseRelationMode
+  );
+  const syncAnimeRelationsForRoot = useAction(api.shows.syncAnimeRelationsForRoot);
+  const pruneAnimeFranchiseToCoreRelations = useAction(
+    api.shows.pruneAnimeFranchiseToCoreRelations
+  );
   const toggleMovieWatched = useMutation(api.shows.toggleMovieWatched);
 
   const trackingArgs = useMemo(() => buildTrackingArgs(show), [show]);
+  const showLookupArgs = useMemo(() => buildShowLookupArgs(show), [show]);
   const tracking = useQuery(api.shows.getUserShowTracking, trackingArgs);
   const watchedSeasonProgress = useQuery(
     api.shows.getWatchedSeasonProgress,
@@ -700,6 +780,32 @@ export function ShowDetailScreen() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tracking?.status]);
+
+  useEffect(() => {
+    if (!isUpdatingAnimeSettings) {
+      if (animeSettingsUpdateTimeoutRef.current) {
+        clearTimeout(animeSettingsUpdateTimeoutRef.current);
+        animeSettingsUpdateTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    if (animeSettingsUpdateTimeoutRef.current) {
+      clearTimeout(animeSettingsUpdateTimeoutRef.current);
+    }
+
+    animeSettingsUpdateTimeoutRef.current = setTimeout(() => {
+      setIsUpdatingAnimeSettings(false);
+      setTrackingError("Anime settings update timed out. Please try again.");
+    }, ANIME_SETTINGS_UPDATE_TIMEOUT_MS);
+
+    return () => {
+      if (animeSettingsUpdateTimeoutRef.current) {
+        clearTimeout(animeSettingsUpdateTimeoutRef.current);
+        animeSettingsUpdateTimeoutRef.current = null;
+      }
+    };
+  }, [isUpdatingAnimeSettings]);
 
   const trackingStatusOptions = useMemo(
     () =>
@@ -723,6 +829,60 @@ export function ShowDetailScreen() {
 
     return activeTrackingStatus;
   }, [activeTrackingStatus, show?.mediaType, trackingStatusOptions]);
+
+  const relationRootAnilistId = useMemo(() => {
+    if (!show || show.mediaType !== "anime") {
+      return null;
+    }
+
+    const trackedRoot =
+      tracking &&
+      typeof tracking === "object" &&
+      "relationRootAnilistId" in tracking &&
+      typeof tracking.relationRootAnilistId === "number"
+        ? tracking.relationRootAnilistId
+        : null;
+
+    if (typeof show.rootAnilistId === "number") {
+      return show.rootAnilistId;
+    }
+    if (typeof trackedRoot === "number") {
+      return trackedRoot;
+    }
+    if (typeof show.anilistId === "number") {
+      return show.anilistId;
+    }
+    return null;
+  }, [show, tracking]);
+
+  const animeFranchiseSettings = useQuery(
+    api.shows.getAnimeFranchiseHomeSettings,
+    typeof relationRootAnilistId === "number"
+      ? { relationRootAnilistId }
+      : "skip"
+  );
+
+  const globalAnimeRelationMode = isValidAnimeHomeRelationMode(
+    animeFranchiseSettings?.globalRelationMode
+  )
+    ? animeFranchiseSettings.globalRelationMode
+    : "core_only";
+  const franchiseAnimeRelationMode =
+    animeFranchiseSettings?.franchiseRelationMode === null
+      ? null
+      : isValidAnimeHomeRelationMode(animeFranchiseSettings?.franchiseRelationMode)
+        ? animeFranchiseSettings.franchiseRelationMode
+        : null;
+  const effectiveAnimeRelationMode = isValidAnimeHomeRelationMode(
+    animeFranchiseSettings?.effectiveRelationMode
+  )
+    ? animeFranchiseSettings.effectiveRelationMode
+    : globalAnimeRelationMode;
+  const animeCompletionBehavior = isValidAnimeCompletionBehavior(
+    animeFranchiseSettings?.completionBehavior
+  )
+    ? animeFranchiseSettings.completionBehavior
+    : "ask_every_time";
 
   const relatedAnimeTrackingArgs = useMemo(() => {
     if (!show || show.mediaType !== "anime") {
@@ -854,33 +1014,82 @@ export function ShowDetailScreen() {
     }
   }, [episodeWatchCountsData]);
 
+  useEffect(() => {
+    expandedSeasonsRef.current = expandedSeasons;
+  }, [expandedSeasons]);
+
+  useEffect(() => {
+    seasonWatchedKeysRef.current = seasonWatchedKeys;
+  }, [seasonWatchedKeys]);
+
+  useEffect(() => {
+    if (!trackingNotice) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setTrackingNotice(null);
+    }, 2500);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [trackingNotice]);
+
   // Load watched episodes for expanded seasons
   useEffect(() => {
     if (trackingArgs === "skip" || !getWatchedEpisodesForSeasonAction) return;
-    
+
+    let isCancelled = false;
     const expandedSeasonNumbers = Object.entries(expandedSeasons)
       .filter(([, isExpanded]) => isExpanded)
       .map(([seasonNum]) => Number(seasonNum));
-    
-    // Load watched episodes for each expanded season that hasn't been loaded yet
+
+    // Load watched episodes for each expanded season that hasn't been loaded yet.
     for (const seasonNumber of expandedSeasonNumbers) {
-      if (seasonWatchedKeys[seasonNumber]) continue;
-      
-      // Use an async IIFE to load the watched episodes
+      if (seasonWatchedKeysRef.current[seasonNumber]) continue;
+      if (loadingSeasonsRef.current.has(seasonNumber)) continue;
+      loadingSeasonsRef.current.add(seasonNumber);
+
       void (async () => {
         try {
           const args = { ...trackingArgs, season: seasonNumber };
           const keys = await getWatchedEpisodesForSeasonAction(args);
-          setSeasonWatchedKeys((prev) => ({
-            ...prev,
-            [seasonNumber]: new Set(keys),
-          }));
+
+          if (isCancelled) {
+            return;
+          }
+          if (expandedSeasonsRef.current[seasonNumber] !== true) {
+            return;
+          }
+          if (seasonWatchedKeysRef.current[seasonNumber]) {
+            return;
+          }
+
+          setSeasonWatchedKeys((prev) => {
+            if (prev[seasonNumber]) {
+              return prev;
+            }
+
+            return {
+              ...prev,
+              [seasonNumber]: new Set(keys),
+            };
+          });
         } catch (error) {
-          console.error("Failed to load watched episodes for season", seasonNumber, error);
+          if (!isCancelled) {
+            console.error("Failed to load watched episodes for season", seasonNumber, error);
+          }
+        } finally {
+          loadingSeasonsRef.current.delete(seasonNumber);
         }
       })();
     }
-  }, [expandedSeasons, trackingArgs, seasonWatchedKeys, getWatchedEpisodesForSeasonAction]);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [expandedSeasons, trackingArgs, getWatchedEpisodesForSeasonAction]);
 
   useEffect(() => {
     if (typeof relatedAnimeLookupId !== "number") {
@@ -1077,7 +1286,7 @@ export function ShowDetailScreen() {
   );
 
   const maybePromptMoveToNextSeason = useCallback(
-    (seasonNumber: number, seasonName?: string) => {
+    async (seasonNumber: number, seasonName?: string) => {
       if (!show || show.mediaType !== "anime") {
         return;
       }
@@ -1096,6 +1305,39 @@ export function ShowDetailScreen() {
         getSeasonByNumber(seasonNumber)?.name?.trim() ||
         `Season ${seasonNumber}`;
 
+      if (animeCompletionBehavior === "auto_open_next") {
+        try {
+          router.push({ pathname: "/show/[id]", params: { id: nextRouteId } });
+        } catch (navigationError) {
+          console.error("Failed to auto-open next season", navigationError);
+          setTrackingError("Could not open the next season.");
+        }
+        return;
+      }
+
+      if (
+        animeCompletionBehavior === "auto_pause_others_keep_next" &&
+        showLookupArgs !== "skip"
+      ) {
+        const keepNext = {
+          anilistId: nextMainlineRelatedEntry.anilistId ?? undefined,
+          malId: nextMainlineRelatedEntry.malId ?? undefined,
+          mediaType: "anime" as const,
+        };
+
+        try {
+          await pauseOtherRelatedAnimeEntries({
+            show: showLookupArgs,
+            keepNext,
+          });
+          setTrackingNotice("Paused related franchise titles and kept next season active.");
+        } catch (pauseError) {
+          console.error("Failed to auto-pause related seasons", pauseError);
+          setTrackingError("Could not apply franchise pause preference.");
+        }
+        return;
+      }
+
       setNextSeasonPrompt({
         completedSeasonNumber: seasonNumber,
         completedSeasonName,
@@ -1103,7 +1345,15 @@ export function ShowDetailScreen() {
         nextRouteId,
       });
     },
-    [getSeasonByNumber, nextMainlineRelatedEntry, show]
+    [
+      animeCompletionBehavior,
+      getSeasonByNumber,
+      nextMainlineRelatedEntry,
+      pauseOtherRelatedAnimeEntries,
+      router,
+      show,
+      showLookupArgs,
+    ]
   );
 
   const resolveSeasonEpisodes = useCallback(async (season: NormalizedSeason) => {
@@ -1594,7 +1844,7 @@ export function ShowDetailScreen() {
         watchedBefore + 1 >= releasedEpisodes.length;
 
       if (seasonJustCompleted) {
-        maybePromptMoveToNextSeason(
+        void maybePromptMoveToNextSeason(
           episode.seasonNumber,
           seasonEntry?.name ?? `Season ${episode.seasonNumber}`
         );
@@ -1677,7 +1927,7 @@ export function ShowDetailScreen() {
         return { ...prev, [season.seasonNumber]: newSeasonKeys };
       });
 
-      maybePromptMoveToNextSeason(
+      void maybePromptMoveToNextSeason(
         season.seasonNumber,
         season.name || `Season ${season.seasonNumber}`
       );
@@ -1844,7 +2094,7 @@ export function ShowDetailScreen() {
             const season = seasons.find(
               (entry) => entry.seasonNumber === firstPayload.seasonNumber
             );
-            maybePromptMoveToNextSeason(
+            void maybePromptMoveToNextSeason(
               firstPayload.seasonNumber,
               season?.name || `Season ${firstPayload.seasonNumber}`
             );
@@ -2137,8 +2387,16 @@ export function ShowDetailScreen() {
     });
   };
 
-  const handleWatchActionChoice = async (choice: "rewatch" | "not_watched") => {
+  const handleWatchActionChoice = async (
+    choice: "rewatch" | "not_watched" | "not_watched_related"
+  ) => {
     if (!watchActionTarget || isWatchActionRunning) return;
+    if (choice === "not_watched_related" && watchActionTarget.kind !== "show") {
+      setTrackingError("Could not update watch status. Please try again.");
+      setWatchActionTarget(null);
+      setIsWatchActionRunning(false);
+      return;
+    }
 
     setIsWatchActionRunning(true);
     let didSucceed = false;
@@ -2197,9 +2455,19 @@ export function ShowDetailScreen() {
           });
 
           try {
-            await clearShowWatched({
-              show: buildShowPayload(show),
-            });
+            if (
+              choice === "not_watched_related" &&
+              show.mediaType === "anime" &&
+              showLookupArgs !== "skip"
+            ) {
+              await clearRelatedAnimeWatched({
+                show: showLookupArgs,
+              });
+            } else {
+              await clearShowWatched({
+                show: buildShowPayload(show),
+              });
+            }
             // Also update seasonWatchedKeys for all seasons
             setSeasonWatchedKeys((prev) => {
               const next: Record<number, Set<string>> = {};
@@ -2254,6 +2522,94 @@ export function ShowDetailScreen() {
     }
   };
 
+  const handlePauseOtherRelatedSeasons = async () => {
+    if (
+      !show ||
+      show.mediaType !== "anime" ||
+      showLookupArgs === "skip" ||
+      !nextMainlineRelatedEntry ||
+      isPausingRelatedEntries
+    ) {
+      return;
+    }
+
+    const keepNext = {
+      anilistId: nextMainlineRelatedEntry.anilistId ?? undefined,
+      malId: nextMainlineRelatedEntry.malId ?? undefined,
+      mediaType: "anime" as const,
+    };
+
+    setIsPausingRelatedEntries(true);
+    setTrackingError(null);
+
+    try {
+      await pauseOtherRelatedAnimeEntries({
+        show: showLookupArgs,
+        keepNext,
+      });
+      setNextSeasonPrompt(null);
+    } catch (pauseError) {
+      console.error("Failed to pause other related anime entries", pauseError);
+      setTrackingError("Could not pause other franchise titles.");
+    } finally {
+      setIsPausingRelatedEntries(false);
+    }
+  };
+
+  const handleSetFranchiseRelationMode = async (
+    relationMode: "inherit" | AnimeHomeRelationMode
+  ) => {
+    if (
+      !show ||
+      show.mediaType !== "anime" ||
+      typeof relationRootAnilistId !== "number" ||
+      isUpdatingAnimeSettings
+    ) {
+      return;
+    }
+
+    setIsUpdatingAnimeSettings(true);
+    const localOpId = animeSettingsOpIdRef.current + 1;
+    animeSettingsOpIdRef.current = localOpId;
+    setTrackingError(null);
+
+    try {
+      await setAnimeFranchiseRelationMode({
+        relationRootAnilistId,
+        relationMode,
+      });
+      const effectiveMode =
+        relationMode === "inherit" ? globalAnimeRelationMode : relationMode;
+
+      void (async () => {
+        try {
+          await syncAnimeRelationsForRoot({ relationRootAnilistId });
+          if (localOpId !== animeSettingsOpIdRef.current) {
+            return;
+          }
+          if (effectiveMode !== "all_relations") {
+            await pruneAnimeFranchiseToCoreRelations({ relationRootAnilistId });
+          }
+        } catch (error) {
+          console.error("Failed background relation sync after franchise update", error);
+          if (localOpId === animeSettingsOpIdRef.current) {
+            setTrackingError("Could not sync franchise relations.");
+          }
+        } finally {
+          if (localOpId === animeSettingsOpIdRef.current) {
+            setIsUpdatingAnimeSettings(false);
+          }
+        }
+      })();
+    } catch (error) {
+      console.error("Failed to update franchise relation mode", error);
+      setTrackingError("Could not update this franchise preference.");
+      if (localOpId === animeSettingsOpIdRef.current) {
+        setIsUpdatingAnimeSettings(false);
+      }
+    }
+  };
+
   // Stats
   const watchedEpisodesCount = totalWatchedEpisodesCount;
   const totalEpisodesCount = useMemo(() => {
@@ -2295,6 +2651,22 @@ export function ShowDetailScreen() {
     : isFavorite
       ? "Favorited"
       : "Add Favorite";
+  const globalFranchiseModeLabel =
+    globalAnimeRelationMode === "all_relations"
+      ? "All franchise titles"
+      : "Core franchise titles";
+  const effectiveFranchiseModeLabel =
+    effectiveAnimeRelationMode === "all_relations"
+      ? "All franchise titles"
+      : "Core franchise titles";
+  const franchiseOverrideLabel =
+    franchiseAnimeRelationMode === null
+      ? `Inherit global (${globalFranchiseModeLabel})`
+      : franchiseAnimeRelationMode === "all_relations"
+        ? "All franchise titles"
+        : "Core franchise titles";
+  const canClearRelatedAnimeWatched =
+    show?.mediaType === "anime" && relatedAnime.some((entry) => entry.isInWatchlist);
 
   const cleanedShowTitle = cleanRichText(show?.title) || show?.title || "";
   const cleanedShowOverview =
@@ -2552,10 +2924,53 @@ export function ShowDetailScreen() {
               </View>
 
               {show.mediaType === "anime" ? (
-                <Text className="mt-3 text-xs text-text-muted">
-                  Franchise note: related anime can be auto-followed in timeline order.
-                  Status changes here apply to this title.
-                </Text>
+                <View className="mt-3 gap-2 rounded-lg border border-border-default/80 bg-bg-base px-3 py-3">
+                  <View className="flex-row items-start justify-between gap-3">
+                    <View className="flex-1">
+                      <Text className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">
+                        Franchise
+                      </Text>
+                      <Text className="mt-1 text-xs text-text-secondary">
+                        Home uses {effectiveFranchiseModeLabel.toLowerCase()} for this franchise.
+                      </Text>
+                      <Text className="mt-1 text-xs text-text-muted">
+                        Override: {franchiseOverrideLabel}
+                      </Text>
+                      <Text className="mt-1 text-xs text-text-muted">
+                        Global franchise and completion settings are in Profile Settings.
+                      </Text>
+                    </View>
+
+                    {typeof relationRootAnilistId === "number" ? (
+                      <Pressable
+                        onPress={() => setIsFranchiseSettingsModalVisible(true)}
+                        disabled={isUpdatingAnimeSettings}
+                        className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
+                        style={({ pressed }) => ({
+                          opacity: isUpdatingAnimeSettings ? 0.45 : pressed ? 0.85 : 1,
+                        })}
+                      >
+                        <View className="flex-row items-center gap-1.5">
+                          <Ionicons
+                            name="ellipsis-horizontal-circle-outline"
+                            size={14}
+                            color="#a1a1aa"
+                          />
+                          <Text className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">
+                            Franchise
+                          </Text>
+                        </View>
+                      </Pressable>
+                    ) : null}
+                  </View>
+
+                  {isUpdatingAnimeSettings ? (
+                    <View className="flex-row items-center gap-2">
+                      <ActivityIndicator size="small" color="#52525b" />
+                      <Text className="text-xs text-text-secondary">Updating franchise settings...</Text>
+                    </View>
+                  ) : null}
+                </View>
               ) : null}
 
               {isSettingStatus ? (
@@ -2652,6 +3067,12 @@ export function ShowDetailScreen() {
           {trackingError && (
             <View className="mb-6 rounded-xl bg-primary/10 p-4">
               <Text className="text-sm text-primary">{trackingError}</Text>
+            </View>
+          )}
+
+          {!trackingError && trackingNotice && (
+            <View className="mb-6 rounded-xl bg-emerald-500/10 p-4">
+              <Text className="text-sm text-emerald-600">{trackingNotice}</Text>
             </View>
           )}
 
@@ -2897,14 +3318,18 @@ export function ShowDetailScreen() {
         visible={!!nextSeasonPrompt}
         transparent
         animationType="fade"
-        onRequestClose={() => !isNavigatingToNextSeason && setNextSeasonPrompt(null)}
+        onRequestClose={() =>
+          !isNavigatingToNextSeason && !isPausingRelatedEntries && setNextSeasonPrompt(null)
+        }
       >
         <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
           <Pressable
             className="absolute inset-0"
             focusable={false}
             style={{ outlineWidth: 0, outlineStyle: "solid", outlineColor: "transparent" }}
-            onPress={() => !isNavigatingToNextSeason && setNextSeasonPrompt(null)}
+            onPress={() =>
+              !isNavigatingToNextSeason && !isPausingRelatedEntries && setNextSeasonPrompt(null)
+            }
           />
 
           <View className="w-full max-w-sm overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
@@ -2925,7 +3350,7 @@ export function ShowDetailScreen() {
 
             <View className="gap-2 p-4">
               <Pressable
-                disabled={isNavigatingToNextSeason}
+                disabled={isNavigatingToNextSeason || isPausingRelatedEntries}
                 onPress={handleNavigateToNextSeason}
                 className="items-center justify-center rounded-xl border border-primary/40 bg-primary/15 py-3.5 active:bg-primary/20"
               >
@@ -2940,7 +3365,26 @@ export function ShowDetailScreen() {
               </Pressable>
 
               <Pressable
-                disabled={isNavigatingToNextSeason}
+                disabled={isNavigatingToNextSeason || isPausingRelatedEntries}
+                onPress={() => {
+                  void handlePauseOtherRelatedSeasons();
+                }}
+                className="items-center justify-center rounded-xl border border-border-default bg-bg-base py-3.5 active:bg-bg-elevated"
+              >
+                {isPausingRelatedEntries ? (
+                  <View className="flex-row items-center gap-2">
+                    <ActivityIndicator size="small" color="#a1a1aa" />
+                    <Text className="font-semibold text-text-secondary">Pausing...</Text>
+                  </View>
+                ) : (
+                  <Text className="font-semibold text-text-secondary">
+                    Pause Other Franchise Titles
+                  </Text>
+                )}
+              </Pressable>
+
+              <Pressable
+                disabled={isNavigatingToNextSeason || isPausingRelatedEntries}
                 onPress={() => setNextSeasonPrompt(null)}
                 className="items-center justify-center rounded-xl border border-border-default bg-bg-base py-3.5 active:bg-bg-elevated"
               >
@@ -2999,8 +3443,24 @@ export function ShowDetailScreen() {
                 onPress={() => void handleWatchActionChoice("not_watched")}
                 className="items-center justify-center rounded-xl border border-border-default bg-bg-base py-3.5 active:bg-bg-elevated"
               >
-                <Text className="font-semibold text-text-secondary">Mark Not Watched</Text>
+                <Text className="font-semibold text-text-secondary">
+                  {watchActionTarget?.kind === "show" && show?.mediaType === "anime"
+                    ? "Mark This Title Not Watched"
+                    : "Mark Not Watched"}
+                </Text>
               </Pressable>
+
+              {watchActionTarget?.kind === "show" && canClearRelatedAnimeWatched ? (
+                <Pressable
+                  disabled={isWatchActionRunning}
+                  onPress={() => void handleWatchActionChoice("not_watched_related")}
+                  className="items-center justify-center rounded-xl border border-primary/35 bg-primary/10 py-3.5 active:bg-primary/15"
+                >
+                  <Text className="font-semibold text-primary">
+                    Mark Entire Franchise Not Watched
+                  </Text>
+                </Pressable>
+              ) : null}
 
               <Pressable
                 disabled={isWatchActionRunning}
@@ -3008,6 +3468,184 @@ export function ShowDetailScreen() {
                 className="items-center justify-center rounded-xl py-2"
               >
                 <Text className="text-sm text-text-muted">Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isFranchiseSettingsModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isUpdatingAnimeSettings) {
+            setIsFranchiseSettingsModalVisible(false);
+          }
+        }}
+      >
+        <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
+          <Pressable
+            className="absolute inset-0"
+            focusable={false}
+            style={{ outlineWidth: 0, outlineStyle: "solid", outlineColor: "transparent" }}
+            onPress={() => {
+              if (!isUpdatingAnimeSettings) {
+                setIsFranchiseSettingsModalVisible(false);
+              }
+            }}
+          />
+
+          <View className="w-full max-w-sm overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
+            <View className="border-b border-border-default px-4 pb-3 pt-4">
+              <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                Franchise Settings
+              </Text>
+              <Text className="mt-1 text-lg font-black text-text-primary" numberOfLines={2}>
+                {cleanedShowTitle}
+              </Text>
+              <Text className="mt-2 text-sm text-text-secondary">
+                Choose how this franchise appears on Home.
+              </Text>
+              <Text className="mt-1 text-xs text-text-muted">
+                Current Home view: {effectiveFranchiseModeLabel}
+              </Text>
+            </View>
+
+            <View className="gap-2 p-4">
+              <Pressable
+                disabled={isUpdatingAnimeSettings}
+                onPress={() => {
+                  void handleSetFranchiseRelationMode("inherit");
+                }}
+                className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                  franchiseAnimeRelationMode === null
+                    ? "border-primary/60 bg-primary/15"
+                    : "border-border-default bg-bg-base"
+                }`}
+                style={({ pressed }) => ({
+                  opacity: isUpdatingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                })}
+              >
+                <View className="flex-1">
+                  <Text
+                    className={`text-sm font-semibold ${
+                      franchiseAnimeRelationMode === null
+                        ? "text-primary"
+                        : "text-text-primary"
+                    }`}
+                  >
+                    Inherit Global Setting
+                  </Text>
+                  <Text className="mt-0.5 text-xs text-text-secondary">
+                    Follow your Profile franchise preference for this title.
+                  </Text>
+                </View>
+                <Ionicons
+                  name={
+                    franchiseAnimeRelationMode === null
+                      ? "radio-button-on"
+                      : "radio-button-off"
+                  }
+                  size={18}
+                  color={franchiseAnimeRelationMode === null ? "#ef4444" : "#71717a"}
+                />
+              </Pressable>
+
+              <Pressable
+                disabled={isUpdatingAnimeSettings}
+                onPress={() => {
+                  void handleSetFranchiseRelationMode("core_only");
+                }}
+                className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                  franchiseAnimeRelationMode === "core_only"
+                    ? "border-primary/60 bg-primary/15"
+                    : "border-border-default bg-bg-base"
+                }`}
+                style={({ pressed }) => ({
+                  opacity: isUpdatingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                })}
+              >
+                <View className="flex-1">
+                  <Text
+                    className={`text-sm font-semibold ${
+                      franchiseAnimeRelationMode === "core_only"
+                        ? "text-primary"
+                        : "text-text-primary"
+                    }`}
+                  >
+                    Core Franchise Titles
+                  </Text>
+                  <Text className="mt-0.5 text-xs text-text-secondary">
+                    Keep Home focused on the main franchise timeline.
+                  </Text>
+                </View>
+                <Ionicons
+                  name={
+                    franchiseAnimeRelationMode === "core_only"
+                      ? "radio-button-on"
+                      : "radio-button-off"
+                  }
+                  size={18}
+                  color={franchiseAnimeRelationMode === "core_only" ? "#ef4444" : "#71717a"}
+                />
+              </Pressable>
+
+              <Pressable
+                disabled={isUpdatingAnimeSettings}
+                onPress={() => {
+                  void handleSetFranchiseRelationMode("all_relations");
+                }}
+                className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                  franchiseAnimeRelationMode === "all_relations"
+                    ? "border-primary/60 bg-primary/15"
+                    : "border-border-default bg-bg-base"
+                }`}
+                style={({ pressed }) => ({
+                  opacity: isUpdatingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                })}
+              >
+                <View className="flex-1">
+                  <Text
+                    className={`text-sm font-semibold ${
+                      franchiseAnimeRelationMode === "all_relations"
+                        ? "text-primary"
+                        : "text-text-primary"
+                    }`}
+                  >
+                    All Franchise Titles
+                  </Text>
+                  <Text className="mt-0.5 text-xs text-text-secondary">
+                    Include side stories and related entries on Home.
+                  </Text>
+                </View>
+                <Ionicons
+                  name={
+                    franchiseAnimeRelationMode === "all_relations"
+                      ? "radio-button-on"
+                      : "radio-button-off"
+                  }
+                  size={18}
+                  color={franchiseAnimeRelationMode === "all_relations" ? "#ef4444" : "#71717a"}
+                />
+              </Pressable>
+
+              {isUpdatingAnimeSettings ? (
+                <View className="flex-row items-center justify-center gap-2 py-1">
+                  <ActivityIndicator size="small" color="#a1a1aa" />
+                  <Text className="text-xs text-text-secondary">Saving franchise setting...</Text>
+                </View>
+              ) : null}
+
+              <Pressable
+                disabled={isUpdatingAnimeSettings}
+                onPress={() => setIsFranchiseSettingsModalVisible(false)}
+                className="items-center justify-center rounded-xl border border-border-default bg-bg-elevated py-3"
+                style={({ pressed }) => ({
+                  opacity: isUpdatingAnimeSettings ? 0.45 : pressed ? 0.88 : 1,
+                })}
+              >
+                <Text className="text-sm font-semibold text-text-primary">Done</Text>
               </Pressable>
             </View>
           </View>
@@ -3053,7 +3691,7 @@ export function ShowDetailScreen() {
               </Text>
               {show.mediaType === "anime" ? (
                 <Text className="mt-1 text-xs text-text-muted">
-                  Related anime may auto-follow as part of the franchise timeline.
+                  Franchise titles may auto-follow as part of your timeline.
                 </Text>
               ) : null}
             </View>

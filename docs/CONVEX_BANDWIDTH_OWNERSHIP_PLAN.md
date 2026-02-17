@@ -37,7 +37,7 @@ The work is not done at partial optimization. The work is done only when behavio
 
 Keep all existing logic semantics:
 - Show only TV and anime cards (no movies).
-- Exclude paused/dropped/completed entries from watchlist rail.
+- Exclude paused/dropped/completed entries from watchlist rail (paused should not render in Home watchlist).
 - Exclude entries without meaningful progress where applicable.
 - Only show entries with released and unwatched episodes (not just future episodes that exist in metadata).
 - Keep anime relation progression behavior:

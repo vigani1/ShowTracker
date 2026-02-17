@@ -22,6 +22,8 @@ export function Sidebar() {
   if (!isDesktop) return null;
 
   const sidebarWidth = SIDEBAR_WIDTH_COLLAPSED;
+  const isLibraryActive =
+    pathname === "/library" || pathname.startsWith("/library");
 
   return (
     <View
@@ -84,15 +86,15 @@ export function Sidebar() {
           {/* Library */}
           <Link href="/library" asChild>
             <Pressable
-              className={`items-center justify-center rounded-lg px-2 py-3 ${pathname === "/library" || pathname.startsWith("/library") ? "border-l-2 border-primary bg-primary/15" : ""}`}
+              className={`items-center justify-center rounded-lg px-2 py-3 ${isLibraryActive ? "border-l-2 border-primary bg-primary/15" : ""}`}
             >
               <Ionicons
-                name={(pathname === "/library" || pathname.startsWith("/library") ? "albums" : "albums-outline") as keyof typeof Ionicons.glyphMap}
+                name={(isLibraryActive ? "albums" : "albums-outline") as keyof typeof Ionicons.glyphMap}
                 size={22}
-                color={pathname === "/library" || pathname.startsWith("/library") ? "#ef4444" : "#a1a1aa"}
+                color={isLibraryActive ? "#ef4444" : "#a1a1aa"}
               />
               <Text
-                className={`mt-1 text-[10px] font-medium tracking-tight ${pathname === "/library" || pathname.startsWith("/library") ? "text-text-primary" : "text-text-secondary"}`}
+                className={`mt-1 text-[10px] font-medium tracking-tight ${isLibraryActive ? "text-text-primary" : "text-text-secondary"}`}
                 numberOfLines={1}
               >
                 Library

@@ -19,6 +19,7 @@ Agent-first documentation for ShowTracker.
 | Doc | Purpose |
 |-----|---------|
 | **[testing/E2E_QA_MATRIX.md](testing/E2E_QA_MATRIX.md)** | Comprehensive E2E test matrix for QA |
+| **[testing/AGENT_BROWSER_TESTING_PLAYBOOK.md](testing/AGENT_BROWSER_TESTING_PLAYBOOK.md)** | Agent-browser workflow, best practices, and full user-flow coverage checklist |
 
 ## Quick Reference
 
@@ -34,4 +35,5 @@ Agent-first documentation for ShowTracker.
 
 **For testing:**
 - Use [testing/E2E_QA_MATRIX.md](testing/E2E_QA_MATRIX.md) for comprehensive QA
+- Use [testing/AGENT_BROWSER_TESTING_PLAYBOOK.md](testing/AGENT_BROWSER_TESTING_PLAYBOOK.md) for robust browser automation execution and user-flow coverage
 - Use [WATCHING.md](WATCHING.md) for watch action testing

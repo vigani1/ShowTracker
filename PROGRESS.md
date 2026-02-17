@@ -191,6 +191,23 @@ Phase 12: Notifications
 - [x] **For You Page - Movies not showing in "All" tab**: Movie recommendations from movie seeds are not appearing in the interleaved "All" tab despite working in the dedicated Movies tab. Debug logs needed.
 - [x] **For You Page - Load more**: Ensure scroll-based load more works properly across all tabs
 - [x] **For You Page - Anime API rate limiting**: Getting rate limited frequently from AniList API causing failures. Need to add better error handling, retry logic, or implement caching to avoid rate limits.
+- [x] **Convex Bandwidth Optimization & Feed Reliability** (branch: `feat/convex-bandwidth-optimization`)
+  - [x] Lightweight `getTrackedIds` query replacing full `getLibrary` on Discover and Recommendations pages
+  - [x] Server-side `status` and `mediaType` filtering on `getLibrary` query via Convex indexes
+  - [x] Backend-authoritative `getLibraryCounts` query for Library status badge counts
+  - [x] Denormalized `mediaType` field on `userShows` table with backfill migration
+  - [x] `feedProjections` table: denormalized per-user per-show projections eliminating N+1 show doc reads
+  - [x] `getHomeFeed` query: zero-join Home feed with full anime franchise grouping (replaces `getWatchlist`)
+  - [x] Incremental projection maintenance via mutation hooks across all write paths (12+ call sites)
+  - [x] `getUpcomingSchedule` migrated to read from `feedProjections` instead of userShows + shows
+  - [x] Daily cron reconciliation at 3 AM UTC for projection drift repair + mediaType backfill
+  - [x] Browser-verified: Home, Library, Discover, Profile, Recommendations, Upcoming all rendering correctly
+  - [x] Add favorites feature and show favorites on profile first
+  - [x] For anime since they have relations instead of seasons as per our API lets make it so: 1. On profile page only the main shows as a show since we can access the rest from it. the main can be the first season or if there is an identifier for what the main is we can use that. 2. On home WatchList if the user is watching a an anime all the related can be added but for the Watchlist we should only show the anime the user is currently watching. meaning if the user is watching jjk season 2 we dont show season 3 on the Watchlist as well until the user is done with season 2 the next relation can than show.
+  - [x] When the seasons of a show are loaded their watch status doesnt load until that season is expanded.
+  - [x] Shows that still have episodes coming out in the future but the user is caught up should not show on the home page. if the pending episodes are all in the future we hide those from the home screen as well
+  - [x] Under data import on the profile page there is a loading spinner that stays for a long time after going to that page (Fixed: loading indicator now renders only during active rail pagination)
+  - [x] On mobile having 6 icons at the bottom seems odd idk if it is a problem or not but need to reconsider (Fixed: Search hidden from mobile tab bar and promoted via Discover quick-search entry)
 
 ## PR Readiness Snapshot (current branch)
 
@@ -199,9 +216,6 @@ Phase 12: Notifications
 
 ## Pending
 
-- [ ] Add favorites feature and show favorites on profile first
-- [ ] For anime since they have relations instead of seasons as per our API lets make it so: 1. On profile page only the main shows as a show since we can access the rest from it. the main can be the first season or if there is an identifier for what the main is we can use that. 2. On home WatchList if the user is watching a an anime all the related can be added but for the Watchlist we should only show the anime the user is currently watching. meaning if the user is watching jjk season 2 we dont show season 3 on the Watchlist as well until the user is done with season 2 the next relation can than show.
-
 ### Phase 12: Notifications
 
 - [ ] Notifications for new episodes (push notifications)
@@ -209,8 +223,3 @@ Phase 12: Notifications
 ### Phase 13: UI/UX Polish and Manual QA
 
 ### Known Issues (To Fix)
-
-- [ ] When the seasons of a show are loaded their watch status doesnt load until that season is expanded.
-- [ ] Shows that still have episodes coming out in the future but the user is caught up should not show on the home page. if the pending episodes are all in the future we hide those from the home screen as well
-- [x] Under data import on the profile page there is a loading spinner that stays for a long time after going to that page (Fixed: loading indicator now renders only during active rail pagination)
-- [x] On mobile having 6 icons at the bottom seems odd idk if it is a problem or not but need to reconsider (Fixed: Search hidden from mobile tab bar and promoted via Discover quick-search entry)

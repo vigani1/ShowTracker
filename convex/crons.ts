@@ -18,6 +18,15 @@ crons.cron(
   internal.shows.autoPauseInactiveShows
 );
 
+// Daily feed projection reconciliation.
+// Runs at 3 AM UTC to rebuild projections for all users, catching any drift
+// from missed mutation hooks or show metadata changes (new episodes/seasons).
+crons.cron(
+  "dailyReconcileProjections",
+  "0 3 * * *",
+  internal.shows.dailyReconcileProjections
+);
+
 // TODO: Implement new season detection when notifications are added
 // crons.weekly(
 //   "checkForNewSeasons",

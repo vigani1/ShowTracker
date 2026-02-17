@@ -76,11 +76,11 @@ const GRID_GAP = 12;
 const INITIAL_PAST_DAYS = 8;
 const INITIAL_FUTURE_DAYS = 8;
 const RANGE_EXTENSION_DAYS = 8;
-const SCROLL_EDGE_THRESHOLD = 180;
+const SCROLL_EDGE_THRESHOLD = 360;
 const INITIAL_UPCOMING_HYDRATION_TIMEOUT_MS = 8000;
 const EDGE_LOAD_COOLDOWN_MS = 320;
 const TMDB_AIRED_LOOKUP_BATCH_SIZE = 8;
-const WATCHLIST_FUTURE_FALLBACK_DAYS = 30;
+const WATCHLIST_FUTURE_FALLBACK_DAYS = 14;
 
 function estimateAiredEpisodesFromTmdb(details: TmdbShowDetails) {
   const today = new Date();
@@ -453,6 +453,7 @@ export function HomeScreen() {
   const [mediaFilter, setMediaFilter] = useState<HomeMediaFilter>("all");
   const [watchlistVisibleCount, setWatchlistVisibleCount] = useState(0);
   const [isLoadingMoreWatchlist, setIsLoadingMoreWatchlist] = useState(false);
+  const [isUpcomingListLoaded, setIsUpcomingListLoaded] = useState(false);
   const [isHydratingInitialUpcoming, setIsHydratingInitialUpcoming] = useState(false);
   const [isLoadingPast, setIsLoadingPast] = useState(false);
   const [isLoadingFuture, setIsLoadingFuture] = useState(false);
@@ -483,6 +484,7 @@ export function HomeScreen() {
   const canLoadPastFromEdgeRef = useRef(true);
   const canLoadFutureFromEdgeRef = useRef(true);
   const allowUpcomingEdgeLoadRef = useRef(false);
+  const lastUpcomingScrollYRef = useRef(0);
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const relationSyncTriggeredRef = useRef(false);
   const [upcomingSnapshot, setUpcomingSnapshot] = useState<UpcomingGroup[]>([]);
@@ -493,7 +495,8 @@ export function HomeScreen() {
     Record<number, number>
   >({});
 
-  const watchlist = useQuery(api.shows.getWatchlist, {});
+  // Projection-backed feed eliminates N show-doc reads.
+  const watchlist = useQuery(api.shows.getHomeFeed, {});
   const upcoming = useQuery(
     api.schedule.getUpcomingSchedule,
     activeTab === "upcoming"
@@ -545,6 +548,7 @@ export function HomeScreen() {
       canLoadPastFromEdgeRef.current = true;
       canLoadFutureFromEdgeRef.current = true;
       allowUpcomingEdgeLoadRef.current = false;
+      lastUpcomingScrollYRef.current = 0;
       setIsTodayVisible(true);
     }
     previousTabRef.current = activeTab;
@@ -605,23 +609,25 @@ export function HomeScreen() {
     });
   }, [syncTrackedAnimeRelations]);
 
-  const loadPastWeek = useCallback(async () => {
+  const loadPastWeek = useCallback(() => {
     if (activeTab !== "upcoming" || isLoadingPast) {
       return;
     }
 
     const newStartDate = addDaysToDateString(rangeStartDate, -RANGE_EXTENSION_DAYS);
 
+    setRangeStartDate(newStartDate);
     setIsLoadingPast(true);
-    try {
-      await hydrateRange(newStartDate, RANGE_EXTENSION_DAYS);
-      setRangeStartDate(newStartDate);
-    } finally {
-      setIsLoadingPast(false);
-    }
+    void hydrateRange(newStartDate, RANGE_EXTENSION_DAYS)
+      .catch((error) => {
+        console.warn("Failed to load earlier upcoming range", error);
+      })
+      .finally(() => {
+        setIsLoadingPast(false);
+      });
   }, [activeTab, hydrateRange, isLoadingPast, rangeStartDate]);
 
-  const loadFutureWeek = useCallback(async () => {
+  const loadFutureWeek = useCallback(() => {
     if (activeTab !== "upcoming" || isLoadingFuture) {
       return;
     }
@@ -629,60 +635,60 @@ export function HomeScreen() {
     const nextStartDate = addDaysToDateString(rangeEndDate, 1);
     const newEndDate = addDaysToDateString(rangeEndDate, RANGE_EXTENSION_DAYS);
 
+    setRangeEndDate(newEndDate);
     setIsLoadingFuture(true);
-    try {
-      await hydrateRange(nextStartDate, RANGE_EXTENSION_DAYS);
-      setRangeEndDate(newEndDate);
-    } finally {
-      setIsLoadingFuture(false);
-    }
+    void hydrateRange(nextStartDate, RANGE_EXTENSION_DAYS)
+      .catch((error) => {
+        console.warn("Failed to load later upcoming range", error);
+      })
+      .finally(() => {
+        setIsLoadingFuture(false);
+      });
   }, [activeTab, hydrateRange, isLoadingFuture, rangeEndDate]);
 
   const triggerLoadPast = useCallback(() => {
     if (
       !canLoadPastFromEdgeRef.current ||
-      isLoadingPast
-    ) {
-      return;
-    }
-
-    canLoadPastFromEdgeRef.current = false;
-    void loadPastWeek()
-      .catch((error) => {
-        console.warn("Failed to load earlier upcoming range", error);
-      })
-      .finally(() => {
-        setTimeout(() => {
-          canLoadPastFromEdgeRef.current = true;
-        }, EDGE_LOAD_COOLDOWN_MS);
-      });
-  }, [isLoadingPast, loadPastWeek]);
-
-  const triggerLoadFuture = useCallback(() => {
-    if (
-      !canLoadFutureFromEdgeRef.current ||
+      isLoadingPast ||
       isLoadingFuture
     ) {
       return;
     }
 
+    canLoadPastFromEdgeRef.current = false;
+    loadPastWeek();
+    setTimeout(() => {
+      canLoadPastFromEdgeRef.current = true;
+    }, EDGE_LOAD_COOLDOWN_MS);
+  }, [isLoadingFuture, isLoadingPast, loadPastWeek]);
+
+  const triggerLoadFuture = useCallback(() => {
+    if (
+      !canLoadFutureFromEdgeRef.current ||
+      isLoadingFuture ||
+      isLoadingPast
+    ) {
+      return;
+    }
+
     canLoadFutureFromEdgeRef.current = false;
-    void loadFutureWeek()
-      .catch((error) => {
-        console.warn("Failed to load later upcoming range", error);
-      })
-      .finally(() => {
-        setTimeout(() => {
-          canLoadFutureFromEdgeRef.current = true;
-        }, EDGE_LOAD_COOLDOWN_MS);
-      });
-  }, [isLoadingFuture, loadFutureWeek]);
+    loadFutureWeek();
+    setTimeout(() => {
+      canLoadFutureFromEdgeRef.current = true;
+    }, EDGE_LOAD_COOLDOWN_MS);
+  }, [isLoadingFuture, isLoadingPast, loadFutureWeek]);
 
   useEffect(() => {
     if (activeTab === "upcoming" && upcoming !== undefined) {
       setUpcomingSnapshot(upcoming as UpcomingGroup[]);
     }
   }, [activeTab, upcoming]);
+
+  useEffect(() => {
+    if (activeTab !== "upcoming") {
+      setIsUpcomingListLoaded(false);
+    }
+  }, [activeTab]);
 
   const watchlistItems = useMemo(() => (watchlist ?? []) as WatchlistItem[], [watchlist]);
 
@@ -787,7 +793,6 @@ export function HomeScreen() {
 
   const filteredWatchlist = useMemo(() => {
     return watchlistItems.filter((item) => {
-      if (item.watchedEpisodes <= 0) return false;
       if (item.status === "paused") return false;
       if (item.status === "dropped") return false;
       if (item.status === "completed") return false;
@@ -881,17 +886,6 @@ export function HomeScreen() {
     [todayKey]
   );
 
-  const jumpToToday = useCallback(() => {
-    if (todayAnchorIndex < 0) {
-      return;
-    }
-
-    upcomingScrollRef.current?.scrollToIndex({
-      index: todayAnchorIndex,
-      animated: true,
-    });
-  }, [todayAnchorIndex]);
-
   const isWatchlistLoading = watchlist === undefined;
   const isUpcomingLoading =
     activeTab === "upcoming" &&
@@ -968,27 +962,68 @@ export function HomeScreen() {
     return headerIndices;
   }, [upcomingListData]);
 
+  const scrollUpcomingToIndexSafely = useCallback(
+    (index: number, animated: boolean) => {
+      if (!isUpcomingListLoaded || upcomingListData.length === 0 || index < 0) {
+        return false;
+      }
+
+      const clampedIndex = Math.min(index, upcomingListData.length - 1);
+
+      try {
+        upcomingScrollRef.current?.scrollToIndex({ index: clampedIndex, animated });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [isUpcomingListLoaded, upcomingListData.length]
+  );
+
+  const jumpToToday = useCallback(() => {
+    if (!isUpcomingListLoaded || todayAnchorIndex < 0) {
+      return;
+    }
+
+    scrollUpcomingToIndexSafely(todayAnchorIndex, true);
+  }, [isUpcomingListLoaded, scrollUpcomingToIndexSafely, todayAnchorIndex]);
+
   useEffect(() => {
     if (
       shouldAnchorTodayRef.current &&
       activeTab === "upcoming" &&
       !isUpcomingLoading &&
+      isUpcomingListLoaded &&
+      upcomingListData.length > 0 &&
       todayAnchorIndex >= 0
     ) {
-      requestAnimationFrame(() => {
-        upcomingScrollRef.current?.scrollToIndex({
-          index: todayAnchorIndex,
-          animated: false,
-        });
+      let edgeTimer: ReturnType<typeof setTimeout> | null = null;
+      const frame = requestAnimationFrame(() => {
+        scrollUpcomingToIndexSafely(todayAnchorIndex, false);
 
-        setTimeout(() => {
+        edgeTimer = setTimeout(() => {
           allowUpcomingEdgeLoadRef.current = true;
         }, 180);
       });
       shouldAnchorTodayRef.current = false;
       setIsTodayVisible(true);
+
+      return () => {
+        cancelAnimationFrame(frame);
+        if (edgeTimer) {
+          clearTimeout(edgeTimer);
+        }
+      };
     }
-  }, [activeTab, isUpcomingLoading, todayAnchorIndex]);
+    return undefined;
+  }, [
+    activeTab,
+    isUpcomingListLoaded,
+    isUpcomingLoading,
+    scrollUpcomingToIndexSafely,
+    todayAnchorIndex,
+    upcomingListData.length,
+  ]);
 
   useEffect(() => {
     if (
@@ -1051,21 +1086,31 @@ export function HomeScreen() {
         return;
       }
 
+      if (isLoadingPast || isLoadingFuture) {
+        return;
+      }
+
       const y = event.nativeEvent.contentOffset.y;
       const viewportHeight = event.nativeEvent.layoutMeasurement.height;
       const contentHeight = event.nativeEvent.contentSize.height;
       const distanceFromBottom = contentHeight - (y + viewportHeight);
 
-      if (y <= SCROLL_EDGE_THRESHOLD) {
+      const previousY = lastUpcomingScrollYRef.current;
+      const deltaY = y - previousY;
+      lastUpcomingScrollYRef.current = y;
+      const isScrollingUp = deltaY < -2;
+      const isScrollingDown = deltaY > 2;
+
+      if (y <= SCROLL_EDGE_THRESHOLD && isScrollingUp) {
         triggerLoadPast();
         return;
       }
 
-      if (distanceFromBottom <= SCROLL_EDGE_THRESHOLD) {
+      if (distanceFromBottom <= SCROLL_EDGE_THRESHOLD && isScrollingDown) {
         triggerLoadFuture();
       }
     },
-    [triggerLoadFuture, triggerLoadPast]
+    [isLoadingFuture, isLoadingPast, triggerLoadFuture, triggerLoadPast]
   );
 
   const renderWatchlistItem = useCallback(
@@ -1094,6 +1139,7 @@ export function HomeScreen() {
         {gridWidth > 0 ? (
           activeTab === "watchlist" ? (
             <FlashList
+              key={`watchlist-${columns}`}
               data={visibleWatchlistItems}
               keyExtractor={(item: WatchlistItem) => `${item.mediaType}-${item.id}`}
               renderItem={renderWatchlistItem as any}
@@ -1247,10 +1293,11 @@ export function HomeScreen() {
                   {todayAnchorIndex >= 0 ? (
                     <Pressable
                       onPress={jumpToToday}
+                      disabled={!isUpcomingListLoaded}
                       className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
-                      style={({ pressed }) =>
-                        pressed ? { opacity: 0.85 } : undefined
-                      }
+                      style={({ pressed }) => ({
+                        opacity: !isUpcomingListLoaded ? 0.5 : pressed ? 0.85 : 1,
+                      })}
                     >
                       <Text className="text-[11px] font-bold uppercase tracking-wide text-text-primary">
                         {isTodayVisible ? "On Today" : "Jump to Today"}
@@ -1271,15 +1318,19 @@ export function HomeScreen() {
               </View>
 
               <FlashList
+                key={`upcoming-${columns}`}
                 ref={upcomingScrollRef}
                 data={upcomingListData}
                 keyExtractor={(item) => item.id}
                 renderItem={renderUpcomingListItem as any}
                 getItemType={(item) => item.type}
-                stickyHeaderIndices={stickyHeaderIndices}
+                stickyHeaderIndices={
+                  isUpcomingListLoaded ? stickyHeaderIndices : undefined
+                }
+                onLoad={() => setIsUpcomingListLoaded(true)}
                 onScroll={onUpcomingScroll}
                 onViewableItemsChanged={onUpcomingViewableItemsChanged as any}
-                scrollEventThrottle={16}
+                scrollEventThrottle={32}
                 showsVerticalScrollIndicator
                 contentContainerStyle={{ paddingBottom: 24, flexGrow: 1 }}
                 ListEmptyComponent={
