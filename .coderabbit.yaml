@@ -49,10 +49,6 @@ reviews:
   path_filters:
     - "!**/*.lock"
     - "!**/package-lock.json"
-    - "!**/.agents/skills/**"
-    - "!**/.claude/skills/**"
-    - "!**/.cursor/skills/**"
-    - "!**/.agent/skills/**"
 
   path_instructions:
     - path: "convex/**"
