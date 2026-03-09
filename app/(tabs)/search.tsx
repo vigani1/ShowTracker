@@ -114,7 +114,6 @@ function rankSearchResults(shows: NormalizedShow[], query: string) {
       index,
       score: getSearchTitleScore(show, normalizedQuery),
     }))
-    .filter((entry) => entry.score > 0)
     .sort((a, b) => {
       if (a.score !== b.score) {
         return b.score - a.score;

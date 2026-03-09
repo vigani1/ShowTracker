@@ -12,8 +12,16 @@ const anilistRelationsCacheVersion = "v1";
 
 const cacheTtlMs = 15 * 60 * 1000;
 
+function isBrowserDomAvailable() {
+  return (
+    typeof window !== "undefined" &&
+    typeof document !== "undefined" &&
+    typeof document.createElement === "function"
+  );
+}
+
 function getAniListRequestUrl() {
-  if (typeof window !== "undefined" && convexSiteUrl) {
+  if (isBrowserDomAvailable() && convexSiteUrl) {
     return `${convexSiteUrl}/anilist`;
   }
 
@@ -211,7 +219,7 @@ async function request<T>(
   variables: Record<string, unknown>,
   options?: { signal?: AbortSignal }
 ) {
-  const shouldUseProxy = typeof window !== "undefined" && !!convexSiteUrl;
+  const shouldUseProxy = isBrowserDomAvailable() && !!convexSiteUrl;
   const maxAttempts = shouldUseProxy ? 1 : 4;
   const baseDelayMs = 750;
 

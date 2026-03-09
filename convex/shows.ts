@@ -1395,6 +1395,7 @@ async function buildAnimeRelationPayloads(
   const visited = new Set<number>();
   const payloadByAnilistId = new Map<number, ShowPayload>();
   const relatedIdsByAnilistId = new Map<number, Set<number>>();
+  let isPartial = false;
 
   while (queue.length > 0 && visited.size < RELATION_SYNC_MAX_GRAPH_NODES) {
     const currentAnilistId = queue.shift();
@@ -1410,6 +1411,7 @@ async function buildAnimeRelationPayloads(
     try {
       graph = await getAniListAnimeRelations(currentAnilistId);
     } catch (error) {
+      isPartial = true;
       if (isAniListRateLimitError(error)) {
         console.warn("AniList relation graph rate limited; skipping relation expansion", {
           currentAnilistId,
@@ -1488,6 +1490,7 @@ async function buildAnimeRelationPayloads(
   return {
     shows,
     syncedAt: now,
+    isPartial,
   };
 }
 
@@ -1517,15 +1520,15 @@ async function syncAnimeRelationRoot(
   rootAnilistId: number,
   includeAllRelations = false
 ): Promise<AnimeRelationSyncResult> {
-  const { shows, syncedAt } = await buildAnimeRelationPayloads(
+  const { shows, syncedAt, isPartial } = await buildAnimeRelationPayloads(
     rootAnilistId,
     includeAllRelations
   );
-  if (shows.length === 0) {
+  if (shows.length === 0 || isPartial) {
     return {
       rootAnilistId,
       synced: false,
-      discoveredShows: 0,
+      discoveredShows: shows.length,
       insertedUserShows: 0,
       autoTrackedInserted: 0,
     };

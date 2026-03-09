@@ -8,6 +8,7 @@ const anilistUrl =
   process.env.EXPO_PUBLIC_ANILIST_URL ?? "https://graphql.anilist.co";
 const anilistProxyBaseDelayMs = 750;
 const anilistProxyMaxAttempts = 4;
+const allowLocalhostOrigins = process.env.ALLOW_LOCALHOST_ORIGINS === "true";
 
 const configuredWebOrigins = [
   process.env.SHOWTRACKER_WEB_ORIGINS,
@@ -72,7 +73,11 @@ function getCorsHeaders(request: Request) {
     return null;
   }
 
-  if (!configuredWebOrigins.includes(origin) && !isLocalDevOrigin(origin)) {
+  const isAllowedOrigin =
+    configuredWebOrigins.includes(origin) ||
+    (allowLocalhostOrigins && isLocalDevOrigin(origin));
+
+  if (!isAllowedOrigin) {
     return null;
   }
 
