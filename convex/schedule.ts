@@ -400,7 +400,13 @@ export const getScheduleCacheStatusForDate = query({
 async function hydrateOneDate(
   ctx: ActionCtx,
   date: string
-): Promise<{ date: string; tvCount: number; animeCount: number; cached: boolean }> {
+): Promise<{
+  date: string;
+  tvCount: number;
+  animeCount: number;
+  cached: boolean;
+  animeRateLimited?: boolean;
+}> {
   const now = Date.now();
   const cacheStatus: DateCacheStatus = await ctx.runQuery(
     api.schedule.getScheduleCacheStatusForDate,
@@ -413,6 +419,7 @@ async function hydrateOneDate(
       tvCount: cacheStatus.tvCount,
       animeCount: cacheStatus.animeCount,
       cached: true,
+      animeRateLimited: false,
     };
   }
 
@@ -462,7 +469,6 @@ async function hydrateOneDate(
             lastAttemptTime: Date.now(),
             nextRetryTime: retryUntil,
           });
-          console.warn(`AniList schedule rate limited for ${date}; using cached anime schedule.`);
           break;
         }
 
@@ -496,6 +502,7 @@ async function hydrateOneDate(
     tvCount: compactTvEntries.length,
     animeCount: animeFetchRateLimited ? cacheStatus.animeCount : compactAnimeEntries.length,
     cached: false,
+    animeRateLimited: animeFetchRateLimited,
   };
 }
 
@@ -536,13 +543,21 @@ export const hydrateScheduleRange = action({
       tvCount: number;
       animeCount: number;
       cached: boolean;
+      animeRateLimited?: boolean;
     }[] = [];
+    let didWarnAnimeRateLimit = false;
 
     for (let index = 0; index < dateKeys.length; index += HYDRATE_BATCH_SIZE) {
       const batch = dateKeys.slice(index, index + HYDRATE_BATCH_SIZE);
       const batchResults = await Promise.all(
         batch.map((dateKey) => hydrateOneDate(ctx, dateKey))
       );
+      if (!didWarnAnimeRateLimit && batchResults.some((result) => result.animeRateLimited)) {
+        didWarnAnimeRateLimit = true;
+        console.warn(
+          "AniList schedule rate limited during range hydration; using cached anime schedule where available."
+        );
+      }
       results.push(...batchResults);
     }
 

@@ -40,6 +40,7 @@ export function Button({
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
       className={`items-center justify-center ${variantClasses[variant]} ${
         disabled ? "opacity-50" : ""
       } ${className ?? ""}`.trim()}

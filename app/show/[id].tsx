@@ -782,6 +782,20 @@ export function ShowDetailScreen() {
   }, [tracking?.status]);
 
   useEffect(() => {
+    if (isAddingToWatchlist && tracking?.inWatchlist) {
+      setIsAddingToWatchlist(false);
+    }
+
+    if (isRemovingFromWatchlist && tracking?.inWatchlist === false) {
+      setIsRemovingFromWatchlist(false);
+    }
+  }, [
+    isAddingToWatchlist,
+    isRemovingFromWatchlist,
+    tracking?.inWatchlist,
+  ]);
+
+  useEffect(() => {
     if (!isUpdatingAnimeSettings) {
       if (animeSettingsUpdateTimeoutRef.current) {
         clearTimeout(animeSettingsUpdateTimeoutRef.current);
@@ -2633,15 +2647,17 @@ export function ShowDetailScreen() {
     totalEpisodesCount !== null && clampedWatchedEpisodesCount >= totalEpisodesCount;
 
   const isFavorite = tracking?.isFavorite ?? false;
-  const isWatchlistActionPending = isAddingToWatchlist || isRemovingFromWatchlist;
+  const isWatchlistActionPending =
+    (isAddingToWatchlist && !tracking?.inWatchlist) ||
+    (isRemovingFromWatchlist && tracking?.inWatchlist !== false);
   const isStatusMenuBusy = isSettingStatus || isWatchlistActionPending || isTogglingFavorite;
   const activeTrackingOption =
     trackingStatusOptions.find((option) => option.value === activeTrackingStatusForMenu) ??
     trackingStatusOptions.find((option) => option.value === "plan_to_watch") ??
     trackingStatusOptions[0];
-  const watchlistActionLabel = isAddingToWatchlist
+  const watchlistActionLabel = isAddingToWatchlist && !tracking?.inWatchlist
     ? "Adding..."
-    : isRemovingFromWatchlist
+    : isRemovingFromWatchlist && tracking?.inWatchlist !== false
       ? "Removing..."
       : tracking?.inWatchlist
         ? "Remove from Watchlist"
@@ -2841,6 +2857,7 @@ export function ShowDetailScreen() {
                     void handleAddToWatchlist();
                   }}
                   disabled={!canTrackShow || isStatusMenuBusy}
+                  accessibilityRole="button"
                   className={`rounded-lg border border-border-default bg-bg-base px-3.5 py-2.5 ${
                     isDesktop
                       ? "flex-row items-center gap-1.5"
@@ -2873,6 +2890,7 @@ export function ShowDetailScreen() {
                     void handleToggleFavorite();
                   }}
                   disabled={!canTrackShow || isStatusMenuBusy}
+                  accessibilityRole="button"
                   className={`rounded-lg border border-border-default bg-bg-base px-3.5 py-2.5 ${
                     isDesktop
                       ? "flex-row items-center gap-1.5"
@@ -2903,6 +2921,7 @@ export function ShowDetailScreen() {
                 <Pressable
                   onPress={() => setIsStatusMenuVisible(true)}
                   disabled={!canTrackShow || isStatusMenuBusy}
+                  accessibilityRole="button"
                   className={`rounded-lg border border-border-default bg-bg-base px-3.5 py-2.5 ${
                     isDesktop
                       ? "flex-row items-center gap-1.5"
@@ -2945,6 +2964,7 @@ export function ShowDetailScreen() {
                       <Pressable
                         onPress={() => setIsFranchiseSettingsModalVisible(true)}
                         disabled={isUpdatingAnimeSettings}
+                        accessibilityRole="button"
                         className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
                         style={({ pressed }) => ({
                           opacity: isUpdatingAnimeSettings ? 0.45 : pressed ? 0.85 : 1,
@@ -2997,6 +3017,7 @@ export function ShowDetailScreen() {
                         : handleMarkShowWatched
                     }
                     disabled={!canTrackShow || isMarkingShow}
+                    accessibilityRole="button"
                     className="relative h-7 w-7 items-center justify-center"
                     style={({ pressed }) => ({
                       opacity: !canTrackShow || isMarkingShow ? 0.5 : 1,
@@ -3024,6 +3045,7 @@ export function ShowDetailScreen() {
                         : handleMarkShowWatched
                     }
                     disabled={!canTrackShow || isMarkingShow}
+                    accessibilityRole="button"
                     className="active:opacity-70"
                   >
                     <Text
@@ -3045,6 +3067,7 @@ export function ShowDetailScreen() {
               <View className="flex-row items-center gap-3">
                 <Pressable
                   onPress={() => setIsAddToListModalVisible(true)}
+                  accessibilityRole="button"
                   className="relative h-7 w-7 items-center justify-center"
                   style={({ pressed }) => ({
                     opacity: pressed ? 0.7 : 1,

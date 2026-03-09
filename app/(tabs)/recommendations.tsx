@@ -35,11 +35,13 @@ const tabOptions = [
 const MAX_TMDB_SEEDS_PER_CATEGORY = 5;
 const MAX_ANIME_SEEDS_PER_CATEGORY = 2;
 const ANIME_RATE_LIMIT_COOLDOWN_MS = 90_000;
-const ANIME_REQUEST_TIMEOUT_MS = 6_000;
+const ANIME_REQUEST_TIMEOUT_MS = 12_000;
 const EMPTY_STREAK_THRESHOLD = 3;
+const isRecommendationsDebugEnabled =
+  __DEV__ && process.env.EXPO_PUBLIC_DEBUG_RECOMMENDATIONS === "1";
 
 function logRecommendationsDebug(event: string, payload: Record<string, unknown>) {
-  if (!__DEV__) return;
+  if (!isRecommendationsDebugEnabled) return;
   console.log(`[ForYou] ${event}`, payload);
 }
 
@@ -50,6 +52,10 @@ function isRateLimitError(error: unknown) {
     "status" in error &&
     (error as { status?: number }).status === 429
   );
+}
+
+function isTimeoutError(error: unknown) {
+  return error instanceof Error && error.message.includes("timed out after");
 }
 
 function withTimeout<T>(
@@ -158,6 +164,16 @@ type SeedResultItem = {
   seedMediaType: "tv" | "anime" | "movie";
 };
 
+function getRecommendationBucket(item: NormalizedShow) {
+  if (item.mediaType === "tv") {
+    return "tv" as const;
+  }
+  if (item.mediaType === "anime") {
+    return "anime" as const;
+  }
+  return "movie" as const;
+}
+
 function selectSeeds(
   activeTab: RecTab,
   seedPool: RecommendationSeed[],
@@ -254,7 +270,16 @@ function categorizeAndDedupe(
         continue;
       }
 
-      if (seedMediaType === "tv") {
+      const recommendationBucket = getRecommendationBucket(item);
+      if (__DEV__ && recommendationBucket !== seedMediaType) {
+        logRecommendationsDebug("cross-media-recommendation", {
+          seedMediaType,
+          recommendationMediaType: item.mediaType,
+          title: item.title,
+        });
+      }
+
+      if (recommendationBucket === "tv") {
         const tvKey = toRecommendationKey(item);
         if (!seenTvIds.has(tvKey)) {
           seenTvIds.add(tvKey);
@@ -263,7 +288,7 @@ function categorizeAndDedupe(
         continue;
       }
 
-      if (seedMediaType === "anime") {
+      if (recommendationBucket === "anime") {
         const animeKey = toAnimeRecommendationKey(item);
         if (!seenAnimeIds.has(animeKey)) {
           seenAnimeIds.add(animeKey);
@@ -559,7 +584,9 @@ export function RecommendationsScreen() {
                       cooldownMs: ANIME_RATE_LIMIT_COOLDOWN_MS,
                     });
                   }
-                  console.warn("Anime API failed for", seed.title, e);
+                  if (isRecommendationsDebugEnabled && !isRateLimitError(e) && !isTimeoutError(e)) {
+                    console.warn("Anime API failed for", seed.title, e);
+                  }
                   return [];
                 } finally {
                   signal.removeEventListener("abort", abortFromParent);

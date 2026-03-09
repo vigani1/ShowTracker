@@ -45,6 +45,85 @@ function mergeUniqueShows(shows: NormalizedShow[]) {
   return result;
 }
 
+function normalizeSearchText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function getSearchTitleScore(show: NormalizedShow, query: string) {
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedTitle = normalizeSearchText(show.title);
+
+  if (!normalizedQuery || !normalizedTitle) {
+    return 0;
+  }
+
+  if (normalizedTitle === normalizedQuery) {
+    return 1000;
+  }
+
+  if (normalizedTitle.startsWith(normalizedQuery)) {
+    return 850;
+  }
+
+  const titleTokens = normalizedTitle.split(" ").filter(Boolean);
+  const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+  const exactTokenMatches = queryTokens.filter((queryToken) =>
+    titleTokens.includes(queryToken)
+  ).length;
+  const prefixTokenMatches = queryTokens.filter((queryToken) =>
+    titleTokens.some((titleToken) => titleToken.startsWith(queryToken))
+  ).length;
+
+  if (queryTokens.length > 0 && exactTokenMatches === queryTokens.length) {
+    return 700;
+  }
+
+  if (queryTokens.length > 0 && prefixTokenMatches === queryTokens.length) {
+    return 560;
+  }
+
+  if (normalizedTitle.includes(normalizedQuery)) {
+    return 420;
+  }
+
+  if (exactTokenMatches > 0) {
+    return 320 + exactTokenMatches * 20;
+  }
+
+  if (prefixTokenMatches > 0) {
+    return 220 + prefixTokenMatches * 15;
+  }
+
+  return 0;
+}
+
+function rankSearchResults(shows: NormalizedShow[], query: string) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return shows;
+  }
+
+  return shows
+    .map((show, index) => ({
+      show,
+      index,
+      score: getSearchTitleScore(show, normalizedQuery),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => {
+      if (a.score !== b.score) {
+        return b.score - a.score;
+      }
+      return a.index - b.index;
+    })
+    .map((entry) => entry.show);
+}
+
 function getGridColumnCount(width: number, isWeb: boolean) {
   if (!isWeb) return 2;
   if (width >= 1800) return 8;
@@ -264,7 +343,8 @@ export function SearchScreen() {
         setResults([]);
         setError("Search is temporarily unavailable. Please try again.");
       } else {
-        setResults(mergeUniqueShows(flat));
+        const deduped = mergeUniqueShows(flat);
+        setResults(rankSearchResults(deduped, normalizedQuery));
         setError(
           failedCount > 0
             ? "Some sources unavailable. Showing partial results."

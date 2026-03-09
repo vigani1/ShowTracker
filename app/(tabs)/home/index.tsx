@@ -235,6 +235,22 @@ function getDateLabel(dateString: string) {
     .toUpperCase();
 }
 
+function getDateDistance(fromDate: string, toDate: string) {
+  const from = parseLocalDate(fromDate);
+  const to = parseLocalDate(toDate);
+  if (!from || !to) return 0;
+
+  return Math.max(0, getUtcDayIndex(to) - getUtcDayIndex(from));
+}
+
+function getUpcomingDistanceLabel(daysUntil: number) {
+  if (daysUntil === 0) return "Today";
+  if (daysUntil === 1) return "Tomorrow";
+  if (daysUntil === -1) return "Yesterday";
+  if (daysUntil > 1) return `In ${daysUntil}d`;
+  return `${Math.abs(daysUntil)}d ago`;
+}
+
 function getColumnCount(width: number, isWeb: boolean) {
   if (isWeb) {
     if (width >= 1600) return 6;
@@ -370,6 +386,7 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
   return (
     <Link href={{ pathname: "/show/[id]", params: { id: routeId } }} asChild>
       <Pressable
+        accessibilityRole="link"
         style={({ pressed }) =>
           pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined
         }
@@ -380,10 +397,31 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
   );
 }
 
-function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boolean }) {
-  const posterHeight = isWeb ? 280 : 240;
+function UpcomingCard({
+  episode,
+  date,
+  isWeb,
+}: {
+  episode: UpcomingEpisode;
+  date: string;
+  isWeb: boolean;
+}) {
+  const posterHeight = isWeb ? 260 : 208;
   const hasEpisodeName =
     episode.episode.name && episode.episode.name !== episode.showTitle;
+  const distanceLabel = getUpcomingDistanceLabel(episode.daysUntil);
+  const distanceContainerClass =
+    episode.daysUntil === 0
+      ? "border-primary/70 bg-primary/20"
+      : episode.daysUntil < 0
+        ? "border-amber-400/40 bg-amber-500/15"
+        : "border-white/20 bg-black/70";
+  const distanceTextClass =
+    episode.daysUntil === 0
+      ? "text-primary-glow"
+      : episode.daysUntil < 0
+        ? "text-amber-100"
+        : "text-white";
 
   const card = (
     <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
@@ -406,25 +444,30 @@ function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boo
           colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.62)"]}
           start={{ x: 0.5, y: 0 }}
           end={{ x: 0.5, y: 1 }}
-          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 110 }}
+          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 120 }}
         />
-        <View className="absolute left-2 top-2 rounded-md border-2 border-white/20 bg-black/70 px-2 py-1 flex-row items-center">
-          <Text className="text-sm font-bold text-white">{episode.daysUntil}</Text>
-          <Text className="text-[10px] font-semibold text-zinc-200 ml-1">
-            {episode.daysUntil === 1 ? "DAY" : "DAYS"}
+        <View
+          className={`absolute left-2 top-2 rounded-full border px-2.5 py-1 ${distanceContainerClass}`}
+        >
+          <Text className={`text-[11px] font-black uppercase tracking-wide ${distanceTextClass}`}>
+            {distanceLabel}
           </Text>
         </View>
         <View className="absolute bottom-0 left-0 right-0 px-2.5 pb-2.5">
           <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>
             {episode.showTitle}
           </Text>
+          <Text className="text-[10px] uppercase tracking-[1px] text-zinc-300" numberOfLines={1}>
+            {episode.mediaType === "anime" ? "Anime" : "TV"} · S
+            {episode.episode.seasonNumber}E{episode.episode.episodeNumber}
+          </Text>
           {hasEpisodeName ? (
-            <Text className="text-xs text-primary-glow" numberOfLines={1}>
+            <Text className="mt-1 text-xs font-semibold text-primary-glow" numberOfLines={2}>
               {episode.episode.name}
             </Text>
           ) : null}
-          <Text className="text-xs text-zinc-400 mt-0.5" numberOfLines={1}>
-            S{episode.episode.seasonNumber}E{episode.episode.episodeNumber}
+          <Text className="mt-1 text-xs text-zinc-400" numberOfLines={1}>
+            {getDayLabel(date)}
           </Text>
         </View>
       </View>
@@ -438,6 +481,7 @@ function UpcomingCard({ episode, isWeb }: { episode: UpcomingEpisode; isWeb: boo
   return (
     <Link href={{ pathname: "/show/[id]", params: { id: episode.routeId } }} asChild>
       <Pressable
+        accessibilityRole="link"
         style={({ pressed }) =>
           pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined
         }
@@ -838,6 +882,7 @@ export function HomeScreen() {
   const columns = getColumnCount(effectiveWidth, isWeb);
   const cardWidth = (effectiveWidth - (columns - 1) * GRID_GAP) / columns;
   const watchlistPageSize = Math.max(columns * 3, 6);
+  const upcomingFallbackRowHeight = isWeb ? 332 : 276;
 
   const upcomingListItems = useMemo<UpcomingListItem[]>(() => {
     const items: UpcomingListItem[] = [];
@@ -875,6 +920,14 @@ export function HomeScreen() {
     () => `${getDateLabel(rangeStartDate)} - ${getDateLabel(rangeEndDate)}`,
     [rangeEndDate, rangeStartDate]
   );
+  const pastWindowDays = useMemo(
+    () => getDateDistance(rangeStartDate, todayKey),
+    [rangeStartDate, todayKey]
+  );
+  const futureWindowDays = useMemo(
+    () => getDateDistance(todayKey, rangeEndDate),
+    [rangeEndDate, todayKey]
+  );
 
   const onUpcomingViewableItemsChanged = useCallback(
     ({ viewableItems }: { viewableItems: { item: UpcomingListItem }[] }) => {
@@ -895,7 +948,10 @@ export function HomeScreen() {
   const headerText =
     activeTab === "watchlist"
       ? { title: "Watchlist", subtitle: "Filtered by media and watch state" }
-      : { title: "Upcoming", subtitle: "Episodes from 8 days before and after today" };
+      : {
+          title: "Upcoming",
+          subtitle: `${pastWindowDays}d back, ${futureWindowDays}d ahead. More days load as you scroll.`,
+        };
 
   const watchlistCount = filteredWatchlist.length;
   const upcomingCount = upcomingGroups.reduce(
@@ -965,19 +1021,27 @@ export function HomeScreen() {
   const scrollUpcomingToIndexSafely = useCallback(
     (index: number, animated: boolean) => {
       if (!isUpcomingListLoaded || upcomingListData.length === 0 || index < 0) {
-        return false;
+        return;
       }
 
       const clampedIndex = Math.min(index, upcomingListData.length - 1);
+      const scrollPromise = upcomingScrollRef.current?.scrollToIndex({
+        index: clampedIndex,
+        animated,
+        viewPosition: 0,
+        viewOffset: 12,
+      });
 
-      try {
-        upcomingScrollRef.current?.scrollToIndex({ index: clampedIndex, animated });
-        return true;
-      } catch {
-        return false;
+      if (scrollPromise && typeof scrollPromise.catch === "function") {
+        void scrollPromise.catch(() => {
+          upcomingScrollRef.current?.scrollToOffset({
+            offset: Math.max(0, clampedIndex * upcomingFallbackRowHeight - 12),
+            animated,
+          });
+        });
       }
     },
-    [isUpcomingListLoaded, upcomingListData.length]
+    [isUpcomingListLoaded, upcomingFallbackRowHeight, upcomingListData.length]
   );
 
   const jumpToToday = useCallback(() => {
@@ -1071,7 +1135,7 @@ export function HomeScreen() {
                 marginRight: index === item.episodes.length - 1 ? 0 : GRID_GAP,
               }}
             >
-              <UpcomingCard episode={episode} isWeb={isWeb} />
+              <UpcomingCard episode={episode} date={item.date} isWeb={isWeb} />
             </View>
           ))}
         </View>
@@ -1242,78 +1306,93 @@ export function HomeScreen() {
                   onValueChange={(value: HomeMediaFilter) => setMediaFilter(value)}
                 />
 
-                <View className="mt-3 flex-row items-center justify-between">
-                  <Text className="text-[11px] font-black uppercase tracking-wide text-text-secondary">
-                    Loaded: {upcomingRangeLabel}
-                  </Text>
-                  <View
-                    className={`rounded-md border px-2.5 py-1 ${
-                      isTodayVisible
-                        ? "border-primary/70 bg-primary/20"
-                        : "border-border-default bg-bg-surface"
-                    }`}
-                  >
-                    <Text
-                      className={`text-[11px] font-black uppercase tracking-wide ${
-                        isTodayVisible ? "text-primary" : "text-text-secondary"
+                <View className="mt-3 rounded-2xl border-2 border-border-default bg-bg-surface/80 px-3.5 py-3">
+                  <View className={`${isWeb ? "flex-row items-start justify-between gap-3" : "gap-3"}`}>
+                    <View className="flex-1">
+                      <Text className="text-[11px] font-black uppercase tracking-[1.4px] text-text-secondary">
+                        Window
+                      </Text>
+                      <Text className="mt-1 text-sm font-semibold text-text-primary">
+                        {upcomingRangeLabel}
+                      </Text>
+                      <Text className="mt-1 text-xs leading-5 text-text-secondary">
+                        {pastWindowDays} days back, {futureWindowDays} days ahead. Scroll near the
+                        top or bottom to automatically extend the schedule.
+                      </Text>
+                    </View>
+
+                    <View
+                      className={`self-start rounded-full border px-3 py-1.5 ${
+                        isTodayVisible
+                          ? "border-primary/70 bg-primary/20"
+                          : "border-border-default bg-black/20"
                       }`}
                     >
-                      TODAY {getDateLabel(todayKey)}
-                    </Text>
+                      <Text
+                        className={`text-[11px] font-black uppercase tracking-wide ${
+                          isTodayVisible ? "text-primary" : "text-text-secondary"
+                        }`}
+                      >
+                        {isTodayVisible ? "Today in view" : "Today"} · {getDateLabel(todayKey)}
+                      </Text>
+                    </View>
                   </View>
-                </View>
 
-                <View className="mt-2 flex-row items-center gap-2">
-                  <Pressable
-                    onPress={triggerLoadPast}
-                    disabled={isLoadingPast}
-                    className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
-                    style={({ pressed }) => ({
-                      opacity: isLoadingPast ? 0.45 : pressed ? 0.85 : 1,
-                    })}
-                  >
-                    <Text className="text-[11px] font-bold uppercase tracking-wide text-text-primary">
-                      {isLoadingPast ? "Loading Earlier..." : "Load Earlier"}
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={triggerLoadFuture}
-                    disabled={isLoadingFuture}
-                    className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
-                    style={({ pressed }) => ({
-                      opacity: isLoadingFuture ? 0.45 : pressed ? 0.85 : 1,
-                    })}
-                  >
-                    <Text className="text-[11px] font-bold uppercase tracking-wide text-text-primary">
-                      {isLoadingFuture ? "Loading Later..." : "Load Later"}
-                    </Text>
-                  </Pressable>
-
-                  {todayAnchorIndex >= 0 ? (
+                  <View className="mt-3 flex-row flex-wrap gap-2">
                     <Pressable
-                      onPress={jumpToToday}
-                      disabled={!isUpcomingListLoaded}
-                      className="rounded-md border border-border-default bg-bg-surface px-3 py-1.5"
+                      onPress={triggerLoadPast}
+                      disabled={isLoadingPast}
+                      accessibilityRole="button"
+                      className="rounded-full border border-border-default bg-black/20 px-3.5 py-2"
                       style={({ pressed }) => ({
-                        opacity: !isUpcomingListLoaded ? 0.5 : pressed ? 0.85 : 1,
+                        opacity: isLoadingPast ? 0.45 : pressed ? 0.85 : 1,
                       })}
                     >
-                      <Text className="text-[11px] font-bold uppercase tracking-wide text-text-primary">
-                        {isTodayVisible ? "On Today" : "Jump to Today"}
+                      <Text className="text-[11px] font-black uppercase tracking-wide text-text-primary">
+                        {isLoadingPast ? "Loading Earlier..." : "Load Earlier"}
                       </Text>
                     </Pressable>
+
+                    <Pressable
+                      onPress={triggerLoadFuture}
+                      disabled={isLoadingFuture}
+                      accessibilityRole="button"
+                      className="rounded-full border border-border-default bg-black/20 px-3.5 py-2"
+                      style={({ pressed }) => ({
+                        opacity: isLoadingFuture ? 0.45 : pressed ? 0.85 : 1,
+                      })}
+                    >
+                      <Text className="text-[11px] font-black uppercase tracking-wide text-text-primary">
+                        {isLoadingFuture ? "Loading Later..." : "Load Later"}
+                      </Text>
+                    </Pressable>
+
+                    {todayAnchorIndex >= 0 ? (
+                      <Pressable
+                        onPress={jumpToToday}
+                        disabled={!isUpcomingListLoaded}
+                        accessibilityRole="button"
+                        className="rounded-full border border-primary/40 bg-primary/15 px-3.5 py-2"
+                        style={({ pressed }) => ({
+                          opacity: !isUpcomingListLoaded ? 0.5 : pressed ? 0.85 : 1,
+                        })}
+                      >
+                        <Text className="text-[11px] font-black uppercase tracking-wide text-text-primary">
+                          {isTodayVisible ? "On Today" : "Jump to Today"}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+
+                  {!isUpcomingLoading && upcomingGroups.length > 0 && isLoadingPast ? (
+                    <View className="mt-3 flex-row items-center gap-2">
+                      <ActivityIndicator size="small" color="#ef4444" />
+                      <Text className="text-xs text-text-secondary">
+                        Loading earlier days...
+                      </Text>
+                    </View>
                   ) : null}
                 </View>
-
-                {!isUpcomingLoading && upcomingGroups.length > 0 && isLoadingPast ? (
-                  <View className="mt-2 flex-row items-center gap-2">
-                    <ActivityIndicator size="small" color="#ef4444" />
-                    <Text className="text-xs text-text-secondary">
-                      Loading earlier days...
-                    </Text>
-                  </View>
-                ) : null}
 
               </View>
 
@@ -1327,6 +1406,11 @@ export function HomeScreen() {
                 stickyHeaderIndices={
                   isUpcomingListLoaded ? stickyHeaderIndices : undefined
                 }
+                maintainVisibleContentPosition={{
+                  autoscrollToTopThreshold: 0.2,
+                  autoscrollToBottomThreshold: 0.2,
+                  animateAutoScrollToBottom: false,
+                }}
                 onLoad={() => setIsUpcomingListLoaded(true)}
                 onScroll={onUpcomingScroll}
                 onViewableItemsChanged={onUpcomingViewableItemsChanged as any}

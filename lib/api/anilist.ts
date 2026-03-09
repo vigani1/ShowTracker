@@ -5,11 +5,20 @@ import type { NormalizedShow } from "@/lib/api/types";
 
 const anilistUrl =
   process.env.EXPO_PUBLIC_ANILIST_URL ?? "https://graphql.anilist.co";
+const convexSiteUrl = process.env.EXPO_PUBLIC_CONVEX_SITE_URL?.replace(/\/+$/, "");
 
 const anilistScheduleCacheVersion = "v3";
 const anilistRelationsCacheVersion = "v1";
 
 const cacheTtlMs = 15 * 60 * 1000;
+
+function getAniListRequestUrl() {
+  if (typeof window !== "undefined" && convexSiteUrl) {
+    return `${convexSiteUrl}/anilist`;
+  }
+
+  return anilistUrl;
+}
 
 const anilistMediaSelection = `
   id
@@ -202,7 +211,8 @@ async function request<T>(
   variables: Record<string, unknown>,
   options?: { signal?: AbortSignal }
 ) {
-  const maxAttempts = 4;
+  const shouldUseProxy = typeof window !== "undefined" && !!convexSiteUrl;
+  const maxAttempts = shouldUseProxy ? 1 : 4;
   const baseDelayMs = 750;
 
   const parseResponseBody = async (response: Response) => {
@@ -223,9 +233,12 @@ async function request<T>(
       throw createAbortError();
     }
 
-    const response = await fetch(anilistUrl, {
+    const response = await fetch(getAniListRequestUrl(), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
       body: JSON.stringify({ query, variables }),
       signal: options?.signal,
     });

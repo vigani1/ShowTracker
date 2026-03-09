@@ -100,6 +100,10 @@ type AnimeCompletionBehavior =
 const DEFAULT_ANIME_HOME_RELATION_MODE: AnimeHomeRelationMode = "core_only";
 const DEFAULT_ANIME_COMPLETION_BEHAVIOR: AnimeCompletionBehavior = "ask_every_time";
 
+function isAniListRateLimitError(error: unknown): error is { status: number } {
+  return !!error && typeof error === "object" && "status" in error && error.status === 429;
+}
+
 function buildFeedProjectionFields(
   userShow: Doc<"userShows">,
   show: Doc<"shows">
@@ -1406,10 +1410,16 @@ async function buildAnimeRelationPayloads(
     try {
       graph = await getAniListAnimeRelations(currentAnilistId);
     } catch (error) {
-      console.error("Failed to fetch AniList relation graph", {
-        currentAnilistId,
-        error,
-      });
+      if (isAniListRateLimitError(error)) {
+        console.warn("AniList relation graph rate limited; skipping relation expansion", {
+          currentAnilistId,
+        });
+      } else {
+        console.error("Failed to fetch AniList relation graph", {
+          currentAnilistId,
+          error,
+        });
+      }
       continue;
     }
 

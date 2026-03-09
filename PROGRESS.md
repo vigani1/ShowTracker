@@ -218,7 +218,7 @@ Phase 12: Notifications
 
 ### Phase 12: Notifications
 
-- [ ] Notifications for new episodes (push notifications)
+- [ ] Notifications for new episodes/releases/aired (push notifications)
 
 ### Phase 13: UI/UX Polish and Manual QA
 

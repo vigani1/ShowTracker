@@ -44,6 +44,7 @@ export function MediaPosterCard({
   return (
     <Link href={href} asChild>
       <Pressable
+        accessibilityRole="link"
         className={`w-36 ${className ?? ""}`.trim()}
         style={({ pressed }) => [
           containerStyle,

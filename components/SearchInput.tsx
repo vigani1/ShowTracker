@@ -38,6 +38,8 @@ export function SearchInput({
       {hasValue ? (
         <Pressable
           onPress={() => onChangeText("")}
+          accessibilityRole="button"
+          accessibilityLabel="Clear search"
           className="h-7 w-7 items-center justify-center rounded-full bg-bg-base/70"
         >
           <Feather name="x" size={14} color="#a1a1aa" />
