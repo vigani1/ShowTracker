@@ -4,6 +4,7 @@ import {
   Image,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   View,
   useWindowDimensions,
@@ -57,28 +58,9 @@ type UpcomingGroup = {
   episodes: UpcomingEpisode[];
 };
 
-type UpcomingListItem =
-  | {
-      type: "header";
-      id: string;
-      date: string;
-      isToday: boolean;
-    }
-  | {
-      type: "episode";
-      id: string;
-      date: string;
-      episodes: UpcomingEpisode[];
-    };
-
 const DAY_IN_MS = 1000 * 60 * 60 * 24;
 const GRID_GAP = 12;
-const INITIAL_PAST_DAYS = 8;
-const INITIAL_FUTURE_DAYS = 8;
-const RANGE_EXTENSION_DAYS = 8;
-const SCROLL_EDGE_THRESHOLD = 360;
 const INITIAL_UPCOMING_HYDRATION_TIMEOUT_MS = 8000;
-const EDGE_LOAD_COOLDOWN_MS = 320;
 const TMDB_AIRED_LOOKUP_BATCH_SIZE = 8;
 const WATCHLIST_FUTURE_FALLBACK_DAYS = 14;
 
@@ -210,39 +192,6 @@ function formatDateForApi(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function getDayLabel(dateString: string) {
-  const date = parseLocalDate(dateString);
-  if (!date) return "";
-
-  const dayDiff = getUtcDayIndex(date) - getUtcDayIndex(new Date());
-
-  if (dayDiff === 0) return "TODAY";
-  if (dayDiff === 1) return "TOMORROW";
-  if (dayDiff === 2) return "IN 2 DAYS";
-
-  return date.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
-}
-
-function getDateLabel(dateString: string) {
-  const date = parseLocalDate(dateString);
-  if (!date) return "";
-
-  return date
-    .toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    })
-    .toUpperCase();
-}
-
-function getDateDistance(fromDate: string, toDate: string) {
-  const from = parseLocalDate(fromDate);
-  const to = parseLocalDate(toDate);
-  if (!from || !to) return 0;
-
-  return Math.max(0, getUtcDayIndex(to) - getUtcDayIndex(from));
-}
-
 function getUpcomingDistanceLabel(daysUntil: number) {
   if (daysUntil === 0) return "Today";
   if (daysUntil === 1) return "Tomorrow";
@@ -268,6 +217,63 @@ function addDaysToDateString(dateString: string, days: number): string {
 
   date.setDate(date.getDate() + days);
   return formatDateForApi(date);
+}
+
+function addDaysToDate(date: Date, days: number) {
+  const nextDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+}
+
+function addMonthsToDate(date: Date, months: number) {
+  return new Date(date.getFullYear(), date.getMonth() + months, 1);
+}
+
+function startOfMonthDate(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonthDate(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+}
+
+function startOfWeekDate(date: Date) {
+  return addDaysToDate(date, -date.getDay());
+}
+
+function endOfWeekDate(date: Date) {
+  return addDaysToDate(startOfWeekDate(date), 6);
+}
+
+function isSameCalendarMonth(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth();
+}
+
+function getMonthTitle(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function getWeekRangeLabel(weekStart: Date) {
+  const weekEnd = addDaysToDate(weekStart, 6);
+  const startMonth = weekStart.toLocaleDateString("en-US", { month: "short" });
+  const endMonth = weekEnd.toLocaleDateString("en-US", { month: "short" });
+  const startDay = weekStart.getDate();
+  const endDay = weekEnd.getDate();
+
+  if (startMonth === endMonth) {
+    return `${startMonth} ${startDay}-${endDay}`;
+  }
+
+  return `${startMonth} ${startDay} - ${endMonth} ${endDay}`;
+}
+
+function getShortWeekdayLabel(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    weekday: "short",
+  });
 }
 
 function getInclusiveDayCount(startDate: string, endDate: string): number {
@@ -299,6 +305,12 @@ function getWatchlistRouteId(item: WatchlistItem) {
     return `jikan:anime:${item.malId}`;
   }
   return null;
+}
+
+function getEpisodeCodeLabel(episode: UpcomingEpisode["episode"]) {
+  return `S${String(episode.seasonNumber).padStart(2, "0")}E${String(
+    episode.episodeNumber
+  ).padStart(2, "0")}`;
 }
 
 function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean }) {
@@ -397,77 +409,84 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
   );
 }
 
-function UpcomingCard({
+function UpcomingEpisodeListItem({
   episode,
-  date,
   isWeb,
 }: {
   episode: UpcomingEpisode;
-  date: string;
   isWeb: boolean;
 }) {
-  const posterHeight = isWeb ? 260 : 208;
-  const hasEpisodeName =
-    episode.episode.name && episode.episode.name !== episode.showTitle;
   const distanceLabel = getUpcomingDistanceLabel(episode.daysUntil);
-  const distanceContainerClass =
+  const episodeTitle =
+    episode.episode.name && episode.episode.name !== episode.showTitle
+      ? episode.episode.name
+      : `Episode ${episode.episode.episodeNumber}`;
+  const accentClass =
     episode.daysUntil === 0
-      ? "border-primary/70 bg-primary/20"
+      ? "border-primary/40 bg-primary/15"
       : episode.daysUntil < 0
-        ? "border-amber-400/40 bg-amber-500/15"
-        : "border-white/20 bg-black/70";
-  const distanceTextClass =
+        ? "border-amber-400/30 bg-amber-500/10"
+        : "border-[#3b272b] bg-[#1a1316]";
+  const accentTextClass =
     episode.daysUntil === 0
       ? "text-primary-glow"
       : episode.daysUntil < 0
         ? "text-amber-100"
-        : "text-white";
+        : "text-zinc-100";
 
-  const card = (
-    <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
-      <View className="relative overflow-hidden" style={{ height: posterHeight }}>
+  const content = (
+    <View
+      className={`flex-row items-center gap-3 rounded-2xl border px-3 py-3 ${
+        isWeb ? "min-h-[84px]" : "min-h-[78px]"
+      } ${
+        episode.routeId ? "bg-[#161114]" : "bg-[#110d10] opacity-70"
+      } border-[#342126]`}
+    >
+      <View className="h-14 w-14 overflow-hidden rounded-2xl border border-[#3c2529] bg-zinc-900">
         {episode.posterUrl ? (
           <Image
             source={{ uri: toHttpsImageUrl(episode.posterUrl) }}
-            className="absolute inset-0"
+            className="h-full w-full"
             resizeMode="cover"
           />
         ) : (
-          <View className="flex-1 items-center justify-center bg-zinc-800 px-3">
-            <Text className="text-center text-sm font-semibold text-zinc-400">
-              {episode.showTitle}
+          <View className="h-full w-full items-center justify-center bg-zinc-800 px-2">
+            <Text className="text-center text-[10px] font-black uppercase tracking-[1.2px] text-zinc-400">
+              {episode.showTitle.slice(0, 2)}
             </Text>
           </View>
         )}
-        <LinearGradient
-          pointerEvents="none"
-          colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.62)"]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 120 }}
-        />
-        <View
-          className={`absolute left-2 top-2 rounded-full border px-2.5 py-1 ${distanceContainerClass}`}
-        >
-          <Text className={`text-[11px] font-black uppercase tracking-wide ${distanceTextClass}`}>
+      </View>
+
+      <View className="flex-1">
+        <View className="flex-row items-start justify-between gap-3">
+          <View className="flex-1">
+            <Text className="text-sm font-bold text-white" numberOfLines={1}>
+              {episode.showTitle}
+            </Text>
+            <Text className="mt-0.5 text-sm text-zinc-200" numberOfLines={1}>
+              {episodeTitle}
+            </Text>
+        </View>
+
+        <View className={`rounded-full border px-2.5 py-1 ${accentClass}`}>
+          <Text className={`text-[10px] font-black uppercase tracking-[1.1px] ${accentTextClass}`}>
             {distanceLabel}
           </Text>
         </View>
-        <View className="absolute bottom-0 left-0 right-0 px-2.5 pb-2.5">
-          <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>
-            {episode.showTitle}
+      </View>
+
+        <View className="mt-2 flex-row flex-wrap items-center gap-2">
+          <Text className="text-[10px] font-black uppercase tracking-[1.2px] text-zinc-400">
+            {getEpisodeCodeLabel(episode.episode)}
           </Text>
-          <Text className="text-[10px] uppercase tracking-[1px] text-zinc-300" numberOfLines={1}>
-            {episode.mediaType === "anime" ? "Anime" : "TV"} · S
-            {episode.episode.seasonNumber}E{episode.episode.episodeNumber}
-          </Text>
-          {hasEpisodeName ? (
-            <Text className="mt-1 text-xs font-semibold text-primary-glow" numberOfLines={2}>
-              {episode.episode.name}
+          <View className="rounded-full border border-[#342126] bg-[#1a1316] px-2 py-1">
+            <Text className="text-[10px] font-black uppercase tracking-[1.1px] text-zinc-300">
+              {episode.mediaType === "anime" ? "Anime" : "TV"}
             </Text>
-          ) : null}
-          <Text className="mt-1 text-xs text-zinc-400" numberOfLines={1}>
-            {getDayLabel(date)}
+          </View>
+          <Text className="text-xs text-zinc-500" numberOfLines={1}>
+            {episode.routeId ? "Open show" : "Missing show link"}
           </Text>
         </View>
       </View>
@@ -475,7 +494,7 @@ function UpcomingCard({
   );
 
   if (!episode.routeId) {
-    return <View className="opacity-70">{card}</View>;
+    return content;
   }
 
   return (
@@ -483,12 +502,418 @@ function UpcomingCard({
       <Pressable
         accessibilityRole="link"
         style={({ pressed }) =>
-          pressed ? { opacity: 0.95, transform: [{ scale: 0.98 }] } : undefined
+          pressed ? { opacity: 0.9, transform: [{ scale: 0.99 }] } : undefined
         }
       >
-        {card}
+        {content}
       </Pressable>
     </Link>
+  );
+}
+
+function UpcomingAgendaPanel({
+  dateKey,
+  episodes,
+  todayKey,
+  isWeb,
+}: {
+  dateKey: string;
+  episodes: UpcomingEpisode[];
+  todayKey: string;
+  isWeb: boolean;
+}) {
+  const date = parseLocalDate(dateKey) ?? new Date();
+  const isToday = dateKey === todayKey;
+
+  return (
+    <View
+      className={`overflow-hidden rounded-[28px] border border-[#5a3a44] bg-[#161014] ${
+        isWeb ? "flex-1" : ""
+      }`}
+    >
+      <View className="border-b border-[#2b1c22] px-5 py-4">
+        <View className="flex-row items-start justify-between gap-4">
+          <View className="flex-1">
+            <Text className="text-[10px] font-black uppercase tracking-[1.8px] text-zinc-500">
+              Selected Day
+            </Text>
+            <Text className="mt-2 text-2xl font-black text-white">
+              {date.toLocaleDateString("en-US", { weekday: "long" })}
+            </Text>
+            <Text className="mt-1 text-sm text-zinc-400">
+              {date.toLocaleDateString("en-US", {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              })}
+            </Text>
+          </View>
+
+          <View
+            className={`rounded-full border px-3 py-1.5 ${
+              isToday
+                ? "border-[#ff6a56]/50 bg-[#35181d]"
+                : "border-[#3b2a31] bg-[#1b1418]"
+            }`}
+          >
+            <Text
+              className={`text-[10px] font-black uppercase tracking-[1.2px] ${
+                isToday ? "text-[#ffb0a4]" : "text-zinc-200"
+              }`}
+            >
+              {isToday ? "Current" : `${episodes.length} releases`}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      {episodes.length === 0 ? (
+        <View className="items-center justify-center px-6 py-12">
+          <Text className="text-base font-semibold text-white">Nothing scheduled</Text>
+          <Text className="mt-2 max-w-[280px] text-center text-sm leading-6 text-zinc-400">
+            Pick another day to see what is landing next.
+          </Text>
+        </View>
+      ) : (
+        <View className="gap-3 px-4 py-4">
+          {episodes.map((episode, index) => (
+            <UpcomingEpisodeListItem
+              key={`${dateKey}:${episode.routeId ?? episode.showTitle}:${episode.episode.seasonNumber}:${episode.episode.episodeNumber}:${index}`}
+              episode={episode}
+              isWeb={isWeb}
+            />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function WebCalendarCell({
+  date,
+  monthDate,
+  todayKey,
+  selectedDateKey,
+  episodes,
+  onSelectDate,
+}: {
+  date: Date;
+  monthDate: Date;
+  todayKey: string;
+  selectedDateKey: string;
+  episodes: UpcomingEpisode[];
+  onSelectDate: (dateKey: string) => void;
+}) {
+  const dateKey = formatDateForApi(date);
+  const isSelected = dateKey === selectedDateKey;
+  const isToday = dateKey === todayKey;
+  const isCurrentMonth = isSameCalendarMonth(date, monthDate);
+  const previewEpisodes = episodes.slice(0, 3);
+
+  return (
+    <Pressable
+      onPress={() => onSelectDate(dateKey)}
+      accessibilityRole="button"
+      className={`h-full min-h-[132px] rounded-[24px] border px-3 py-3 ${
+        isSelected
+          ? "border-[#ff745f] bg-[#2a151a]"
+          : isToday
+            ? "border-[#87505a] bg-[#1d1318]"
+            : "border-[#34252c] bg-[#141014]"
+      } ${isCurrentMonth ? "" : "opacity-45"}`}
+      style={({ pressed }) => ({
+        transform: [{ scale: pressed ? 0.99 : 1 }],
+      })}
+    >
+      <View className="flex-row items-start justify-between gap-2">
+        <View>
+          <Text className="text-[10px] font-black uppercase tracking-[1.5px] text-zinc-500">
+            {getShortWeekdayLabel(date)}
+          </Text>
+          <Text className="mt-2 text-2xl font-black text-white">{date.getDate()}</Text>
+        </View>
+        {episodes.length > 0 ? (
+          <View className="rounded-full border border-[#5a3139] bg-[#241419] px-2.5 py-1">
+            <Text className="text-[10px] font-black uppercase tracking-[1.1px] text-[#ffae9f]">
+              {episodes.length}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      <View className="mt-3 gap-1.5">
+        {previewEpisodes.map((episode, index) => (
+          <View
+            key={`${dateKey}:${episode.routeId ?? episode.showTitle}:${index}`}
+            className="flex-row items-center gap-2 rounded-2xl border border-[#32232a] bg-[#1b1418] px-2 py-1.5"
+          >
+            <View className="h-7 w-7 overflow-hidden rounded-xl bg-zinc-800">
+              {episode.posterUrl ? (
+                <Image
+                  source={{ uri: toHttpsImageUrl(episode.posterUrl) }}
+                  className="h-full w-full"
+                  resizeMode="cover"
+                />
+              ) : null}
+            </View>
+            <Text className="flex-1 text-xs font-semibold text-zinc-100" numberOfLines={1}>
+              {episode.showTitle}
+            </Text>
+          </View>
+        ))}
+        {episodes.length === 0 ? (
+          <View className="flex-row items-center gap-2 px-1 pt-1">
+            <View className="h-2 w-2 rounded-full bg-white/20" />
+            <Text className="text-[11px] font-semibold text-zinc-500">Quiet day</Text>
+          </View>
+        ) : null}
+        {episodes.length > previewEpisodes.length ? (
+          <Text className="px-1 text-[11px] font-semibold text-zinc-500">
+            +{episodes.length - previewEpisodes.length} more
+          </Text>
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
+function WebUpcomingCalendar({
+  monthDate,
+  calendarDays,
+  episodesByDate,
+  selectedDateKey,
+  todayKey,
+  onSelectDate,
+  onGoToPreviousMonth,
+  onGoToNextMonth,
+  onGoToToday,
+  isWide,
+}: {
+  monthDate: Date;
+  calendarDays: Date[];
+  episodesByDate: Map<string, UpcomingEpisode[]>;
+  selectedDateKey: string;
+  todayKey: string;
+  onSelectDate: (dateKey: string) => void;
+  onGoToPreviousMonth: () => void;
+  onGoToNextMonth: () => void;
+  onGoToToday: () => void;
+  isWide: boolean;
+}) {
+  const selectedEpisodes = episodesByDate.get(selectedDateKey) ?? [];
+  const calendarWeeks = useMemo(
+    () => Array.from({ length: Math.ceil(calendarDays.length / 7) }, (_, index) => calendarDays.slice(index * 7, index * 7 + 7)),
+    [calendarDays]
+  );
+
+  return (
+    <View className={`gap-4 ${isWide ? "flex-row" : ""}`}>
+      <View
+        className="overflow-hidden rounded-[30px] border border-[#563841] bg-[#0d090c]"
+        style={isWide ? { flex: 1.85 } : undefined}
+      >
+        <View className="border-b border-[#2c1c22] px-5 py-4">
+          <View className="flex-row items-center justify-between gap-4">
+            <View className="flex-1">
+              <Text className="text-[10px] font-black uppercase tracking-[1.8px] text-zinc-500">
+                Month View
+              </Text>
+              <Text className="mt-2 text-3xl font-black text-white">{getMonthTitle(monthDate)}</Text>
+            </View>
+
+            <View className="flex-row items-center gap-2">
+              <Pressable
+                onPress={onGoToPreviousMonth}
+                accessibilityRole="button"
+                className="rounded-full border border-white/10 bg-white/5 px-3 py-2"
+              >
+                <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-zinc-200">
+                  Prev
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={onGoToToday}
+                accessibilityRole="button"
+                className="rounded-full border border-[#ff6a56]/45 bg-[#35181d] px-3 py-2"
+              >
+                <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-[#ffb0a4]">
+                  Current
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={onGoToNextMonth}
+                accessibilityRole="button"
+                className="rounded-full border border-white/10 bg-white/5 px-3 py-2"
+              >
+                <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-zinc-200">
+                  Next
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+
+        <View className="px-4 pb-4 pt-3">
+          <View className="mb-3 flex-row">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label) => (
+              <View key={label} className="flex-1 px-1">
+                <Text className="text-center text-[10px] font-black uppercase tracking-[1.6px] text-zinc-500">
+                  {label}
+                </Text>
+              </View>
+            ))}
+          </View>
+
+          <View className="gap-0.5">
+            {calendarWeeks.map((weekDates, weekIndex) => (
+              <View key={`week-${weekIndex}`} className="flex-row items-stretch">
+                {weekDates.map((date) => {
+                  const dateKey = formatDateForApi(date);
+                  return (
+                    <View key={dateKey} className="flex-1 p-1">
+                      <WebCalendarCell
+                        date={date}
+                        monthDate={monthDate}
+                        todayKey={todayKey}
+                        selectedDateKey={selectedDateKey}
+                        episodes={episodesByDate.get(dateKey) ?? []}
+                        onSelectDate={onSelectDate}
+                      />
+                    </View>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+        </View>
+      </View>
+
+      <UpcomingAgendaPanel
+        dateKey={selectedDateKey}
+        episodes={selectedEpisodes}
+        todayKey={todayKey}
+        isWeb
+      />
+    </View>
+  );
+}
+
+function MobileUpcomingCalendar({
+  weekStart,
+  selectedDateKey,
+  todayKey,
+  episodesByDate,
+  onSelectDate,
+  onGoToPreviousWeek,
+  onGoToNextWeek,
+  onGoToToday,
+}: {
+  weekStart: Date;
+  selectedDateKey: string;
+  todayKey: string;
+  episodesByDate: Map<string, UpcomingEpisode[]>;
+  onSelectDate: (dateKey: string) => void;
+  onGoToPreviousWeek: () => void;
+  onGoToNextWeek: () => void;
+  onGoToToday: () => void;
+}) {
+  const selectedEpisodes = episodesByDate.get(selectedDateKey) ?? [];
+  const weekDates = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => addDaysToDate(weekStart, index)),
+    [weekStart]
+  );
+
+  return (
+    <View className="gap-4">
+      <View className="overflow-hidden rounded-[28px] border border-[#563841] bg-[#0d090c] px-4 py-4">
+        <View className="mb-4 flex-row items-center justify-between gap-3">
+          <View className="flex-1">
+            <Text className="text-[10px] font-black uppercase tracking-[1.8px] text-zinc-500">
+              Week View
+            </Text>
+            <Text className="mt-2 text-2xl font-black text-white">{getWeekRangeLabel(weekStart)}</Text>
+          </View>
+
+          <View className="flex-row items-center gap-2">
+            <Pressable
+              onPress={onGoToPreviousWeek}
+              accessibilityRole="button"
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-2"
+            >
+              <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-zinc-200">
+                Prev
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={onGoToToday}
+              accessibilityRole="button"
+              className="rounded-full border border-[#ff6a56]/45 bg-[#35181d] px-3 py-2"
+            >
+              <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-[#ffb0a4]">
+                Current
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={onGoToNextWeek}
+              accessibilityRole="button"
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-2"
+            >
+              <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-zinc-200">
+                Next
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View className="flex-row gap-2">
+          {weekDates.map((date) => {
+            const dateKey = formatDateForApi(date);
+            const isSelected = dateKey === selectedDateKey;
+            const isToday = dateKey === todayKey;
+            const hasEpisodes = (episodesByDate.get(dateKey)?.length ?? 0) > 0;
+
+            return (
+              <Pressable
+                key={dateKey}
+                onPress={() => onSelectDate(dateKey)}
+                accessibilityRole="button"
+                className={`min-w-0 flex-1 rounded-[22px] border px-1 py-3 ${
+                  isSelected
+                    ? "border-[#ff745f] bg-[#2a151a]"
+                    : isToday
+                      ? "border-[#87505a] bg-[#1d1318]"
+                      : "border-[#34252c] bg-[#141014]"
+                }`}
+                style={({ pressed }) => ({
+                  transform: [{ scale: pressed ? 0.985 : 1 }],
+                })}
+              >
+                <Text
+                  className={`text-center text-[10px] font-black uppercase tracking-[1.3px] ${
+                    isSelected ? "text-[#ffb0a4]" : "text-zinc-500"
+                  }`}
+                >
+                  {getShortWeekdayLabel(date)}
+                </Text>
+                <Text className="mt-2 text-center text-2xl font-black text-white">
+                  {date.getDate()}
+                </Text>
+                <View className="mt-2 h-3 items-center justify-center">
+                  {hasEpisodes ? <View className="h-2 w-2 rounded-full bg-[#ff9d8e]" /> : null}
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      <UpcomingAgendaPanel
+        dateKey={selectedDateKey}
+        episodes={selectedEpisodes}
+        todayKey={todayKey}
+        isWeb={false}
+      />
+    </View>
   );
 }
 
@@ -497,41 +922,26 @@ export function HomeScreen() {
   const [mediaFilter, setMediaFilter] = useState<HomeMediaFilter>("all");
   const [watchlistVisibleCount, setWatchlistVisibleCount] = useState(0);
   const [isLoadingMoreWatchlist, setIsLoadingMoreWatchlist] = useState(false);
-  const [isUpcomingListLoaded, setIsUpcomingListLoaded] = useState(false);
   const [isHydratingInitialUpcoming, setIsHydratingInitialUpcoming] = useState(false);
-  const [isLoadingPast, setIsLoadingPast] = useState(false);
-  const [isLoadingFuture, setIsLoadingFuture] = useState(false);
-  const [isTodayVisible, setIsTodayVisible] = useState(true);
   const [gridWidth, setGridWidth] = useState(0);
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
 
   const todayDate = useMemo(() => new Date(), []);
   const todayKey = useMemo(() => formatDateForApi(todayDate), [todayDate]);
-  const [rangeStartDate, setRangeStartDate] = useState(() =>
-    addDaysToDateString(todayKey, -INITIAL_PAST_DAYS)
-  );
-  const [rangeEndDate, setRangeEndDate] = useState(() =>
-    addDaysToDateString(todayKey, INITIAL_FUTURE_DAYS)
-  );
+  const [calendarAnchorDate, setCalendarAnchorDate] = useState(() => todayDate);
+  const [selectedDateKey, setSelectedDateKey] = useState(todayKey);
   const watchlistFutureStartDate = todayKey;
   const watchlistFutureEndDate = useMemo(
     () => addDaysToDateString(todayKey, WATCHLIST_FUTURE_FALLBACK_DAYS),
     [todayKey]
   );
+  const effectiveWidth = gridWidth || Math.max(width - 40, 0);
+  const usesMonthCalendarLayout = isWeb && effectiveWidth >= 980;
 
-  const upcomingScrollRef = useRef<any>(null);
-  const didStartInitialUpcomingHydrationRef = useRef(false);
   const hydratedRangesRef = useRef(new Set<string>());
-  const shouldAnchorTodayRef = useRef(false);
-  const previousTabRef = useRef<HomeTab>("watchlist");
-  const canLoadPastFromEdgeRef = useRef(true);
-  const canLoadFutureFromEdgeRef = useRef(true);
-  const allowUpcomingEdgeLoadRef = useRef(false);
-  const lastUpcomingScrollYRef = useRef(0);
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const relationSyncTriggeredRef = useRef(false);
-  const [upcomingSnapshot, setUpcomingSnapshot] = useState<UpcomingGroup[]>([]);
   const [tmdbAiredEpisodeCountById, setTmdbAiredEpisodeCountById] = useState<
     Record<number, number>
   >({});
@@ -539,14 +949,42 @@ export function HomeScreen() {
     Record<number, number>
   >({});
 
+  const currentMonthDate = useMemo(
+    () => startOfMonthDate(calendarAnchorDate),
+    [calendarAnchorDate]
+  );
+  const currentWeekStart = useMemo(
+    () => startOfWeekDate(calendarAnchorDate),
+    [calendarAnchorDate]
+  );
+  const upcomingRange = useMemo(() => {
+    if (usesMonthCalendarLayout) {
+      const monthStart = startOfWeekDate(startOfMonthDate(calendarAnchorDate));
+      const monthEnd = endOfWeekDate(endOfMonthDate(calendarAnchorDate));
+      return {
+        startDate: formatDateForApi(monthStart),
+        endDate: formatDateForApi(monthEnd),
+        days: getInclusiveDayCount(formatDateForApi(monthStart), formatDateForApi(monthEnd)),
+      };
+    }
+
+    const startDate = addDaysToDate(currentWeekStart, -7);
+    const endDate = addDaysToDate(currentWeekStart, 13);
+    return {
+      startDate: formatDateForApi(startDate),
+      endDate: formatDateForApi(endDate),
+      days: getInclusiveDayCount(formatDateForApi(startDate), formatDateForApi(endDate)),
+    };
+  }, [calendarAnchorDate, currentWeekStart, usesMonthCalendarLayout]);
+
   // Projection-backed feed eliminates N show-doc reads.
   const watchlist = useQuery(api.shows.getHomeFeed, {});
   const upcoming = useQuery(
     api.schedule.getUpcomingSchedule,
     activeTab === "upcoming"
       ? {
-          startDate: rangeStartDate,
-          endDate: rangeEndDate,
+          startDate: upcomingRange.startDate,
+          endDate: upcomingRange.endDate,
           mediaFilter: mediaFilter === "all" ? undefined : mediaFilter,
         }
       : "skip"
@@ -566,7 +1004,7 @@ export function HomeScreen() {
 
   const hydrateRange = useCallback(
     async (startDate: string, days: number) => {
-      const safeDays = Math.max(1, Math.min(days, 21));
+      const safeDays = Math.max(1, Math.min(days, 42));
       const cacheKey = `${startDate}:${safeDays}`;
       if (hydratedRangesRef.current.has(cacheKey)) {
         return;
@@ -587,35 +1025,18 @@ export function HomeScreen() {
   );
 
   useEffect(() => {
-    if (activeTab === "upcoming" && previousTabRef.current !== "upcoming") {
-      shouldAnchorTodayRef.current = true;
-      canLoadPastFromEdgeRef.current = true;
-      canLoadFutureFromEdgeRef.current = true;
-      allowUpcomingEdgeLoadRef.current = false;
-      lastUpcomingScrollYRef.current = 0;
-      setIsTodayVisible(true);
-    }
-    previousTabRef.current = activeTab;
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (
-      activeTab !== "upcoming" ||
-      didStartInitialUpcomingHydrationRef.current ||
-      isHydratingInitialUpcoming
-    ) {
+    if (activeTab !== "upcoming") {
       return;
     }
 
-    didStartInitialUpcomingHydrationRef.current = true;
     let cancelled = false;
     setIsHydratingInitialUpcoming(true);
 
     const hydrationPromise = hydrateRange(
-      rangeStartDate,
-      getInclusiveDayCount(rangeStartDate, rangeEndDate)
+      upcomingRange.startDate,
+      upcomingRange.days
     ).catch((error) => {
-      console.warn("Initial upcoming range hydration failed", error);
+      console.warn("Upcoming calendar hydration failed", error);
     });
 
     void Promise.race([
@@ -625,7 +1046,6 @@ export function HomeScreen() {
       .finally(() => {
         if (!cancelled) {
           setIsHydratingInitialUpcoming(false);
-          shouldAnchorTodayRef.current = true;
         }
       });
 
@@ -635,9 +1055,8 @@ export function HomeScreen() {
   }, [
     activeTab,
     hydrateRange,
-    isHydratingInitialUpcoming,
-    rangeEndDate,
-    rangeStartDate,
+    upcomingRange.days,
+    upcomingRange.startDate,
   ]);
 
   useEffect(() => {
@@ -652,87 +1071,6 @@ export function HomeScreen() {
       relationSyncTriggeredRef.current = false;
     });
   }, [syncTrackedAnimeRelations]);
-
-  const loadPastWeek = useCallback(() => {
-    if (activeTab !== "upcoming" || isLoadingPast) {
-      return;
-    }
-
-    const newStartDate = addDaysToDateString(rangeStartDate, -RANGE_EXTENSION_DAYS);
-
-    setRangeStartDate(newStartDate);
-    setIsLoadingPast(true);
-    void hydrateRange(newStartDate, RANGE_EXTENSION_DAYS)
-      .catch((error) => {
-        console.warn("Failed to load earlier upcoming range", error);
-      })
-      .finally(() => {
-        setIsLoadingPast(false);
-      });
-  }, [activeTab, hydrateRange, isLoadingPast, rangeStartDate]);
-
-  const loadFutureWeek = useCallback(() => {
-    if (activeTab !== "upcoming" || isLoadingFuture) {
-      return;
-    }
-
-    const nextStartDate = addDaysToDateString(rangeEndDate, 1);
-    const newEndDate = addDaysToDateString(rangeEndDate, RANGE_EXTENSION_DAYS);
-
-    setRangeEndDate(newEndDate);
-    setIsLoadingFuture(true);
-    void hydrateRange(nextStartDate, RANGE_EXTENSION_DAYS)
-      .catch((error) => {
-        console.warn("Failed to load later upcoming range", error);
-      })
-      .finally(() => {
-        setIsLoadingFuture(false);
-      });
-  }, [activeTab, hydrateRange, isLoadingFuture, rangeEndDate]);
-
-  const triggerLoadPast = useCallback(() => {
-    if (
-      !canLoadPastFromEdgeRef.current ||
-      isLoadingPast ||
-      isLoadingFuture
-    ) {
-      return;
-    }
-
-    canLoadPastFromEdgeRef.current = false;
-    loadPastWeek();
-    setTimeout(() => {
-      canLoadPastFromEdgeRef.current = true;
-    }, EDGE_LOAD_COOLDOWN_MS);
-  }, [isLoadingFuture, isLoadingPast, loadPastWeek]);
-
-  const triggerLoadFuture = useCallback(() => {
-    if (
-      !canLoadFutureFromEdgeRef.current ||
-      isLoadingFuture ||
-      isLoadingPast
-    ) {
-      return;
-    }
-
-    canLoadFutureFromEdgeRef.current = false;
-    loadFutureWeek();
-    setTimeout(() => {
-      canLoadFutureFromEdgeRef.current = true;
-    }, EDGE_LOAD_COOLDOWN_MS);
-  }, [isLoadingFuture, isLoadingPast, loadFutureWeek]);
-
-  useEffect(() => {
-    if (activeTab === "upcoming" && upcoming !== undefined) {
-      setUpcomingSnapshot(upcoming as UpcomingGroup[]);
-    }
-  }, [activeTab, upcoming]);
-
-  useEffect(() => {
-    if (activeTab !== "upcoming") {
-      setIsUpcomingListLoaded(false);
-    }
-  }, [activeTab]);
 
   const watchlistItems = useMemo(() => (watchlist ?? []) as WatchlistItem[], [watchlist]);
 
@@ -873,96 +1211,85 @@ export function HomeScreen() {
     watchlistItems,
   ]);
 
-  const upcomingGroups = useMemo(
-    () => ((upcoming ?? upcomingSnapshot) as UpcomingGroup[]),
-    [upcoming, upcomingSnapshot]
-  );
-
-  const effectiveWidth = gridWidth || Math.max(width - 40, 0);
-  const columns = getColumnCount(effectiveWidth, isWeb);
-  const cardWidth = (effectiveWidth - (columns - 1) * GRID_GAP) / columns;
-  const watchlistPageSize = Math.max(columns * 3, 6);
-  const upcomingFallbackRowHeight = isWeb ? 332 : 276;
-
-  const upcomingListItems = useMemo<UpcomingListItem[]>(() => {
-    const items: UpcomingListItem[] = [];
-
+  const upcomingGroups = useMemo(() => ((upcoming ?? []) as UpcomingGroup[]), [upcoming]);
+  const episodesByDate = useMemo(() => {
+    const nextMap = new Map<string, UpcomingEpisode[]>();
     for (const group of upcomingGroups) {
-      items.push({
-        type: "header",
-        id: `header:${group.date}`,
-        date: group.date,
-        isToday: group.date === todayKey,
-      });
-
-      for (let index = 0; index < group.episodes.length; index += columns) {
-        items.push({
-          type: "episode",
-          id: `row:${group.date}:${index}`,
-          date: group.date,
-          episodes: group.episodes.slice(index, index + columns),
-        });
-      }
+      nextMap.set(group.date, group.episodes);
     }
+    return nextMap;
+  }, [upcomingGroups]);
 
-    return items;
-  }, [columns, todayKey, upcomingGroups]);
-
-  const todayAnchorIndex = useMemo(
-    () =>
-      upcomingListItems.findIndex(
-        (item) => item.type === "header" && item.date >= todayKey
-      ),
-    [todayKey, upcomingListItems]
-  );
-
-  const upcomingRangeLabel = useMemo(
-    () => `${getDateLabel(rangeStartDate)} - ${getDateLabel(rangeEndDate)}`,
-    [rangeEndDate, rangeStartDate]
-  );
-  const pastWindowDays = useMemo(
-    () => getDateDistance(rangeStartDate, todayKey),
-    [rangeStartDate, todayKey]
-  );
-  const futureWindowDays = useMemo(
-    () => getDateDistance(todayKey, rangeEndDate),
-    [rangeEndDate, todayKey]
-  );
-
-  const onUpcomingViewableItemsChanged = useCallback(
-    ({ viewableItems }: { viewableItems: { item: UpcomingListItem }[] }) => {
-      const hasTodayHeaderVisible = viewableItems.some(
-        (entry) => entry.item.type === "header" && entry.item.date === todayKey
-      );
-      setIsTodayVisible(hasTodayHeaderVisible);
-    },
-    [todayKey]
-  );
+  const columns = getColumnCount(effectiveWidth, isWeb);
+  const watchlistPageSize = Math.max(columns * 3, 6);
+  const isWideCalendar = usesMonthCalendarLayout && effectiveWidth >= 1180;
+  const webCalendarDays = useMemo(() => {
+    const gridStart = startOfWeekDate(currentMonthDate);
+    return Array.from({ length: 42 }, (_, index) => addDaysToDate(gridStart, index));
+  }, [currentMonthDate]);
 
   const isWatchlistLoading = watchlist === undefined;
   const isUpcomingLoading =
-    activeTab === "upcoming" &&
-    upcomingGroups.length === 0 &&
-    (upcoming === undefined || isHydratingInitialUpcoming);
+    activeTab === "upcoming" && (upcoming === undefined || isHydratingInitialUpcoming);
 
   const headerText =
     activeTab === "watchlist"
       ? { title: "Watchlist", subtitle: "Filtered by media and watch state" }
       : {
-          title: "Upcoming",
-          subtitle: `${pastWindowDays}d back, ${futureWindowDays}d ahead. More days load as you scroll.`,
+          title: "Schedule",
+          subtitle: usesMonthCalendarLayout
+            ? "Month grid on web with a stronger day focus and readable layers."
+            : "Weekly mobile calendar with direct day picks and quick navigation.",
         };
 
   const watchlistCount = filteredWatchlist.length;
-  const upcomingCount = upcomingGroups.reduce(
-    (sum, group) => sum + group.episodes.length,
-    0
-  );
+  const upcomingCount = upcomingGroups.reduce((sum, group) => sum + group.episodes.length, 0);
   const visibleWatchlistItems = useMemo(
     () => filteredWatchlist.slice(0, watchlistVisibleCount),
     [filteredWatchlist, watchlistVisibleCount]
   );
   const hasMoreWatchlist = watchlistVisibleCount < filteredWatchlist.length;
+
+  useEffect(() => {
+    if (activeTab !== "upcoming" || !usesMonthCalendarLayout) {
+      return;
+    }
+
+    const selectedDate = parseLocalDate(selectedDateKey);
+    if (selectedDate && isSameCalendarMonth(selectedDate, currentMonthDate)) {
+      return;
+    }
+
+    if (isSameCalendarMonth(todayDate, currentMonthDate)) {
+      if (selectedDateKey !== todayKey) {
+        setSelectedDateKey(todayKey);
+      }
+      return;
+    }
+
+    const monthStartKey = formatDateForApi(currentMonthDate);
+    if (selectedDateKey !== monthStartKey) {
+      setSelectedDateKey(monthStartKey);
+    }
+  }, [activeTab, currentMonthDate, selectedDateKey, todayDate, todayKey, usesMonthCalendarLayout]);
+
+  useEffect(() => {
+    if (activeTab !== "upcoming" || usesMonthCalendarLayout) {
+      return;
+    }
+
+    const selectedDate = parseLocalDate(selectedDateKey);
+    if (!selectedDate) {
+      if (selectedDateKey !== todayKey) {
+        setSelectedDateKey(todayKey);
+      }
+      return;
+    }
+
+    if (getUtcDayIndex(startOfWeekDate(selectedDate)) !== getUtcDayIndex(currentWeekStart)) {
+      setCalendarAnchorDate(selectedDate);
+    }
+  }, [activeTab, currentWeekStart, selectedDateKey, todayKey, usesMonthCalendarLayout]);
 
   useEffect(() => {
     setWatchlistVisibleCount((current) => {
@@ -1003,178 +1330,43 @@ export function HomeScreen() {
     watchlistPageSize,
   ]);
 
-  const upcomingListData = useMemo(
-    () => (isUpcomingLoading || upcomingGroups.length === 0 ? [] : upcomingListItems),
-    [isUpcomingLoading, upcomingGroups.length, upcomingListItems]
-  );
+  const goToTodayCalendar = useCallback(() => {
+    setCalendarAnchorDate(todayDate);
+    setSelectedDateKey(todayKey);
+  }, [todayDate, todayKey]);
 
-  const stickyHeaderIndices = useMemo(() => {
-    const headerIndices: number[] = [];
-    for (let index = 0; index < upcomingListData.length; index += 1) {
-      if (upcomingListData[index]?.type === "header") {
-        headerIndices.push(index);
+  const goToPreviousMonth = useCallback(() => {
+    setCalendarAnchorDate((current) => addMonthsToDate(startOfMonthDate(current), -1));
+  }, []);
+
+  const goToNextMonth = useCallback(() => {
+    setCalendarAnchorDate((current) => addMonthsToDate(startOfMonthDate(current), 1));
+  }, []);
+
+  const goToPreviousWeek = useCallback(() => {
+    setCalendarAnchorDate((current) => addDaysToDate(startOfWeekDate(current), -7));
+    setSelectedDateKey((current) => addDaysToDateString(current, -7));
+  }, []);
+
+  const goToNextWeek = useCallback(() => {
+    setCalendarAnchorDate((current) => addDaysToDate(startOfWeekDate(current), 7));
+    setSelectedDateKey((current) => addDaysToDateString(current, 7));
+  }, []);
+
+  const handleSelectCalendarDate = useCallback(
+    (dateKey: string) => {
+      const selectedDate = parseLocalDate(dateKey);
+      if (
+        selectedDate &&
+        usesMonthCalendarLayout &&
+        !isSameCalendarMonth(selectedDate, currentMonthDate)
+      ) {
+        setCalendarAnchorDate(selectedDate);
       }
-    }
-    return headerIndices;
-  }, [upcomingListData]);
 
-  const scrollUpcomingToIndexSafely = useCallback(
-    (index: number, animated: boolean) => {
-      if (!isUpcomingListLoaded || upcomingListData.length === 0 || index < 0) {
-        return;
-      }
-
-      const clampedIndex = Math.min(index, upcomingListData.length - 1);
-      const scrollPromise = upcomingScrollRef.current?.scrollToIndex({
-        index: clampedIndex,
-        animated,
-        viewPosition: 0,
-        viewOffset: 12,
-      });
-
-      if (scrollPromise && typeof scrollPromise.catch === "function") {
-        void scrollPromise.catch(() => {
-          upcomingScrollRef.current?.scrollToOffset({
-            offset: Math.max(0, clampedIndex * upcomingFallbackRowHeight - 12),
-            animated,
-          });
-        });
-      }
+      setSelectedDateKey(dateKey);
     },
-    [isUpcomingListLoaded, upcomingFallbackRowHeight, upcomingListData.length]
-  );
-
-  const jumpToToday = useCallback(() => {
-    if (!isUpcomingListLoaded || todayAnchorIndex < 0) {
-      return;
-    }
-
-    scrollUpcomingToIndexSafely(todayAnchorIndex, true);
-  }, [isUpcomingListLoaded, scrollUpcomingToIndexSafely, todayAnchorIndex]);
-
-  useEffect(() => {
-    if (
-      shouldAnchorTodayRef.current &&
-      activeTab === "upcoming" &&
-      !isUpcomingLoading &&
-      isUpcomingListLoaded &&
-      upcomingListData.length > 0 &&
-      todayAnchorIndex >= 0
-    ) {
-      let edgeTimer: ReturnType<typeof setTimeout> | null = null;
-      const frame = requestAnimationFrame(() => {
-        scrollUpcomingToIndexSafely(todayAnchorIndex, false);
-
-        edgeTimer = setTimeout(() => {
-          allowUpcomingEdgeLoadRef.current = true;
-        }, 180);
-      });
-      shouldAnchorTodayRef.current = false;
-      setIsTodayVisible(true);
-
-      return () => {
-        cancelAnimationFrame(frame);
-        if (edgeTimer) {
-          clearTimeout(edgeTimer);
-        }
-      };
-    }
-    return undefined;
-  }, [
-    activeTab,
-    isUpcomingListLoaded,
-    isUpcomingLoading,
-    scrollUpcomingToIndexSafely,
-    todayAnchorIndex,
-    upcomingListData.length,
-  ]);
-
-  useEffect(() => {
-    if (
-      activeTab === "upcoming" &&
-      !isUpcomingLoading &&
-      todayAnchorIndex < 0
-    ) {
-      allowUpcomingEdgeLoadRef.current = true;
-    }
-  }, [activeTab, isUpcomingLoading, todayAnchorIndex]);
-
-  const renderUpcomingListItem = useCallback(
-    ({ item }: { item: UpcomingListItem }) => {
-      if (item.type === "header") {
-        return (
-          <View className={`mb-3 ${item.isToday ? "mt-1" : ""}`}>
-            <View
-              className={`self-start rounded-md border-2 ${
-                item.isToday
-                  ? "border-primary bg-primary px-4 py-1.5"
-                  : "border-zinc-600 bg-zinc-700/70 px-3 py-1"
-              }`}
-            >
-              <Text
-                className={`text-[11px] font-black uppercase tracking-wide ${
-                  item.isToday ? "text-white" : "text-zinc-100"
-                }`}
-              >
-                {item.isToday
-                  ? `TODAY - ${getDateLabel(item.date)}`
-                  : `${getDayLabel(item.date)} · ${getDateLabel(item.date)}`}
-              </Text>
-            </View>
-          </View>
-        );
-      }
-
-      return (
-        <View className="mb-3 flex-row">
-          {item.episodes.map((episode, index) => (
-            <View
-              key={`${item.date}:${episode.routeId ?? episode.showTitle}:${episode.episode.seasonNumber}:${episode.episode.episodeNumber}:${index}`}
-              style={{
-                width: cardWidth,
-                marginRight: index === item.episodes.length - 1 ? 0 : GRID_GAP,
-              }}
-            >
-              <UpcomingCard episode={episode} date={item.date} isWeb={isWeb} />
-            </View>
-          ))}
-        </View>
-      );
-    },
-    [cardWidth, isWeb]
-  );
-
-  const onUpcomingScroll = useCallback(
-    (event: any) => {
-      if (!allowUpcomingEdgeLoadRef.current) {
-        return;
-      }
-
-      if (isLoadingPast || isLoadingFuture) {
-        return;
-      }
-
-      const y = event.nativeEvent.contentOffset.y;
-      const viewportHeight = event.nativeEvent.layoutMeasurement.height;
-      const contentHeight = event.nativeEvent.contentSize.height;
-      const distanceFromBottom = contentHeight - (y + viewportHeight);
-
-      const previousY = lastUpcomingScrollYRef.current;
-      const deltaY = y - previousY;
-      lastUpcomingScrollYRef.current = y;
-      const isScrollingUp = deltaY < -2;
-      const isScrollingDown = deltaY > 2;
-
-      if (y <= SCROLL_EDGE_THRESHOLD && isScrollingUp) {
-        triggerLoadPast();
-        return;
-      }
-
-      if (distanceFromBottom <= SCROLL_EDGE_THRESHOLD && isScrollingDown) {
-        triggerLoadFuture();
-      }
-    },
-    [isLoadingFuture, isLoadingPast, triggerLoadFuture, triggerLoadPast]
+    [currentMonthDate, usesMonthCalendarLayout]
   );
 
   const renderWatchlistItem = useCallback(
@@ -1228,7 +1420,7 @@ export function HomeScreen() {
                     className="mb-3"
                     options={[
                       { value: "watchlist", label: "Watchlist" },
-                      { value: "upcoming", label: "Upcoming" },
+                      { value: "upcoming", label: "Schedule" },
                     ]}
                     value={activeTab}
                     onValueChange={(value: HomeTab) => setActiveTab(value)}
@@ -1290,7 +1482,7 @@ export function HomeScreen() {
                   className="mb-3"
                   options={[
                     { value: "watchlist", label: "Watchlist" },
-                    { value: "upcoming", label: "Upcoming" },
+                    { value: "upcoming", label: "Schedule" },
                   ]}
                   value={activeTab}
                   onValueChange={(value: HomeTab) => setActiveTab(value)}
@@ -1306,147 +1498,48 @@ export function HomeScreen() {
                   onValueChange={(value: HomeMediaFilter) => setMediaFilter(value)}
                 />
 
-                <View className="mt-3 rounded-2xl border-2 border-border-default bg-bg-surface/80 px-3.5 py-3">
-                  <View className={`${isWeb ? "flex-row items-start justify-between gap-3" : "gap-3"}`}>
-                    <View className="flex-1">
-                      <Text className="text-[11px] font-black uppercase tracking-[1.4px] text-text-secondary">
-                        Window
-                      </Text>
-                      <Text className="mt-1 text-sm font-semibold text-text-primary">
-                        {upcomingRangeLabel}
-                      </Text>
-                      <Text className="mt-1 text-xs leading-5 text-text-secondary">
-                        {pastWindowDays} days back, {futureWindowDays} days ahead. Scroll near the
-                        top or bottom to automatically extend the schedule.
-                      </Text>
-                    </View>
-
-                    <View
-                      className={`self-start rounded-full border px-3 py-1.5 ${
-                        isTodayVisible
-                          ? "border-primary/70 bg-primary/20"
-                          : "border-border-default bg-black/20"
-                      }`}
-                    >
-                      <Text
-                        className={`text-[11px] font-black uppercase tracking-wide ${
-                          isTodayVisible ? "text-primary" : "text-text-secondary"
-                        }`}
-                      >
-                        {isTodayVisible ? "Today in view" : "Today"} · {getDateLabel(todayKey)}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View className="mt-3 flex-row flex-wrap gap-2">
-                    <Pressable
-                      onPress={triggerLoadPast}
-                      disabled={isLoadingPast}
-                      accessibilityRole="button"
-                      className="rounded-full border border-border-default bg-black/20 px-3.5 py-2"
-                      style={({ pressed }) => ({
-                        opacity: isLoadingPast ? 0.45 : pressed ? 0.85 : 1,
-                      })}
-                    >
-                      <Text className="text-[11px] font-black uppercase tracking-wide text-text-primary">
-                        {isLoadingPast ? "Loading Earlier..." : "Load Earlier"}
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      onPress={triggerLoadFuture}
-                      disabled={isLoadingFuture}
-                      accessibilityRole="button"
-                      className="rounded-full border border-border-default bg-black/20 px-3.5 py-2"
-                      style={({ pressed }) => ({
-                        opacity: isLoadingFuture ? 0.45 : pressed ? 0.85 : 1,
-                      })}
-                    >
-                      <Text className="text-[11px] font-black uppercase tracking-wide text-text-primary">
-                        {isLoadingFuture ? "Loading Later..." : "Load Later"}
-                      </Text>
-                    </Pressable>
-
-                    {todayAnchorIndex >= 0 ? (
-                      <Pressable
-                        onPress={jumpToToday}
-                        disabled={!isUpcomingListLoaded}
-                        accessibilityRole="button"
-                        className="rounded-full border border-primary/40 bg-primary/15 px-3.5 py-2"
-                        style={({ pressed }) => ({
-                          opacity: !isUpcomingListLoaded ? 0.5 : pressed ? 0.85 : 1,
-                        })}
-                      >
-                        <Text className="text-[11px] font-black uppercase tracking-wide text-text-primary">
-                          {isTodayVisible ? "On Today" : "Jump to Today"}
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-
-                  {!isUpcomingLoading && upcomingGroups.length > 0 && isLoadingPast ? (
-                    <View className="mt-3 flex-row items-center gap-2">
-                      <ActivityIndicator size="small" color="#ef4444" />
-                      <Text className="text-xs text-text-secondary">
-                        Loading earlier days...
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-
               </View>
 
-              <FlashList
-                key={`upcoming-${columns}`}
-                ref={upcomingScrollRef}
-                data={upcomingListData}
-                keyExtractor={(item) => item.id}
-                renderItem={renderUpcomingListItem as any}
-                getItemType={(item) => item.type}
-                stickyHeaderIndices={
-                  isUpcomingListLoaded ? stickyHeaderIndices : undefined
-                }
-                maintainVisibleContentPosition={{
-                  autoscrollToTopThreshold: 0.2,
-                  autoscrollToBottomThreshold: 0.2,
-                  animateAutoScrollToBottom: false,
-                }}
-                onLoad={() => setIsUpcomingListLoaded(true)}
-                onScroll={onUpcomingScroll}
-                onViewableItemsChanged={onUpcomingViewableItemsChanged as any}
-                scrollEventThrottle={32}
-                showsVerticalScrollIndicator
-                contentContainerStyle={{ paddingBottom: 24, flexGrow: 1 }}
-                ListEmptyComponent={
-                  isUpcomingLoading ? (
-                    <View className="items-center py-10">
-                      <ActivityIndicator size="small" color="#ef4444" />
-                      <Text className="mt-2 text-xs text-text-secondary">
-                        Loading schedule...
-                      </Text>
-                    </View>
-                  ) : (
-                    <View className="items-center rounded-xl border-2 border-border-default bg-bg-surface px-6 py-12">
-                      <Text className="text-lg font-semibold text-text-primary">
-                        No upcoming episodes
-                      </Text>
-                      <Text className="mt-1 text-center text-sm text-text-secondary">
-                        Shows with future episodes will appear here.
-                      </Text>
-                    </View>
-                  )
-                }
-                ListFooterComponent={
-                  !isUpcomingLoading && upcomingGroups.length > 0 && isLoadingFuture ? (
-                    <View className="items-center py-2">
-                      <ActivityIndicator size="small" color="#ef4444" />
-                      <Text className="mt-1 text-xs text-text-secondary">
-                        Loading later days...
-                      </Text>
-                    </View>
-                  ) : null
-                }
-              />
+              <View className="min-h-0 flex-1 pb-4">
+                {isUpcomingLoading ? (
+                  <View className="flex-1 items-center justify-center rounded-[28px] border border-[#563841] bg-[#0d090c]">
+                    <ActivityIndicator size="small" color="#ef4444" />
+                    <Text className="mt-3 text-sm text-zinc-400">Loading calendar...</Text>
+                  </View>
+                ) : (
+                  <ScrollView
+                    className="min-h-0 flex-1"
+                    contentContainerStyle={{ paddingBottom: 16 }}
+                    showsVerticalScrollIndicator={isWeb}
+                  >
+                    {usesMonthCalendarLayout ? (
+                      <WebUpcomingCalendar
+                        monthDate={currentMonthDate}
+                        calendarDays={webCalendarDays}
+                        episodesByDate={episodesByDate}
+                        selectedDateKey={selectedDateKey}
+                        todayKey={todayKey}
+                        onSelectDate={(dateKey) => handleSelectCalendarDate(dateKey)}
+                        onGoToPreviousMonth={goToPreviousMonth}
+                        onGoToNextMonth={goToNextMonth}
+                        onGoToToday={goToTodayCalendar}
+                        isWide={isWideCalendar}
+                      />
+                    ) : (
+                      <MobileUpcomingCalendar
+                        weekStart={currentWeekStart}
+                        selectedDateKey={selectedDateKey}
+                        todayKey={todayKey}
+                        episodesByDate={episodesByDate}
+                        onSelectDate={handleSelectCalendarDate}
+                        onGoToPreviousWeek={goToPreviousWeek}
+                        onGoToNextWeek={goToNextWeek}
+                        onGoToToday={goToTodayCalendar}
+                      />
+                    )}
+                  </ScrollView>
+                )}
+              </View>
             </View>
           )
         ) : (

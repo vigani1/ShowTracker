@@ -388,7 +388,7 @@ export function SearchScreen() {
   return (
     <ScreenWrapper>
       {/* Header Content */}
-      <View className="px-4 pb-2">
+      <View className="pb-2">
         <PageIntro
           title="Search"
           subtitle="Find shows, anime, and movies"
@@ -671,7 +671,7 @@ export function SearchScreen() {
         keyExtractor={(item) => `${item.id}-${item.mediaType}`}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={{ height: GRID_GAP }} />}
-        contentContainerStyle={{ paddingHorizontal: 16 }}
+        contentContainerStyle={{ paddingBottom: 8 }}
         renderItem={({ item }) => (
           <View style={{ flex: 1, paddingHorizontal: GRID_GAP / 2 }}>
             <MediaPosterCard

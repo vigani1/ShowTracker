@@ -265,11 +265,15 @@ export function LoginScreen() {
                       <TextInput
                         value={password}
                         onChangeText={setPassword}
+                        onSubmitEditing={() => {
+                          void handleSignIn();
+                        }}
                         secureTextEntry={!showPassword}
                         placeholder="Password"
                         placeholderTextColor="#52525b"
                         className="flex-1 text-base text-text-primary"
                         editable={!isPending}
+                        returnKeyType="go"
                       />
                       <Pressable
                         onPress={() => setShowPassword((prev) => !prev)}
