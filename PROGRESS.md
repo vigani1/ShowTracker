@@ -222,4 +222,6 @@ Phase 12: Notifications
 
 ### Phase 13: UI/UX Polish and Manual QA
 
+- [ ] Add an "inactive" or "snoozed" state between watching and paused: if a watchlist show has no watch activity for around 30 days, move it out of the active watchlist into a softer auto-paused bucket without changing the user's real paused status
+
 ### Known Issues (To Fix)
