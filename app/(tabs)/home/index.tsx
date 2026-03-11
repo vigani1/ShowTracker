@@ -1612,10 +1612,6 @@ export function HomeScreen() {
     [filteredWatchlist, watchlistVisibleCount]
   );
   const hasMoreWatchlist = watchlistVisibleCount < filteredWatchlist.length;
-  const visibleWatchlistRows = useMemo(
-    () => chunkItems(visibleWatchlistItems, columns),
-    [columns, visibleWatchlistItems]
-  );
   const watchlistSkeletonCount = Math.max(columns * 2, 6);
   const watchlistSkeletonRows = useMemo(
     () => chunkItems(Array.from({ length: watchlistSkeletonCount }, (_, index) => index), columns),
@@ -1649,6 +1645,7 @@ export function HomeScreen() {
   const isWatchlistVisualLoading = isWatchlistLoading || isWatchlistFilterSettling;
   const isUpcomingContentLoading =
     activeTab === "upcoming" && (upcoming === undefined || isHydratingInitialUpcoming);
+  const [settledWatchlistItems, setSettledWatchlistItems] = useState<WatchlistItem[]>([]);
 
   const headerText =
     activeTab === "watchlist"
@@ -1715,6 +1712,17 @@ export function HomeScreen() {
   }, [filteredWatchlist.length, watchlistPageSize]);
 
   useEffect(() => {
+    if (watchlist === undefined) {
+      setSettledWatchlistItems([]);
+      return;
+    }
+
+    if (!isWatchlistFilterSettling) {
+      setSettledWatchlistItems(filteredWatchlist);
+    }
+  }, [filteredWatchlist, isWatchlistFilterSettling, watchlist]);
+
+  useEffect(() => {
     return () => {
       if (watchlistLoadMoreTimerRef.current) {
         clearTimeout(watchlistLoadMoreTimerRef.current);
@@ -1741,6 +1749,13 @@ export function HomeScreen() {
     isWatchlistLoading,
     watchlistPageSize,
   ]);
+  const displayWatchlistItems = isWatchlistFilterSettling
+    ? settledWatchlistItems.slice(0, watchlistVisibleCount)
+    : visibleWatchlistItems;
+  const displayWatchlistRows = useMemo(
+    () => chunkItems(displayWatchlistItems, columns),
+    [columns, displayWatchlistItems]
+  );
 
   const goToTodayCalendar = useCallback(() => {
     setCalendarAnchorDate(todayDate);
@@ -1950,7 +1965,7 @@ export function HomeScreen() {
                 {watchlistHeader}
 
                 <View className="gap-3">
-                  {visibleWatchlistRows.map((row, rowIndex) => (
+                  {displayWatchlistRows.map((row, rowIndex) => (
                     <View key={`watchlist-row-${rowIndex}`} className="flex-row gap-3">
                       {row.map((item) => (
                         <View
@@ -1963,7 +1978,7 @@ export function HomeScreen() {
                       {row.length < columns
                         ? Array.from({ length: columns - row.length }, (_, fillerIndex) => (
                             isWatchlistFilterSettling &&
-                            rowIndex === visibleWatchlistRows.length - 1 ? (
+                            rowIndex === displayWatchlistRows.length - 1 ? (
                               <View
                                 key={`watchlist-skeleton-${watchlistTailSkeletonItems[fillerIndex]}`}
                                 style={{ flex: 1 / columns }}
@@ -1981,8 +1996,8 @@ export function HomeScreen() {
                     </View>
                   ))}
                   {isWatchlistFilterSettling &&
-                  (visibleWatchlistRows.length === 0 ||
-                    visibleWatchlistRows[visibleWatchlistRows.length - 1]?.length === columns) ? (
+                  (displayWatchlistRows.length === 0 ||
+                    displayWatchlistRows[displayWatchlistRows.length - 1]?.length === columns) ? (
                     <View key="watchlist-skeleton-row-0" className="flex-row gap-3">
                       {watchlistTailSkeletonItems.map((item) => (
                         <View key={`watchlist-skeleton-${item}`} style={{ flex: 1 / columns }}>
@@ -1998,7 +2013,7 @@ export function HomeScreen() {
             ) : (
               <FlashList
                 key={`watchlist-${columns}`}
-                data={visibleWatchlistItems}
+                data={displayWatchlistItems}
                 keyExtractor={(item: WatchlistItem) => `${item.mediaType}-${item.id}`}
                 renderItem={renderWatchlistItem}
                 numColumns={columns}
