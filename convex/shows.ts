@@ -412,6 +412,214 @@ function sortProjectionAnimeCandidates(a: ProjectionFeedEntry, b: ProjectionFeed
   return idA - idB;
 }
 
+type WatchlistEntryLike = {
+  status: UserShowStatus;
+  watchedEpisodes: number;
+  remainingEpisodes: number | null;
+};
+
+function isCompletedWatchlistEntry(
+  entry: Pick<WatchlistEntryLike, "status" | "remainingEpisodes">
+) {
+  return (
+    entry.status === "completed" ||
+    (typeof entry.remainingEpisodes === "number" && entry.remainingEpisodes <= 0)
+  );
+}
+
+function hasWatchlistProgress(entry: Pick<WatchlistEntryLike, "watchedEpisodes">) {
+  return entry.watchedEpisodes > 0;
+}
+
+type AnimeFranchiseSelectionEntry = ProjectionFeedEntry &
+  WatchlistEntryLike & {
+    isAutoTracked: boolean;
+    lastWatchedAt: number;
+  };
+
+type AnimeFranchiseProgressEntry = AnimeFranchiseSelectionEntry & {
+  autoPausedAt: number | null;
+  userShowId: Id<"userShows">;
+};
+
+function canAdvanceFromCompletedWatchlistEntry(
+  entry: Pick<WatchlistEntryLike, "status" | "remainingEpisodes">
+) {
+  return !isCompletedWatchlistEntry(entry) && entry.status !== "dropped";
+}
+
+function selectAnimeFranchiseRepresentative<T extends AnimeFranchiseSelectionEntry>(
+  entries: T[],
+  options: {
+    isMainlineEntry: (entry: T) => boolean;
+    preferMainlineOnly: boolean;
+    sortEntries: (a: T, b: T) => number;
+  }
+): { entry: T; lastActivityAt: number } | null {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const mainlineEntries = entries.filter((entry) => options.isMainlineEntry(entry));
+  const timeline =
+    options.preferMainlineOnly && mainlineEntries.length > 0 ? mainlineEntries : entries;
+  const orderedTimeline = [...timeline].sort(options.sortEntries);
+
+  if (orderedTimeline.length === 0) {
+    return null;
+  }
+
+  let anchorIndex = -1;
+  for (let index = orderedTimeline.length - 1; index >= 0; index -= 1) {
+    const entry = orderedTimeline[index];
+    if (hasWatchlistProgress(entry) || isCompletedWatchlistEntry(entry)) {
+      anchorIndex = index;
+      break;
+    }
+  }
+
+  if (anchorIndex >= 0) {
+    const anchor = orderedTimeline[anchorIndex];
+    if (!isCompletedWatchlistEntry(anchor)) {
+      return { entry: anchor, lastActivityAt: anchor.lastWatchedAt };
+    }
+
+    const nextEntry = orderedTimeline
+      .slice(anchorIndex + 1)
+      .find((entry) => canAdvanceFromCompletedWatchlistEntry(entry));
+
+    if (nextEntry) {
+      return { entry: nextEntry, lastActivityAt: anchor.lastWatchedAt };
+    }
+  }
+
+  const manualCandidates = orderedTimeline.filter(
+    (entry) => canAdvanceFromCompletedWatchlistEntry(entry) && !entry.isAutoTracked
+  );
+  if (manualCandidates.length > 0) {
+    const [selectedEntry] = [...manualCandidates].sort((a, b) => {
+      if (a.lastWatchedAt !== b.lastWatchedAt) {
+        return b.lastWatchedAt - a.lastWatchedAt;
+      }
+      return options.sortEntries(a, b);
+    });
+
+    return { entry: selectedEntry, lastActivityAt: selectedEntry.lastWatchedAt };
+  }
+
+  const fallbackEntry = orderedTimeline.find((entry) =>
+    canAdvanceFromCompletedWatchlistEntry(entry)
+  );
+
+  return fallbackEntry
+    ? { entry: fallbackEntry, lastActivityAt: fallbackEntry.lastWatchedAt }
+    : null;
+}
+
+function isHomeFeedDisplayableEntry(
+  entry: Pick<WatchlistEntryLike, "status" | "remainingEpisodes">
+) {
+  return (
+    entry.remainingEpisodes != null &&
+    entry.status !== "paused" &&
+    entry.status !== "dropped" &&
+    !isCompletedWatchlistEntry(entry)
+  );
+}
+
+function selectHomeAnimeFranchiseRepresentative<T extends AnimeFranchiseSelectionEntry>(
+  entries: T[],
+  options: {
+    isMainlineEntry: (entry: T) => boolean;
+    preferMainlineOnly: boolean;
+    sortEntries: (a: T, b: T) => number;
+  }
+): { entry: T; lastActivityAt: number } | null {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const mainlineEntries = entries.filter((entry) => options.isMainlineEntry(entry));
+  const timeline =
+    options.preferMainlineOnly && mainlineEntries.length > 0 ? mainlineEntries : entries;
+  const orderedTimeline = [...timeline].sort(options.sortEntries);
+
+  if (orderedTimeline.length === 0) {
+    return null;
+  }
+
+  const activeProgressEntries = orderedTimeline.filter(
+    (entry) => isHomeFeedDisplayableEntry(entry) && hasWatchlistProgress(entry)
+  );
+  if (activeProgressEntries.length > 0) {
+    const entry = activeProgressEntries[activeProgressEntries.length - 1];
+    return { entry, lastActivityAt: entry.lastWatchedAt };
+  }
+
+  let completedAnchorIndex = -1;
+  for (let index = orderedTimeline.length - 1; index >= 0; index -= 1) {
+    if (isCompletedWatchlistEntry(orderedTimeline[index])) {
+      completedAnchorIndex = index;
+      break;
+    }
+  }
+
+  if (completedAnchorIndex >= 0) {
+    const completedAnchor = orderedTimeline[completedAnchorIndex];
+    const nextEntry = orderedTimeline.slice(completedAnchorIndex + 1).find(
+      (entry) => isHomeFeedDisplayableEntry(entry) && (entry.isAutoTracked || hasWatchlistProgress(entry))
+    );
+
+    if (nextEntry) {
+      return { entry: nextEntry, lastActivityAt: completedAnchor.lastWatchedAt };
+    }
+  }
+
+  const autoTrackedDisplayable = orderedTimeline.find(
+    (entry) => isHomeFeedDisplayableEntry(entry) && entry.isAutoTracked
+  );
+  if (autoTrackedDisplayable) {
+    return {
+      entry: autoTrackedDisplayable,
+      lastActivityAt: autoTrackedDisplayable.lastWatchedAt,
+    };
+  }
+
+  return null;
+}
+
+function findNextMainlineAnimeEntryToActivate<T extends AnimeFranchiseProgressEntry>(
+  entries: T[],
+  sortEntries: (a: T, b: T) => number,
+  isMainlineEntry: (entry: T) => boolean
+) {
+  const orderedMainline = [...entries].filter(isMainlineEntry).sort(sortEntries);
+
+  let completedAnchorIndex = -1;
+  for (let index = orderedMainline.length - 1; index >= 0; index -= 1) {
+    if (isCompletedWatchlistEntry(orderedMainline[index])) {
+      completedAnchorIndex = index;
+      break;
+    }
+  }
+
+  if (completedAnchorIndex < 0) {
+    return null;
+  }
+
+  return (
+    orderedMainline
+      .slice(completedAnchorIndex + 1)
+      .find(
+        (entry) =>
+          !isCompletedWatchlistEntry(entry) &&
+          entry.status !== "dropped" &&
+          (entry.status !== "paused" || entry.autoPausedAt !== null)
+      ) ??
+    null
+  );
+}
+
 function getExternalShowIdFromProjection(p: {
   mediaType: string;
   tmdbId?: number;
@@ -457,13 +665,13 @@ export const getHomeFeed = query({
           .withIndex("by_user_media", (q) =>
             q.eq("userId", typedUserId).eq("mediaType", "tv")
           )
-          .take(HOME_FEED_MAX_RESULTS * 2),
+          .collect(),
         ctx.db
           .query("feedProjections")
           .withIndex("by_user_media", (q) =>
             q.eq("userId", typedUserId).eq("mediaType", "anime")
           )
-          .take(HOME_FEED_MAX_RESULTS * 2),
+          .collect(),
         ctx.db
           .query("userAnimeHomeSettings")
           .withIndex("by_user", (q) => q.eq("userId", typedUserId))
@@ -570,16 +778,11 @@ export const getHomeFeed = query({
     const groupedAnime = new Map<string, HomeFeedProjectionItem[]>();
     const selectedEntries: HomeFeedProjectionItem[] = [];
 
-    const isCompletedEntry = (entry: {
-      status: string;
-      remainingEpisodes: number | null;
-    }) =>
-      entry.status === "completed" ||
-      (typeof entry.remainingEpisodes === "number" && entry.remainingEpisodes <= 0);
-
     for (const item of hydrated) {
       if (item.mediaType !== "anime") {
-        selectedEntries.push(item);
+        if (isHomeFeedDisplayableEntry(item) && hasWatchlistProgress(item)) {
+          selectedEntries.push(item);
+        }
         continue;
       }
 
@@ -607,44 +810,20 @@ export const getHomeFeed = query({
           ? relationModeByRoot.get(relationRootAnilistId) ?? globalRelationMode
           : globalRelationMode;
 
-      const nonCompleted = entries.filter((entry) => !isCompletedEntry(entry));
-      const watchingEntries = nonCompleted.filter((entry) => entry.status === "watching");
-      const pausedEntries = nonCompleted.filter((entry) => entry.status === "paused");
-      const plannedEntries = nonCompleted.filter(
-        (entry) => entry.status === "plan_to_watch"
-      );
-      const droppedEntries = nonCompleted.filter((entry) => entry.status === "dropped");
+      const selected = selectHomeAnimeFranchiseRepresentative(entries, {
+        isMainlineEntry: isProjectionMainlineAnime,
+        preferMainlineOnly: effectiveRelationMode === "core_only",
+        sortEntries: sortProjectionAnimeCandidates,
+      });
 
-      const displayable =
-        watchingEntries.length > 0
-          ? watchingEntries
-          : pausedEntries.length > 0
-            ? pausedEntries
-            : plannedEntries.length > 0
-              ? plannedEntries
-              : droppedEntries.length > 0
-                ? droppedEntries
-                : nonCompleted.length > 0
-                  ? nonCompleted
-                  : entries;
-
-      if (displayable.length === 0) {
+      if (!selected) {
         continue;
       }
 
-      const mainlineDisplayable = displayable.filter((entry) =>
-        isProjectionMainlineAnime(entry)
-      );
-      const pool =
-        effectiveRelationMode === "core_only" && mainlineDisplayable.length > 0
-          ? mainlineDisplayable
-          : displayable;
-      const sortedPool = [...pool].sort(sortProjectionAnimeCandidates);
-      if (sortedPool.length === 0) {
-        continue;
-      }
-
-      selectedEntries.push(sortedPool[0]);
+      selectedEntries.push({
+        ...selected.entry,
+        lastWatchedAt: selected.lastActivityAt,
+      });
     }
 
     return selectedEntries
@@ -731,6 +910,10 @@ export const dailyReconcileProjections = internalAction({
 
     let rebuilt = 0;
     for (const userId of trackedUserIds) {
+      await ctx.runAction(internal.shows.rebuildUserShowTrackingAggregatesForUser, {
+        userId,
+      });
+
       let deleteDone = false;
       while (!deleteDone) {
         const deleteBatch: {
@@ -997,7 +1180,17 @@ type UserShowTrackingAggregates = {
   lastWatchedAt?: number;
 };
 
-function getEpisodeLastWatchedAt(entry: Doc<"watchedEpisodes">) {
+type ShowProgressMeta = Pick<
+  ShowPayload,
+  "mediaType" | "status" | "totalEpisodes" | "totalSeasons"
+>;
+
+type TrackedWatchedEpisodeLike = Pick<
+  Doc<"watchedEpisodes">,
+  "season" | "episode" | "watchedAt" | "runtime" | "watchCount" | "watchHistory"
+>;
+
+function getEpisodeLastWatchedAt(entry: TrackedWatchedEpisodeLike) {
   const watchHistory = entry.watchHistory ?? [];
   if (watchHistory.length > 0) {
     return watchHistory[watchHistory.length - 1];
@@ -1005,15 +1198,100 @@ function getEpisodeLastWatchedAt(entry: Doc<"watchedEpisodes">) {
   return entry.watchedAt;
 }
 
+function isWatchedEpisodeWithinKnownShowBounds(
+  show: ShowProgressMeta,
+  entry: Pick<TrackedWatchedEpisodeLike, "season" | "episode">
+) {
+  if (show.mediaType === "movie" && entry.season === 0 && entry.episode === 0) {
+    return true;
+  }
+
+  if (
+    !Number.isFinite(entry.season) ||
+    entry.season < 1 ||
+    !Number.isFinite(entry.episode) ||
+    entry.episode < 1
+  ) {
+    return false;
+  }
+
+  const totalSeasons = normalizePositiveEpisodeCount(show.totalSeasons);
+  if (typeof totalSeasons === "number" && entry.season > totalSeasons) {
+    return false;
+  }
+
+  const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
+  const isSingleSeasonShow = show.mediaType === "anime" || totalSeasons === 1;
+  if (
+    isSingleSeasonShow &&
+    typeof totalEpisodes === "number" &&
+    entry.season === 1 &&
+    entry.episode > totalEpisodes
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function filterWatchedEpisodesWithinKnownShowBounds<T extends TrackedWatchedEpisodeLike>(
+  watchedEpisodes: T[],
+  show: ShowProgressMeta
+) {
+  return watchedEpisodes.filter((entry) =>
+    isWatchedEpisodeWithinKnownShowBounds(show, entry)
+  );
+}
+
+function shouldAutoCompleteShowFromProgress(
+  show: ShowProgressMeta,
+  watchedEpisodesCount: number
+) {
+  if (show.mediaType === "movie") {
+    return watchedEpisodesCount > 0;
+  }
+
+  const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
+  if (typeof totalEpisodes !== "number") {
+    return false;
+  }
+
+  if (watchedEpisodesCount < totalEpisodes) {
+    return false;
+  }
+
+  return isTerminalLifecycleStatus(show.status);
+}
+
+function getDerivedUserShowStatusFromProgress(
+  currentStatus: UserShowStatus | null | undefined,
+  show: ShowProgressMeta,
+  watchedEpisodesCount: number
+): UserShowStatus {
+  if (shouldAutoCompleteShowFromProgress(show, watchedEpisodesCount)) {
+    return "completed";
+  }
+
+  if (currentStatus === "dropped") {
+    return "dropped";
+  }
+
+  return watchedEpisodesCount > 0 ? "watching" : "plan_to_watch";
+}
+
 function computeWatchedEpisodeAggregates(
-  watchedEpisodes: Doc<"watchedEpisodes">[]
+  watchedEpisodes: TrackedWatchedEpisodeLike[],
+  show?: ShowProgressMeta
 ): UserShowTrackingAggregates {
   let watchedTotalCount = 0;
   let watchedRuntimeMinutes = 0;
   let lastWatchedAt: number | undefined;
   const uniqueEpisodeKeys = new Set<string>();
+  const relevantEpisodes = show
+    ? filterWatchedEpisodesWithinKnownShowBounds(watchedEpisodes, show)
+    : watchedEpisodes;
 
-  for (const entry of watchedEpisodes) {
+  for (const entry of relevantEpisodes) {
     uniqueEpisodeKeys.add(`${entry.season}:${entry.episode}`);
 
     const watchCount = entry.watchCount ?? 1;
@@ -1054,12 +1332,17 @@ async function refreshUserShowTrackingAggregates(
     return null;
   }
 
+  const show = await ctx.db.get(userShow.showId);
+  if (!show) {
+    return null;
+  }
+
   const watchedEpisodes = await ctx.db
     .query("watchedEpisodes")
     .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
     .collect();
 
-  const aggregates = computeWatchedEpisodeAggregates(watchedEpisodes);
+  const aggregates = computeWatchedEpisodeAggregates(watchedEpisodes, show);
 
   await ctx.db.patch(userShow._id, {
     watchedEpisodesCount: aggregates.watchedEpisodesCount,
@@ -1544,6 +1827,11 @@ async function syncAnimeRelationRoot(
     shows,
   });
 
+  await ctx.runMutation(internal.shows.ensureNextMainlineAnimeEntryActive, {
+    userId,
+    relationRootAnilistId: rootAnilistId,
+  });
+
   return {
     rootAnilistId,
     synced: true,
@@ -1616,6 +1904,100 @@ export const applyAnimeRelationSync = internalMutation({
     return {
       insertedUserShows,
       autoTrackedInserted,
+    };
+  },
+});
+
+export const ensureNextMainlineAnimeEntryActive = internalMutation({
+  args: {
+    userId: v.id("users"),
+    relationRootAnilistId: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const settings = await getUserAnimeHomeSettingsFromDb(ctx, args.userId);
+    if (settings.completionBehavior !== "auto_pause_others_keep_next") {
+      return { activated: false, userShowId: null as Id<"userShows"> | null };
+    }
+
+    const relatedUserShows = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_relation_root", (q) =>
+        q.eq("userId", args.userId).eq("relationRootAnilistId", args.relationRootAnilistId)
+      )
+      .collect();
+
+    const entries = (
+      await Promise.all(
+        relatedUserShows.map(async (userShow) => {
+          const show = await ctx.db.get(userShow.showId);
+          if (!show || show.mediaType !== "anime") {
+            return null;
+          }
+
+          const watchedEpisodes = Math.max(
+            0,
+            Math.floor(userShow.watchedEpisodesCount ?? 0)
+          );
+          const totalEpisodes =
+            typeof show.totalEpisodes === "number" ? show.totalEpisodes : null;
+          const remainingEpisodes =
+            totalEpisodes === null ? null : Math.max(totalEpisodes - watchedEpisodes, 0);
+
+          return {
+            userShowId: userShow._id,
+            title: show.title,
+            firstAired: show.firstAired ?? null,
+            animeSeason: show.animeSeason ?? null,
+            animeSeasonYear: show.animeSeasonYear ?? null,
+            anilistFormat: show.anilistFormat ?? null,
+            anilistId: show.anilistId ?? null,
+            malId: show.malId ?? null,
+            status: userShow.status,
+            watchedEpisodes,
+            remainingEpisodes,
+            isAutoTracked: userShow.isAutoTracked ?? false,
+            lastWatchedAt: userShow.lastWatchedAt ?? userShow.addedAt,
+            autoPausedAt: userShow.autoPausedAt ?? null,
+          };
+        })
+      )
+    ).filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+    const nextEntry = findNextMainlineAnimeEntryToActivate(
+      entries,
+      sortProjectionAnimeCandidates,
+      isProjectionMainlineAnime
+    );
+
+    if (!nextEntry) {
+      return { activated: false, userShowId: null as Id<"userShows"> | null };
+    }
+
+    if (nextEntry.status !== "paused") {
+      return { activated: false, userShowId: nextEntry.userShowId };
+    }
+
+    if (nextEntry.autoPausedAt === null) {
+      return { activated: false, userShowId: nextEntry.userShowId };
+    }
+
+    const nextStatus: UserShowStatus = hasWatchlistProgress(nextEntry)
+      ? "watching"
+      : "plan_to_watch";
+
+    await ctx.db.patch(nextEntry.userShowId, {
+      status: nextStatus,
+      statusChangedAt: Date.now(),
+      droppedAt: undefined,
+      completedAt: undefined,
+      autoPausedAt: undefined,
+    });
+    await upsertFeedProjectionForUserShow(ctx, nextEntry.userShowId);
+
+    return {
+      activated: true,
+      userShowId: nextEntry.userShowId,
+      status: nextStatus,
     };
   },
 });
@@ -2243,21 +2625,24 @@ export const getUserShowTracking = query({
       .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", show._id))
       .unique();
 
-    // Use precomputed aggregate if available
     let watchedEpisodesCount = userShow?.watchedEpisodesCount;
+    const shouldRecomputeWatchedEpisodesCount =
+      userShow !== null &&
+      (watchedEpisodesCount == null ||
+        (typeof watchedEpisodesCount === "number" &&
+          typeof show.totalEpisodes === "number" &&
+          watchedEpisodesCount > show.totalEpisodes));
 
-    // Fallback to querying if aggregate is missing (shouldn't happen normally)
-    if (watchedEpisodesCount == null && userShow) {
+    if (shouldRecomputeWatchedEpisodesCount && userShow) {
       const watchedEpisodes = await ctx.db
         .query("watchedEpisodes")
         .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", show._id))
         .take(5000);
 
-      const uniqueWatchedEpisodeKeys = new Set<string>();
-      for (const entry of watchedEpisodes) {
-        uniqueWatchedEpisodeKeys.add(`${entry.season}:${entry.episode}`);
-      }
-      watchedEpisodesCount = uniqueWatchedEpisodeKeys.size;
+      watchedEpisodesCount = computeWatchedEpisodeAggregates(
+        watchedEpisodes,
+        show
+      ).watchedEpisodesCount;
     }
 
     const resolvedWatchedEpisodesCount = Math.max(
@@ -2325,7 +2710,7 @@ export const getWatchedSeasonProgress = query({
       .take(5000);
 
     const watchedBySeason = new Map<number, Set<number>>();
-    for (const entry of watchedEpisodes) {
+    for (const entry of filterWatchedEpisodesWithinKnownShowBounds(watchedEpisodes, show)) {
       const episodesForSeason = watchedBySeason.get(entry.season) ?? new Set<number>();
       episodesForSeason.add(entry.episode);
       watchedBySeason.set(entry.season, episodesForSeason);
@@ -3563,37 +3948,26 @@ export const toggleEpisodeWatched = mutation({
       watchHistory: [now],
     });
 
-    const totalWatched = watchedEpisodes.length + 1;
-    
-    // Determine next status based on progress
-    let nextStatus: UserShowStatus = userShow?.status ?? "watching";
-    let statusChanged = false;
-    
-    // Auto-resume from paused/planned
-    if (nextStatus === "paused" || nextStatus === "plan_to_watch") {
-      nextStatus = "watching";
-      statusChanged = true;
-    }
-
-    // Auto-resume from completed if new episodes added
-    if (
-      userShow?.status === "completed" &&
-      args.show.totalEpisodes &&
-      totalWatched < args.show.totalEpisodes
-    ) {
-      nextStatus = "watching";
-      statusChanged = true;
-    }
-
-    // Auto-complete when all episodes watched
-    if (
-      args.show.totalEpisodes &&
-      totalWatched >= args.show.totalEpisodes &&
-      nextStatus !== "completed"
-    ) {
-      nextStatus = "completed";
-      statusChanged = true;
-    }
+    const totalWatched = computeWatchedEpisodeAggregates(
+      [
+        ...watchedEpisodes,
+        {
+          season: args.season,
+          episode: args.episode,
+          watchedAt: now,
+          runtime: args.runtime ?? args.show.episodeRuntime,
+          watchCount: 1,
+          watchHistory: [now],
+        },
+      ],
+      args.show
+    ).watchedEpisodesCount;
+    const nextStatus = getDerivedUserShowStatusFromProgress(
+      userShow?.status,
+      args.show,
+      totalWatched
+    );
+    const statusChanged = userShow?.status !== nextStatus;
 
     if (userShow) {
       const updateData: Partial<Doc<"userShows">> = {
@@ -3715,11 +4089,23 @@ export const batchRewatchEpisodes = mutation({
       }
     }
 
-    const totalWatched = watchedEpisodes.length + insertedCount;
-    const nextStatus =
-      args.show.totalEpisodes && totalWatched >= args.show.totalEpisodes
-        ? "completed"
-        : "watching";
+    const insertedEpisodesForAggregate = uniqueEpisodes.map((entry) => ({
+      season: entry.season,
+      episode: entry.episode,
+      watchedAt: now,
+      runtime: entry.runtime ?? args.show.episodeRuntime,
+      watchCount: 1,
+      watchHistory: [now],
+    }));
+    const totalWatched = computeWatchedEpisodeAggregates(
+      [...watchedEpisodes, ...insertedEpisodesForAggregate],
+      args.show
+    ).watchedEpisodesCount;
+    const nextStatus = getDerivedUserShowStatusFromProgress(
+      userShow?.status,
+      args.show,
+      totalWatched
+    );
 
     if (userShow) {
       const statusChanged = userShow.status !== nextStatus;
@@ -3754,6 +4140,149 @@ export const batchRewatchEpisodes = mutation({
       processedCount: uniqueEpisodes.length,
       updatedCount,
       insertedCount,
+      watchedEpisodes: refreshed?.watchedEpisodesCount ?? totalWatched,
+      status: nextStatus,
+    };
+  },
+});
+
+export const batchMarkEpisodesWatched = mutation({
+  args: {
+    show: v.object(showInput),
+    episodes: v.array(
+      v.object({
+        season: v.number(),
+        episode: v.number(),
+        runtime: v.optional(v.number()),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    const showId = await ensureShowRecordId(ctx, args.show);
+    const now = Date.now();
+
+    let userShow = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .unique();
+
+    if (!userShow) {
+      const userShowId = await ctx.db.insert("userShows", {
+        userId,
+        showId,
+        status: "watching",
+        mediaType: args.show.mediaType,
+        watchedEpisodesCount: 0,
+        watchedTotalCount: 0,
+        watchedRuntimeMinutes: 0,
+        addedAt: now,
+        lastWatchedAt: now,
+      });
+      userShow = await ctx.db.get(userShowId);
+    }
+
+    const watchedEpisodes = await ctx.db
+      .query("watchedEpisodes")
+      .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
+      .collect();
+
+    const existingKeys = new Set(
+      watchedEpisodes.map((entry) => `${entry.season}:${entry.episode}`)
+    );
+
+    const uniqueEpisodes = Array.from(
+      new Map(args.episodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])).values()
+    );
+
+    let addedCount = 0;
+    for (const entry of uniqueEpisodes) {
+      const key = `${entry.season}:${entry.episode}`;
+      if (existingKeys.has(key)) {
+        continue;
+      }
+
+      await ctx.db.insert("watchedEpisodes", {
+        userId,
+        showId,
+        season: entry.season,
+        episode: entry.episode,
+        watchedAt: now,
+        runtime: entry.runtime ?? args.show.episodeRuntime,
+        watchCount: 1,
+        watchHistory: [now],
+      });
+      addedCount += 1;
+    }
+
+    if (addedCount === 0) {
+      const currentWatchedEpisodes =
+        typeof userShow?.watchedEpisodesCount === "number"
+          ? userShow.watchedEpisodesCount
+          : computeWatchedEpisodeAggregates(watchedEpisodes, args.show).watchedEpisodesCount;
+
+      return {
+        processedCount: uniqueEpisodes.length,
+        addedCount,
+        watchedEpisodes: currentWatchedEpisodes,
+        status:
+          userShow?.status ??
+          getDerivedUserShowStatusFromProgress(null, args.show, currentWatchedEpisodes),
+      };
+    }
+
+    const addedEpisodesForAggregate = uniqueEpisodes
+      .filter((entry) => !existingKeys.has(`${entry.season}:${entry.episode}`))
+      .map((entry) => ({
+        season: entry.season,
+        episode: entry.episode,
+        watchedAt: now,
+        runtime: entry.runtime ?? args.show.episodeRuntime,
+        watchCount: 1,
+        watchHistory: [now],
+      }));
+    const totalWatched = computeWatchedEpisodeAggregates(
+      [...watchedEpisodes, ...addedEpisodesForAggregate],
+      args.show
+    ).watchedEpisodesCount;
+    const nextStatus = getDerivedUserShowStatusFromProgress(
+      userShow?.status,
+      args.show,
+      totalWatched
+    );
+
+    if (userShow) {
+      const statusChanged = userShow.status !== nextStatus;
+      const updateData: Partial<Doc<"userShows">> = {
+        status: nextStatus,
+        lastWatchedAt: now,
+      };
+
+      if (statusChanged) {
+        updateData.statusChangedAt = now;
+        if (userShow.autoPausedAt) {
+          updateData.autoPausedAt = undefined;
+        }
+        if (userShow.droppedAt) {
+          updateData.droppedAt = undefined;
+        }
+        if (userShow.status === "completed") {
+          updateData.completedAt = undefined;
+        }
+      }
+
+      if (nextStatus === "completed") {
+        updateData.completedAt = now;
+      }
+
+      await ctx.db.patch(userShow._id, updateData);
+    }
+
+    const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+
+    return {
+      processedCount: uniqueEpisodes.length,
+      addedCount,
       watchedEpisodes: refreshed?.watchedEpisodesCount ?? totalWatched,
       status: nextStatus,
     };
@@ -3829,11 +4358,25 @@ export const markSeasonWatched = mutation({
       addedCount += 1;
     }
 
-    const totalWatched = watchedEpisodes.length + addedCount;
-    const nextStatus =
-      args.show.totalEpisodes && totalWatched >= args.show.totalEpisodes
-        ? "completed"
-        : "watching";
+    const addedSeasonEpisodesForAggregate = uniqueEpisodes
+      .filter((entry) => !existingSeasonEpisodes.has(entry.episode))
+      .map((entry) => ({
+        season: args.season,
+        episode: entry.episode,
+        watchedAt: now,
+        runtime: entry.runtime ?? args.show.episodeRuntime,
+        watchCount: 1,
+        watchHistory: [now],
+      }));
+    const totalWatched = computeWatchedEpisodeAggregates(
+      [...watchedEpisodes, ...addedSeasonEpisodesForAggregate],
+      args.show
+    ).watchedEpisodesCount;
+    const nextStatus = getDerivedUserShowStatusFromProgress(
+      userShow?.status,
+      args.show,
+      totalWatched
+    );
 
     if (userShow) {
       const statusChanged = userShow.status !== nextStatus;
@@ -4084,12 +4627,66 @@ export const pauseOtherRelatedAnimeEntries = mutation({
       )
       .collect();
 
+    const relatedEntries = (
+      await Promise.all(
+        relatedUserShows.map(async (userShow) => {
+          const show = await ctx.db.get(userShow.showId);
+          if (!show || show.mediaType !== "anime") {
+            return null;
+          }
+
+          const watchedEpisodes = Math.max(
+            0,
+            Math.floor(userShow.watchedEpisodesCount ?? 0)
+          );
+          const totalEpisodes =
+            typeof show.totalEpisodes === "number" ? show.totalEpisodes : null;
+          const remainingEpisodes =
+            totalEpisodes === null ? null : Math.max(totalEpisodes - watchedEpisodes, 0);
+
+          return {
+            userShowId: userShow._id,
+            showId: userShow.showId,
+            title: show.title,
+            firstAired: show.firstAired ?? null,
+            animeSeason: show.animeSeason ?? null,
+            animeSeasonYear: show.animeSeasonYear ?? null,
+            anilistFormat: show.anilistFormat ?? null,
+            anilistId: show.anilistId ?? null,
+            malId: show.malId ?? null,
+            status: userShow.status,
+            watchedEpisodes,
+            remainingEpisodes,
+            isAutoTracked: userShow.isAutoTracked ?? false,
+            lastWatchedAt: userShow.lastWatchedAt ?? userShow.addedAt,
+            autoPausedAt: userShow.autoPausedAt ?? null,
+          };
+        })
+      )
+    ).filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+    const requestedKeepEntry =
+      keepShowId !== null
+        ? relatedEntries.find((entry) => entry.showId === keepShowId) ?? null
+        : null;
+    const effectiveKeepEntry =
+      requestedKeepEntry &&
+      requestedKeepEntry.status !== "completed" &&
+      requestedKeepEntry.status !== "dropped" &&
+      (requestedKeepEntry.status !== "paused" || requestedKeepEntry.autoPausedAt !== null)
+        ? requestedKeepEntry
+        : findNextMainlineAnimeEntryToActivate(
+            relatedEntries,
+            sortProjectionAnimeCandidates,
+            isProjectionMainlineAnime
+          );
+
     let pausedCount = 0;
     const now = Date.now();
 
     for (const userShow of relatedUserShows) {
       if (userShow.showId === sourceShow._id) continue;
-      if (keepShowId && userShow.showId === keepShowId) continue;
+      if (effectiveKeepEntry && userShow._id === effectiveKeepEntry.userShowId) continue;
       if (
         userShow.status === "paused" ||
         userShow.status === "completed" ||
@@ -4103,10 +4700,32 @@ export const pauseOtherRelatedAnimeEntries = mutation({
         statusChangedAt: now,
         completedAt: undefined,
         droppedAt: undefined,
-        autoPausedAt: undefined,
+        autoPausedAt: now,
       });
       await upsertFeedProjectionForUserShow(ctx, userShow._id);
       pausedCount += 1;
+    }
+
+    if (effectiveKeepEntry) {
+      const keepUserShow = relatedUserShows.find(
+        (userShow) => userShow._id === effectiveKeepEntry.userShowId
+      );
+      if (
+        keepUserShow &&
+        keepUserShow.status === "paused" &&
+        keepUserShow.autoPausedAt
+      ) {
+        const nextStatus: UserShowStatus =
+          (keepUserShow.watchedEpisodesCount ?? 0) > 0 ? "watching" : "plan_to_watch";
+        await ctx.db.patch(keepUserShow._id, {
+          status: nextStatus,
+          statusChangedAt: now,
+          droppedAt: undefined,
+          completedAt: undefined,
+          autoPausedAt: undefined,
+        });
+        await upsertFeedProjectionForUserShow(ctx, keepUserShow._id);
+      }
     }
 
     return {
@@ -4274,14 +4893,10 @@ export const getWatchlist = query({
             )
             .take(5000);
 
-          const uniqueEpisodeKeys = new Set<string>();
-          for (const watchedEpisode of watchedEpisodes) {
-            uniqueEpisodeKeys.add(
-              `${watchedEpisode.season}:${watchedEpisode.episode}`
-            );
-          }
-
-          watchedCount = uniqueEpisodeKeys.size;
+          watchedCount = computeWatchedEpisodeAggregates(
+            watchedEpisodes,
+            show
+          ).watchedEpisodesCount;
         }
 
         if (typeof totalEpisodes === "number") {
@@ -4344,13 +4959,6 @@ export const getWatchlist = query({
     const groupedAnime = new Map<string, (typeof hydrated)[number][]>();
     const selectedEntries: (typeof hydrated)[number][] = [];
 
-    const isCompletedEntry = (entry: {
-      status: "watching" | "paused" | "dropped" | "completed" | "plan_to_watch";
-      remainingEpisodes: number | null;
-    }) =>
-      entry.status === "completed" ||
-      (typeof entry.remainingEpisodes === "number" && entry.remainingEpisodes <= 0);
-
     for (const item of hydrated) {
       if (item.mediaType !== "anime") {
         selectedEntries.push(item);
@@ -4372,38 +4980,20 @@ export const getWatchlist = query({
     }
 
     for (const entries of groupedAnime.values()) {
-      const nonCompleted = entries.filter((entry) => !isCompletedEntry(entry));
-      const watchingEntries = nonCompleted.filter((entry) => entry.status === "watching");
-      const pausedEntries = nonCompleted.filter((entry) => entry.status === "paused");
-      const plannedEntries = nonCompleted.filter((entry) => entry.status === "plan_to_watch");
-      const droppedEntries = nonCompleted.filter((entry) => entry.status === "dropped");
+      const selected = selectAnimeFranchiseRepresentative(entries, {
+        isMainlineEntry: isMainlineAnime,
+        preferMainlineOnly: true,
+        sortEntries: sortAnimeCandidates,
+      });
 
-      const displayable =
-        watchingEntries.length > 0
-          ? watchingEntries
-          : pausedEntries.length > 0
-            ? pausedEntries
-            : plannedEntries.length > 0
-              ? plannedEntries
-              : droppedEntries.length > 0
-                ? droppedEntries
-                : nonCompleted.length > 0
-                  ? nonCompleted
-                  : entries;
-
-      if (displayable.length === 0) {
+      if (!selected) {
         continue;
       }
 
-      const mainlineDisplayable = displayable.filter((entry) => isMainlineAnime(entry));
-      const pool = mainlineDisplayable.length > 0 ? mainlineDisplayable : displayable;
-      const sortedPool = [...pool].sort(sortAnimeCandidates);
-
-      if (sortedPool.length === 0) {
-        continue;
-      }
-
-      selectedEntries.push(sortedPool[0]);
+      selectedEntries.push({
+        ...selected.entry,
+        lastWatchedAt: selected.lastActivityAt,
+      });
     }
 
     return selectedEntries
@@ -4774,6 +5364,11 @@ export const backfillUserShowTrackingAggregatesBatch = internalMutation({
         continue;
       }
 
+      const show = await ctx.db.get(userShow.showId);
+      if (!show) {
+        continue;
+      }
+
       const watchedEpisodes = await ctx.db
         .query("watchedEpisodes")
         .withIndex("by_user_show", (q) =>
@@ -4781,14 +5376,42 @@ export const backfillUserShowTrackingAggregatesBatch = internalMutation({
         )
         .collect();
 
-      const aggregates = computeWatchedEpisodeAggregates(watchedEpisodes);
-
-      await ctx.db.patch(userShowId, {
+      const aggregates = computeWatchedEpisodeAggregates(watchedEpisodes, show);
+      const patch: Partial<Doc<"userShows">> = {
         watchedEpisodesCount: aggregates.watchedEpisodesCount,
         watchedTotalCount: aggregates.watchedTotalCount,
         watchedRuntimeMinutes: aggregates.watchedRuntimeMinutes,
         lastWatchedAt: aggregates.lastWatchedAt ?? userShow.lastWatchedAt,
-      });
+      };
+
+      if (
+        userShow.status === "watching" ||
+        userShow.status === "plan_to_watch" ||
+        userShow.status === "completed"
+      ) {
+        const nextStatus = getDerivedUserShowStatusFromProgress(
+          userShow.status,
+          {
+            mediaType: show.mediaType,
+            status: show.status,
+            totalEpisodes: show.totalEpisodes,
+            totalSeasons: show.totalSeasons,
+          },
+          aggregates.watchedEpisodesCount
+        );
+
+        if (nextStatus !== userShow.status) {
+          patch.status = nextStatus;
+          patch.statusChangedAt = Date.now();
+          patch.completedAt = nextStatus === "completed" ? Date.now() : undefined;
+          if (userShow.status === "completed" && nextStatus !== "completed") {
+            patch.completedAt = undefined;
+          }
+        }
+      }
+
+      await ctx.db.patch(userShowId, patch);
+      await upsertFeedProjectionForUserShow(ctx, userShowId);
 
       patched += 1;
     }
@@ -5024,6 +5647,7 @@ export const batchMarkWatched = mutation({
     let addedCount = 0;
     const totalEpisodes = args.show.totalEpisodes;
     let episodesInserted = 0;
+    const addedRangeEpisodesForAggregate: TrackedWatchedEpisodeLike[] = [];
 
     for (let season = 1; season <= args.upToSeason; season++) {
       const isLastSeason = season === args.upToSeason;
@@ -5050,6 +5674,14 @@ export const batchMarkWatched = mutation({
           watchCount: 1,
           watchHistory: [now],
         });
+        addedRangeEpisodesForAggregate.push({
+          season,
+          episode,
+          watchedAt: now,
+          runtime: args.show.episodeRuntime,
+          watchCount: 1,
+          watchHistory: [now],
+        });
         addedCount++;
         episodesInserted++;
       }
@@ -5060,11 +5692,15 @@ export const batchMarkWatched = mutation({
       }
     }
 
-    const totalWatched = watchedEpisodes.length + addedCount;
-    const nextStatus =
-      args.show.totalEpisodes && totalWatched >= args.show.totalEpisodes
-        ? "completed"
-        : "watching";
+    const totalWatched = computeWatchedEpisodeAggregates(
+      [...watchedEpisodes, ...addedRangeEpisodesForAggregate],
+      args.show
+    ).watchedEpisodesCount;
+    const nextStatus = getDerivedUserShowStatusFromProgress(
+      userShow?.status,
+      args.show,
+      totalWatched
+    );
 
     if (userShow) {
       const statusChanged = userShow.status !== nextStatus;
@@ -5428,6 +6064,9 @@ async function updateStatusBasedOnProgress(
 ) {
   const userShow = await ctx.db.get(userShowId);
   if (!userShow) return;
+
+  const show = await ctx.db.get(showId);
+  if (!show) return;
   
   const watchedEpisodes = await ctx.db
     .query("watchedEpisodes")
@@ -5437,16 +6076,26 @@ async function updateStatusBasedOnProgress(
     .collect();
   
   const now = Date.now();
-  const watchedCount = watchedEpisodes.length;
-  
-  // Rule 1: Auto-complete when all episodes watched
-  if (
-    userShow.status === "watching" &&
-    totalEpisodes &&
-    watchedCount >= totalEpisodes
-  ) {
+  const watchedCount = computeWatchedEpisodeAggregates(watchedEpisodes, {
+    mediaType: show.mediaType,
+    status: show.status,
+    totalEpisodes: totalEpisodes ?? show.totalEpisodes,
+    totalSeasons: show.totalSeasons,
+  }).watchedEpisodesCount;
+  const nextStatus = getDerivedUserShowStatusFromProgress(
+    userShow.status,
+    {
+      mediaType: show.mediaType,
+      status: show.status,
+      totalEpisodes: totalEpisodes ?? show.totalEpisodes,
+      totalSeasons: show.totalSeasons,
+    },
+    watchedCount
+  );
+
+  if (nextStatus === "completed" && userShow.status !== "completed") {
     await ctx.db.patch(userShowId, {
-      status: "completed",
+      status: nextStatus,
       statusChangedAt: now,
       completedAt: now,
     });
@@ -5454,29 +6103,11 @@ async function updateStatusBasedOnProgress(
     return;
   }
 
-  // Rule 2: Resume from paused when episode is watched
-  if (
-    (userShow.status === "paused" || userShow.status === "plan_to_watch") &&
-    watchedCount > 0
-  ) {
+  if (nextStatus !== userShow.status && nextStatus !== "completed") {
     await ctx.db.patch(userShowId, {
-      status: "watching",
+      status: nextStatus,
       statusChangedAt: now,
-    });
-    await upsertFeedProjectionForUserShow(ctx, userShowId);
-    return;
-  }
-
-  // Rule 3: Un-complete when episodes are removed
-  if (
-    userShow.status === "completed" &&
-    totalEpisodes &&
-    watchedCount < totalEpisodes
-  ) {
-    await ctx.db.patch(userShowId, {
-      status: "watching",
-      statusChangedAt: now,
-      completedAt: undefined,
+      completedAt: userShow.status === "completed" ? undefined : userShow.completedAt,
     });
     await upsertFeedProjectionForUserShow(ctx, userShowId);
     return;

@@ -69,11 +69,29 @@ type NextSeasonPrompt = {
   nextRouteId: string;
 };
 
+type PreviousEpisodesPrompt = {
+  episode: NormalizedEpisode;
+  missingEpisodes: NormalizedEpisode[];
+  completedSeasonName: string;
+  shouldPromptNextSeason: boolean;
+};
+
 type AnimeHomeRelationMode = "core_only" | "all_relations";
 type AnimeCompletionBehavior =
   | "ask_every_time"
   | "auto_open_next"
   | "auto_pause_others_keep_next";
+
+const TERMINAL_SHOW_LIFECYCLE_STATUSES = new Set([
+  "ended",
+  "finished",
+  "finished airing",
+  "completed",
+  "complete",
+  "released",
+  "canceled",
+  "cancelled",
+]);
 
 function isValidAnimeHomeRelationMode(value: unknown): value is AnimeHomeRelationMode {
   return value === "core_only" || value === "all_relations";
@@ -85,6 +103,30 @@ function isValidAnimeCompletionBehavior(value: unknown): value is AnimeCompletio
     value === "auto_open_next" ||
     value === "auto_pause_others_keep_next"
   );
+}
+
+function shouldAutoCompleteShow(
+  show: Pick<NormalizedShow, "mediaType" | "status" | "totalEpisodes">,
+  watchedEpisodes: number
+) {
+  if (show.mediaType === "movie") {
+    return watchedEpisodes > 0;
+  }
+
+  if (
+    typeof show.totalEpisodes !== "number" ||
+    !Number.isFinite(show.totalEpisodes) ||
+    show.totalEpisodes <= 0
+  ) {
+    return false;
+  }
+
+  if (watchedEpisodes < show.totalEpisodes) {
+    return false;
+  }
+
+  const normalizedStatus = show.status?.trim().toLowerCase();
+  return normalizedStatus ? TERMINAL_SHOW_LIFECYCLE_STATUSES.has(normalizedStatus) : false;
 }
 
 const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
@@ -716,6 +758,10 @@ export function ShowDetailScreen() {
   const [watchActionTarget, setWatchActionTarget] = useState<WatchActionTarget | null>(null);
   const [isWatchActionRunning, setIsWatchActionRunning] = useState(false);
   const [nextSeasonPrompt, setNextSeasonPrompt] = useState<NextSeasonPrompt | null>(null);
+  const [previousEpisodesPrompt, setPreviousEpisodesPrompt] =
+    useState<PreviousEpisodesPrompt | null>(null);
+  const [isPreviousEpisodesPromptRunning, setIsPreviousEpisodesPromptRunning] =
+    useState(false);
   const [isNavigatingToNextSeason, setIsNavigatingToNextSeason] = useState(false);
   const [isPausingRelatedEntries, setIsPausingRelatedEntries] = useState(false);
   const [isUpdatingAnimeSettings, setIsUpdatingAnimeSettings] = useState(false);
@@ -740,6 +786,7 @@ export function ShowDetailScreen() {
     api.shows.getWatchedEpisodesForSeasonAction
   );
   const toggleEpisodeWatched = useMutation(api.shows.toggleEpisodeWatched);
+  const batchMarkEpisodesWatched = useMutation(api.shows.batchMarkEpisodesWatched);
   const batchRewatchEpisodes = useMutation(api.shows.batchRewatchEpisodes);
   const markSeasonWatched = useMutation(api.shows.markSeasonWatched);
   const unmarkSeasonWatched = useMutation(api.shows.unmarkSeasonWatched);
@@ -957,6 +1004,7 @@ export function ShowDetailScreen() {
     }
     return map;
   }, [watchedSeasonProgress]);
+  const hasLoadedWatchedSeasonProgress = watchedSeasonProgress !== undefined;
 
   const getSeasonWatchedCount = useCallback(
     (seasonNumber: number) => {
@@ -977,12 +1025,17 @@ export function ShowDetailScreen() {
   const totalWatchedEpisodesCount = useMemo(() => {
     const watchedFromTracking =
       typeof tracking?.watchedEpisodes === "number" ? tracking.watchedEpisodes : 0;
+    const loadedSeasonNumbers = Object.keys(seasonWatchedKeys).map((value) => Number(value));
+    const hasLoadedAllKnownSeasons =
+      seasons.length > 0 && loadedSeasonNumbers.length >= seasons.length;
 
-    if (watchedSeasonCountMap.size === 0) {
-      return Math.max(watchedFromTracking, watchedEpisodeKeys.size);
+    if (hasLoadedAllKnownSeasons) {
+      return watchedEpisodeKeys.size;
     }
 
-    const loadedSeasonNumbers = Object.keys(seasonWatchedKeys).map((value) => Number(value));
+    if (!hasLoadedWatchedSeasonProgress) {
+      return Math.max(watchedFromTracking, watchedEpisodeKeys.size);
+    }
 
     let totalFromProgress = 0;
     for (const count of watchedSeasonCountMap.values()) {
@@ -995,8 +1048,15 @@ export function ShowDetailScreen() {
       totalFromProgress += loadedSeasonCount - baselineSeasonCount;
     }
 
-    return Math.max(totalFromProgress, watchedFromTracking, 0);
-  }, [seasonWatchedKeys, watchedEpisodeKeys, watchedSeasonCountMap, tracking?.watchedEpisodes]);
+    return Math.max(totalFromProgress, 0);
+  }, [
+    hasLoadedWatchedSeasonProgress,
+    seasons.length,
+    seasonWatchedKeys,
+    watchedEpisodeKeys,
+    watchedSeasonCountMap,
+    tracking?.watchedEpisodes,
+  ]);
 
   // Clear optimistic overrides once all pending operations complete
   useEffect(() => {
@@ -1492,6 +1552,8 @@ export function ShowDetailScreen() {
       setWatchActionTarget(null);
       setIsWatchActionRunning(false);
       setNextSeasonPrompt(null);
+      setPreviousEpisodesPrompt(null);
+      setIsPreviousEpisodesPromptRunning(false);
       setIsNavigatingToNextSeason(false);
 
       try {
@@ -1795,7 +1857,7 @@ export function ShowDetailScreen() {
           if (
             activeTrackingStatus === "completed" &&
             show?.totalEpisodes &&
-            watchedEpisodeKeys.size - 1 < show.totalEpisodes
+            totalWatchedEpisodesCount - 1 < show.totalEpisodes
           ) {
             setOptimisticTrackingStatus("watching");
           }
@@ -1830,6 +1892,171 @@ export function ShowDetailScreen() {
     }
   };
 
+  const markEpisodesWatchedBatch = async (
+    episodes: NormalizedEpisode[],
+    options?: {
+      completedSeasonNumber?: number;
+      completedSeasonName?: string;
+      shouldPromptNextSeason?: boolean;
+    }
+  ) => {
+    if (!show || !canTrackShow) {
+      setTrackingError("This title cannot be tracked yet.");
+      return false;
+    }
+
+    const uniqueEpisodes = Array.from(
+      new Map(
+        episodes.map((entry) => [`${entry.seasonNumber}:${entry.episodeNumber}`, entry])
+      ).values()
+    );
+    if (!uniqueEpisodes.length) {
+      return true;
+    }
+
+    const episodeKeys = uniqueEpisodes.map(
+      (entry) => `${entry.seasonNumber}:${entry.episodeNumber}`
+    );
+    const seasonNumbers = Array.from(
+      new Set(uniqueEpisodes.map((entry) => entry.seasonNumber))
+    );
+    setTrackingError(null);
+    setPendingOverrides((prev) => {
+      const next = { ...prev };
+      for (const key of episodeKeys) {
+        next[key] = true;
+      }
+      return next;
+    });
+    setPendingEpisodeKeys((prev) => {
+      const next = { ...prev };
+      for (const key of episodeKeys) {
+        next[key] = true;
+      }
+      return next;
+    });
+    setSeasonActionLoading((prev) => {
+      const next = { ...prev };
+      for (const seasonNumber of seasonNumbers) {
+        next[seasonNumber] = true;
+      }
+      return next;
+    });
+
+    try {
+      const result = await batchMarkEpisodesWatched({
+        show: buildShowPayload(show),
+        episodes: uniqueEpisodes.map((entry) => ({
+          season: entry.seasonNumber,
+          episode: entry.episodeNumber,
+          runtime: entry.runtime,
+        })),
+      });
+
+      setEpisodeWatchCounts((prev) => {
+        const next = { ...prev };
+        for (const key of episodeKeys) {
+          next[key] = next[key] ?? 1;
+        }
+        return next;
+      });
+      setSeasonWatchedKeys((prev) => {
+        const next = { ...prev };
+        for (const entry of uniqueEpisodes) {
+          const seasonKeys = next[entry.seasonNumber] ?? new Set<string>();
+          const updatedSeasonKeys = new Set(seasonKeys);
+          updatedSeasonKeys.add(`${entry.seasonNumber}:${entry.episodeNumber}`);
+          next[entry.seasonNumber] = updatedSeasonKeys;
+        }
+        return next;
+      });
+
+      if (isTrackingStatus(result.status)) {
+        setOptimisticTrackingStatus(result.status);
+      }
+
+      if (
+        options?.shouldPromptNextSeason &&
+        typeof options.completedSeasonNumber === "number"
+      ) {
+        void maybePromptMoveToNextSeason(
+          options.completedSeasonNumber,
+          options.completedSeasonName
+        );
+      }
+
+      return true;
+    } catch (mutationError) {
+      console.error("Failed to mark episodes watched", mutationError);
+      setPendingOverrides((prev) => {
+        const next = { ...prev };
+        for (const key of episodeKeys) {
+          delete next[key];
+        }
+        return next;
+      });
+      setTrackingError("Could not update episode status.");
+      return false;
+    } finally {
+      setPendingEpisodeKeys((prev) => {
+        const next = { ...prev };
+        for (const key of episodeKeys) {
+          next[key] = false;
+        }
+        return next;
+      });
+      setSeasonActionLoading((prev) => {
+        const next = { ...prev };
+        for (const seasonNumber of seasonNumbers) {
+          next[seasonNumber] = false;
+        }
+        return next;
+      });
+    }
+  };
+
+  const getPreviousUnwatchedEpisodes = useCallback(
+    async (targetEpisode: NormalizedEpisode) => {
+      const priorEpisodes: NormalizedEpisode[] = [];
+      const relevantSeasons = seasons
+        .filter((season) => season.seasonNumber <= targetEpisode.seasonNumber)
+        .sort((a, b) => a.seasonNumber - b.seasonNumber);
+
+      for (const season of relevantSeasons) {
+        const seasonEpisodes =
+          season.seasonNumber === targetEpisode.seasonNumber && season.episodes?.length
+            ? season.episodes
+            : await resolveSeasonEpisodes(season);
+        if (!seasonEpisodes?.length) {
+          continue;
+        }
+
+        for (const episode of seasonEpisodes) {
+          if (!isEpisodeReleased(episode.airDate)) {
+            continue;
+          }
+
+          const isEarlierSeason = season.seasonNumber < targetEpisode.seasonNumber;
+          const isEarlierEpisode =
+            season.seasonNumber === targetEpisode.seasonNumber &&
+            episode.episodeNumber < targetEpisode.episodeNumber;
+
+          if (!isEarlierSeason && !isEarlierEpisode) {
+            continue;
+          }
+
+          const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
+          if (!watchedEpisodeKeys.has(key)) {
+            priorEpisodes.push(episode);
+          }
+        }
+      }
+
+      return priorEpisodes;
+    },
+    [resolveSeasonEpisodes, seasons, watchedEpisodeKeys]
+  );
+
   const handleToggleEpisodeWatched = async (episode: NormalizedEpisode) => {
     const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
     const wasWatched = watchedEpisodeKeys.has(key);
@@ -1849,22 +2076,84 @@ export function ShowDetailScreen() {
       return;
     }
 
-    try {
-      await runEpisodeToggle(episode, "toggle");
+    const missingPreviousEpisodes = await getPreviousUnwatchedEpisodes(episode);
+    if (missingPreviousEpisodes.length > 0) {
+      const seasonJustCompletedWithBackfill =
+        releasedEpisodes.length > 0 &&
+        releasedEpisodes.every((entry) => {
+          const episodeKey = `${entry.seasonNumber}:${entry.episodeNumber}`;
+          return (
+            watchedEpisodeKeys.has(episodeKey) ||
+            episodeKey === key ||
+            missingPreviousEpisodes.some(
+              (candidate) =>
+                candidate.seasonNumber === entry.seasonNumber &&
+                candidate.episodeNumber === entry.episodeNumber
+            )
+          );
+        });
 
+      setPreviousEpisodesPrompt({
+        episode,
+        missingEpisodes: missingPreviousEpisodes,
+        completedSeasonName: seasonEntry?.name ?? `Season ${episode.seasonNumber}`,
+        shouldPromptNextSeason: seasonJustCompletedWithBackfill,
+      });
+      return;
+    }
+
+    try {
       const seasonJustCompleted =
         releasedEpisodes.length > 0 &&
         watchedBefore < releasedEpisodes.length &&
         watchedBefore + 1 >= releasedEpisodes.length;
+      await markEpisodesWatchedBatch([episode], {
+        completedSeasonNumber: episode.seasonNumber,
+        completedSeasonName: seasonEntry?.name ?? `Season ${episode.seasonNumber}`,
+        shouldPromptNextSeason: seasonJustCompleted,
+      });
 
-      if (seasonJustCompleted) {
-        void maybePromptMoveToNextSeason(
-          episode.seasonNumber,
-          seasonEntry?.name ?? `Season ${episode.seasonNumber}`
-        );
-      }
     } catch {
-      // Error already handled in runEpisodeToggle.
+      // Error already handled in markEpisodesWatchedBatch.
+    }
+  };
+
+  const handlePreviousEpisodesPromptChoice = async (choice: "current" | "all") => {
+    if (!previousEpisodesPrompt || isPreviousEpisodesPromptRunning) {
+      return;
+    }
+
+    setIsPreviousEpisodesPromptRunning(true);
+    const releasedEpisodesForSeason = getReleasedEpisodesForSeason(
+      previousEpisodesPrompt.episode.seasonNumber
+    );
+    const watchedReleasedEpisodesCount = releasedEpisodesForSeason.filter((entry) =>
+      watchedEpisodeKeys.has(`${entry.seasonNumber}:${entry.episodeNumber}`)
+    ).length;
+    const currentChoiceCompletesSeason =
+      releasedEpisodesForSeason.length > 0 &&
+      watchedReleasedEpisodesCount < releasedEpisodesForSeason.length &&
+      watchedReleasedEpisodesCount + 1 >= releasedEpisodesForSeason.length;
+    const episodesToMark =
+      choice === "all"
+        ? [...previousEpisodesPrompt.missingEpisodes, previousEpisodesPrompt.episode]
+        : [previousEpisodesPrompt.episode];
+
+    try {
+      const didSucceed = await markEpisodesWatchedBatch(episodesToMark, {
+        completedSeasonNumber: previousEpisodesPrompt.episode.seasonNumber,
+        completedSeasonName: previousEpisodesPrompt.completedSeasonName,
+        shouldPromptNextSeason:
+          choice === "all"
+            ? previousEpisodesPrompt.shouldPromptNextSeason
+            : currentChoiceCompletesSeason,
+      });
+
+      if (didSucceed) {
+        setPreviousEpisodesPrompt(null);
+      }
+    } finally {
+      setIsPreviousEpisodesPromptRunning(false);
     }
   };
 
@@ -2009,6 +2298,7 @@ export function ShowDetailScreen() {
       // Use total episodes from show data when available, otherwise fall back to released episodes count
       const totalEpisodes = show?.totalEpisodes ?? allEpisodeKeys.length;
       const isFullyWatched = watchedCountInPayloads >= totalEpisodes;
+      const currentlyWatchedEpisodeKeys = new Set(watchedEpisodeKeys);
 
       setSeasonActionLoading((prev) => {
         const next = { ...prev };
@@ -2094,12 +2384,24 @@ export function ShowDetailScreen() {
         });
         
         // Update tracking status optimistically
-        if (show?.totalEpisodes) {
-          if (!isFullyWatched) {
-            setOptimisticTrackingStatus("completed");
-          } else {
-            setOptimisticTrackingStatus("watching");
-          }
+        if (show) {
+          const changedEpisodeCount = seasonPayloads.reduce(
+            (sum, payload) =>
+              sum +
+              payload.episodes.reduce((payloadSum, episode) => {
+                const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
+                const isCurrentlyWatched = currentlyWatchedEpisodeKeys.has(key);
+                const willBeWatched = !isFullyWatched;
+                return payloadSum + Number(isCurrentlyWatched !== willBeWatched);
+              }, 0),
+            0
+          );
+          const nextWatchedCount = isFullyWatched
+            ? Math.max(totalWatchedEpisodesCount - changedEpisodeCount, 0)
+            : totalWatchedEpisodesCount + changedEpisodeCount;
+          setOptimisticTrackingStatus(
+            shouldAutoCompleteShow(show, nextWatchedCount) ? "completed" : "watching"
+          );
         }
         
         if (!isFullyWatched && show.mediaType === "anime") {
@@ -3109,9 +3411,16 @@ export function ShowDetailScreen() {
                 >
                   Related Anime
                 </Text>
-                <Text className="text-xs text-text-secondary">
-                  {relatedAnime.length} linked
-                </Text>
+                <View className="items-end">
+                  <Text className="text-xs text-text-secondary">
+                    {relatedAnime.length} linked
+                  </Text>
+                  {Platform.OS === "web" ? (
+                    <Text className="mt-1 text-[10px] uppercase tracking-[1px] text-text-tertiary">
+                      Drag or shift-scroll
+                    </Text>
+                  ) : null}
+                </View>
               </View>
 
               {isLoadingRelatedAnime && relatedAnime.length === 0 ? (
@@ -3124,8 +3433,9 @@ export function ShowDetailScreen() {
               ) : (
                 <ScrollView
                   horizontal
-                  showsHorizontalScrollIndicator={false}
+                  showsHorizontalScrollIndicator
                   contentContainerStyle={{ gap: 12, paddingRight: 4 }}
+                  className="pb-2"
                 >
                   {relatedAnime.map((entry) => {
                     const routeId = getRelatedAnimeRouteId(entry);
@@ -3412,6 +3722,91 @@ export function ShowDetailScreen() {
                 className="items-center justify-center rounded-xl border border-border-default bg-bg-base py-3.5 active:bg-bg-elevated"
               >
                 <Text className="font-semibold text-text-secondary">Stay Here</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={!!previousEpisodesPrompt}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isPreviousEpisodesPromptRunning) {
+            setPreviousEpisodesPrompt(null);
+          }
+        }}
+      >
+        <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
+          <Pressable
+            className="absolute inset-0"
+            focusable={false}
+            style={{ outlineWidth: 0, outlineStyle: "solid", outlineColor: "transparent" }}
+            onPress={() => {
+              if (!isPreviousEpisodesPromptRunning) {
+                setPreviousEpisodesPrompt(null);
+              }
+            }}
+          />
+
+          <View className="w-full max-w-sm overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
+            <View className="border-b border-border-default px-4 pb-3 pt-4">
+              <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                Catch Up
+              </Text>
+              <Text className="mt-1 text-lg font-black text-text-primary" numberOfLines={2}>
+                {previousEpisodesPrompt?.episode.name ??
+                  `Episode ${previousEpisodesPrompt?.episode.episodeNumber ?? ""}`}
+              </Text>
+              <Text className="mt-1 text-sm text-text-secondary" numberOfLines={2}>
+                {previousEpisodesPrompt
+                  ? `S${String(previousEpisodesPrompt.episode.seasonNumber).padStart(2, "0")}E${String(previousEpisodesPrompt.episode.episodeNumber).padStart(2, "0")}`
+                  : ""}
+              </Text>
+              <Text className="mt-2 text-sm leading-relaxed text-text-secondary">
+                {previousEpisodesPrompt
+                  ? `You still have ${previousEpisodesPrompt.missingEpisodes.length} earlier released episode${previousEpisodesPrompt.missingEpisodes.length === 1 ? "" : "s"} not marked as watched.`
+                  : ""}
+              </Text>
+            </View>
+
+            <View className="gap-2 p-4">
+              <Pressable
+                disabled={isPreviousEpisodesPromptRunning}
+                onPress={() => {
+                  void handlePreviousEpisodesPromptChoice("all");
+                }}
+                className="items-center justify-center rounded-xl border border-primary/40 bg-primary/15 py-3.5 active:bg-primary/20"
+              >
+                {isPreviousEpisodesPromptRunning ? (
+                  <View className="flex-row items-center gap-2">
+                    <ActivityIndicator size="small" color="#ef4444" />
+                    <Text className="font-semibold text-text-primary">Processing...</Text>
+                  </View>
+                ) : (
+                  <Text className="font-semibold text-text-primary">
+                    Mark Previous Episodes Too
+                  </Text>
+                )}
+              </Pressable>
+
+              <Pressable
+                disabled={isPreviousEpisodesPromptRunning}
+                onPress={() => {
+                  void handlePreviousEpisodesPromptChoice("current");
+                }}
+                className="items-center justify-center rounded-xl border border-border-default bg-bg-base py-3.5 active:bg-bg-elevated"
+              >
+                <Text className="font-semibold text-text-secondary">Only This Episode</Text>
+              </Pressable>
+
+              <Pressable
+                disabled={isPreviousEpisodesPromptRunning}
+                onPress={() => setPreviousEpisodesPrompt(null)}
+                className="items-center justify-center rounded-xl py-2"
+              >
+                <Text className="text-sm text-text-muted">Cancel</Text>
               </Pressable>
             </View>
           </View>

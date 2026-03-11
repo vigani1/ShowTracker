@@ -19,8 +19,10 @@ import { FlashList } from "@shopify/flash-list";
 import { api } from "@/convex/_generated/api";
 import { FilterChipGroup } from "@/components/FilterChipGroup";
 import { PageIntro } from "@/components/PageIntro";
+import { SearchInput } from "@/components/SearchInput";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SegmentedControl } from "@/components/SegmentedControl";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import {
   applyTrackingFilters,
   matchesStatusFilter,
@@ -224,6 +226,7 @@ export default function LibraryScreen() {
   const params = useLocalSearchParams<{ media?: string | string[] }>();
   const [activeTab, setActiveTab] = useState<LibraryMediaTab>("all");
   const [statusFilter, setStatusFilter] = useState<LibraryStatusFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [selectedYear, setSelectedYear] = useState<string>("");
   const [selectedRating, setSelectedRating] = useState<string>("");
@@ -233,6 +236,7 @@ export default function LibraryScreen() {
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
   const [gridWidth, setGridWidth] = useState(0);
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 150);
   const libraryQueryArgs = useMemo(
     () =>
       activeTab === "all"
@@ -290,6 +294,15 @@ export default function LibraryScreen() {
       status: statusFilter,
     });
 
+    const normalizedSearch = debouncedSearchQuery.trim().toLowerCase();
+    if (normalizedSearch) {
+      items = items.filter((item) => {
+        const titleMatch = item.title.toLowerCase().includes(normalizedSearch);
+        const yearMatch = item.firstAired?.slice(0, 4)?.includes(normalizedSearch);
+        return Boolean(titleMatch || yearMatch);
+      });
+    }
+
     if (selectedGenres.length > 0) {
       items = items.filter((item) =>
         selectedGenres.some((genre) => item.genres?.includes(genre))
@@ -306,7 +319,14 @@ export default function LibraryScreen() {
     }
 
     return items;
-  }, [mediaItems, selectedGenres, selectedRating, selectedYear, statusFilter]);
+  }, [
+    debouncedSearchQuery,
+    mediaItems,
+    selectedGenres,
+    selectedRating,
+    selectedYear,
+    statusFilter,
+  ]);
 
   const toggleGenre = (genre: string) => {
     setSelectedGenres((prev) =>
@@ -315,6 +335,7 @@ export default function LibraryScreen() {
   };
 
   const clearFilters = () => {
+    setSearchQuery("");
     setSelectedGenres([]);
     setSelectedYear("");
     setSelectedRating("");
@@ -322,7 +343,10 @@ export default function LibraryScreen() {
   };
 
   const hasActiveFilters =
-    selectedGenres.length > 0 || selectedYear !== "" || selectedRating !== "";
+    searchQuery.trim().length > 0 ||
+    selectedGenres.length > 0 ||
+    selectedYear !== "" ||
+    selectedRating !== "";
 
   const statusOptionsWithCounts = useMemo(() => {
     // Use backend counts when available to avoid iterating all items client-side.
@@ -396,6 +420,7 @@ export default function LibraryScreen() {
     activeItems.length,
     activeTab,
     pageSize,
+    debouncedSearchQuery,
     selectedGenres,
     selectedRating,
     selectedYear,
@@ -521,6 +546,13 @@ export default function LibraryScreen() {
                   options={tabOptions}
                   value={activeTab}
                   onValueChange={setActiveTab}
+                  className="mb-3"
+                />
+
+                <SearchInput
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Search your library by title or year..."
                   className="mb-3"
                 />
 
@@ -728,7 +760,7 @@ export default function LibraryScreen() {
                       No titles for these filters
                     </Text>
                     <Text className="mt-1 text-sm leading-relaxed text-text-secondary">
-                      Try adjusting your status or genre filters.
+                      Try adjusting your search, status, or filter selections.
                     </Text>
                   </View>
                 ) : null}

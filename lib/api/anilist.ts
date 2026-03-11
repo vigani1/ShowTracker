@@ -20,12 +20,15 @@ function isBrowserDomAvailable() {
   );
 }
 
-function getAniListRequestUrl() {
+function getAniListRequestUrls() {
+  const urls: string[] = [];
+
   if (isBrowserDomAvailable() && convexSiteUrl) {
-    return `${convexSiteUrl}/anilist`;
+    urls.push(`${convexSiteUrl}/anilist`);
   }
 
-  return anilistUrl;
+  urls.push(anilistUrl);
+  return Array.from(new Set(urls));
 }
 
 const anilistMediaSelection = `
@@ -219,8 +222,6 @@ async function request<T>(
   variables: Record<string, unknown>,
   options?: { signal?: AbortSignal }
 ) {
-  const shouldUseProxy = isBrowserDomAvailable() && !!convexSiteUrl;
-  const maxAttempts = shouldUseProxy ? 1 : 4;
   const baseDelayMs = 750;
 
   const parseResponseBody = async (response: Response) => {
@@ -236,40 +237,72 @@ async function request<T>(
     body: unknown;
   };
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    if (options?.signal?.aborted) {
-      throw createAbortError();
-    }
+  const requestUrls = getAniListRequestUrls();
 
-    const response = await fetch(getAniListRequestUrl(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ query, variables }),
-      signal: options?.signal,
-    });
-    if (response.ok) {
-      return (await response.json()) as T;
+  for (let urlIndex = 0; urlIndex < requestUrls.length; urlIndex += 1) {
+    const requestUrl = requestUrls[urlIndex];
+    const isLastUrl = urlIndex === requestUrls.length - 1;
+    const maxAttempts = requestUrl === anilistUrl ? 4 : 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (options?.signal?.aborted) {
+        throw createAbortError();
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ query, variables }),
+          signal: options?.signal,
+        });
+      } catch (error) {
+        if (!isLastUrl) {
+          break;
+        }
+        throw error;
+      }
+
+      if (response.ok) {
+        return (await response.json()) as T;
+      }
+
+      if (response.status !== 429) {
+        if (
+          !isLastUrl &&
+          (response.status === 403 ||
+            (response.status >= 500 && response.status < 600))
+        ) {
+          break;
+        }
+
+        const body = await parseResponseBody(response);
+        const error: AniListError = { status: response.status, body };
+        throw error;
+      }
+
+      if (attempt === maxAttempts) {
+        if (!isLastUrl) {
+          break;
+        }
+
+        const body = await parseResponseBody(response);
+        const error: AniListError = { status: response.status, body };
+        throw error;
+      }
+
+      const retryAfter = response.headers.get("Retry-After");
+      const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
+      const delayMs = Number.isFinite(retryAfterMs)
+        ? retryAfterMs
+        : baseDelayMs * 2 ** (attempt - 1);
+      const jitter = Math.random() * 250;
+      await waitWithAbort(delayMs + jitter, options?.signal);
     }
-    if (response.status !== 429) {
-      const body = await parseResponseBody(response);
-      const error: AniListError = { status: response.status, body };
-      throw error;
-    }
-    if (attempt === maxAttempts) {
-      const body = await parseResponseBody(response);
-      const error: AniListError = { status: response.status, body };
-      throw error;
-    }
-    const retryAfter = response.headers.get("Retry-After");
-    const retryAfterMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
-    const delayMs = Number.isFinite(retryAfterMs)
-      ? retryAfterMs
-      : baseDelayMs * 2 ** (attempt - 1);
-    const jitter = Math.random() * 250;
-    await waitWithAbort(delayMs + jitter, options?.signal);
   }
 
   throw new Error("AniList request failed: exceeded retry attempts");

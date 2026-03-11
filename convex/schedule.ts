@@ -283,6 +283,34 @@ function getRouteIdForProjection(p: {
   });
 }
 
+function getWatchlistIdForProjection(p: {
+  mediaType: string;
+  tmdbId?: number;
+  anilistId?: number;
+  malId?: number;
+  tvmazeId?: number;
+  imdbId?: string;
+}): string | null {
+  if (p.mediaType === "anime") {
+    if (typeof p.anilistId === "number") {
+      return `anilist:anime:${p.anilistId}`;
+    }
+    if (typeof p.malId === "number") {
+      return `jikan:anime:${p.malId}`;
+    }
+  }
+  if (typeof p.tmdbId === "number") {
+    return `tmdb:${p.mediaType}:${p.tmdbId}`;
+  }
+  if (typeof p.tvmazeId === "number") {
+    return `tvmaze:tv:${p.tvmazeId}`;
+  }
+  if (typeof p.imdbId === "string") {
+    return `imdb:${p.mediaType}:${p.imdbId}`;
+  }
+  return null;
+}
+
 function getUnixRangeForDate(dateString: string) {
   const date = new Date(dateString);
   const start = Math.floor(startOfDay(date).getTime() / 1000);
@@ -750,5 +778,132 @@ export const getUpcomingSchedule = query({
           return a.showTitle.localeCompare(b.showTitle);
         }),
       }));
+  },
+});
+
+export const getFutureUpcomingCountsForWatchlist = query({
+  args: {
+    startDate: v.string(),
+    endDate: v.string(),
+    mediaFilter: v.optional(v.union(v.literal("tv"), v.literal("anime"))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+
+    if (!userId) {
+      return [] as { routeId: string; futureCount: number }[];
+    }
+
+    const typedUserId = userId as Id<"users">;
+    const today = startOfDay(new Date());
+    const mediaFilter = args.mediaFilter;
+
+    const nonMovieProjections = mediaFilter
+      ? await ctx.db
+          .query("feedProjections")
+          .withIndex("by_user_media", (q) =>
+            q.eq("userId", typedUserId).eq("mediaType", mediaFilter)
+          )
+          .collect()
+      : (
+          await Promise.all([
+            ctx.db
+              .query("feedProjections")
+              .withIndex("by_user_media", (q) =>
+                q.eq("userId", typedUserId).eq("mediaType", "tv")
+              )
+              .collect(),
+            ctx.db
+              .query("feedProjections")
+              .withIndex("by_user_media", (q) =>
+                q.eq("userId", typedUserId).eq("mediaType", "anime")
+              )
+              .collect(),
+          ])
+        ).flat();
+
+    if (nonMovieProjections.length === 0) {
+      return [] as { routeId: string; futureCount: number }[];
+    }
+
+    const trackedShows = nonMovieProjections.map((p) => ({
+      normalizedTitle: normalizeTitle(p.title),
+      mediaType: p.mediaType as "tv" | "anime",
+      watchlistId: getWatchlistIdForProjection(p),
+      anilistId: p.anilistId,
+      tvmazeId: p.tvmazeId,
+    }));
+
+    const byExternalKey = new Map<string, (typeof trackedShows)[number]>();
+    const byTitle = new Map<string, (typeof trackedShows)[number]>();
+
+    for (const tracked of trackedShows) {
+      if (typeof tracked.anilistId === "number") {
+        byExternalKey.set(`anilist:${tracked.anilistId}`, tracked);
+      }
+      if (typeof tracked.tvmazeId === "number") {
+        byExternalKey.set(`tvmaze:${tracked.tvmazeId}`, tracked);
+      }
+      byTitle.set(tracked.normalizedTitle, tracked);
+    }
+
+    const rows = mediaFilter
+      ? await ctx.db
+          .query("scheduleCache")
+          .withIndex("by_type_date", (q) =>
+            q
+              .eq("mediaType", mediaFilter)
+              .gte("date", args.startDate)
+              .lte("date", args.endDate)
+          )
+          .collect()
+      : await ctx.db
+          .query("scheduleCache")
+          .withIndex("by_date", (q) =>
+            q.gte("date", args.startDate).lte("date", args.endDate)
+          )
+          .collect();
+
+    const counts = new Map<string, number>();
+    const dedupe = new Set<string>();
+
+    for (const row of rows) {
+      const entries = parseCachedScheduleEntries(row.episodes);
+
+      for (const entry of entries) {
+        const tracked =
+          byExternalKey.get(entry.showId) ??
+          byTitle.get(entry.normalizedTitle);
+
+        if (!tracked || !tracked.watchlistId) continue;
+        if (tracked.mediaType !== "tv" && tracked.mediaType !== "anime") continue;
+        if (args.mediaFilter && tracked.mediaType !== args.mediaFilter) continue;
+
+        const episodeDate = entry.episode.airDate
+          ? new Date(entry.episode.airDate)
+          : new Date(row.date);
+        const validDate = Number.isFinite(episodeDate.getTime())
+          ? episodeDate
+          : new Date(row.date);
+        const dayKey = formatDate(validDate);
+        const daysUntil = Math.floor(
+          (startOfDay(validDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
+        );
+
+        if (daysUntil <= 0) {
+          continue;
+        }
+
+        const uniqueKey = `${tracked.watchlistId}:${dayKey}:${entry.episode.seasonNumber}:${entry.episode.episodeNumber}`;
+        if (dedupe.has(uniqueKey)) continue;
+        dedupe.add(uniqueKey);
+
+        counts.set(tracked.watchlistId, (counts.get(tracked.watchlistId) ?? 0) + 1);
+      }
+    }
+
+    return Array.from(counts.entries())
+      .sort(([routeIdA], [routeIdB]) => routeIdA.localeCompare(routeIdB))
+      .map(([routeId, futureCount]) => ({ routeId, futureCount }));
   },
 });

@@ -83,6 +83,10 @@ function getCorsHeaders(request: Request) {
 
   const headers = new Headers(corsBaseHeaders);
   headers.set("Access-Control-Allow-Origin", origin);
+  const requestedHeaders = request.headers.get("access-control-request-headers");
+  if (requestedHeaders) {
+    headers.set("Access-Control-Allow-Headers", requestedHeaders);
+  }
   return headers;
 }
 
