@@ -433,6 +433,37 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
   );
 }
 
+function WatchlistCardSkeleton({ isWeb }: { isWeb: boolean }) {
+  const posterHeight = isWeb ? 280 : 240;
+
+  return (
+    <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
+      <View className="relative overflow-hidden" style={{ height: posterHeight }}>
+        <LinearGradient
+          colors={["#18181b", "#111113"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ position: "absolute", inset: 0 }}
+        />
+        <View className="absolute right-2 top-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5">
+          <View className="h-3 w-14 rounded-full bg-white/10" />
+        </View>
+        <View className="absolute bottom-0 left-0 right-0 px-2.5 pb-2.5">
+          <View className="h-4 w-3/4 rounded-full bg-white/15" />
+          <View className="mt-2 h-3 w-1/2 rounded-full bg-white/10" />
+          <View className="mt-2 flex-row items-center gap-2">
+            <View className="h-2.5 w-16 rounded-full bg-white/10" />
+            <View className="h-5 w-10 rounded-full bg-red-500/20" />
+          </View>
+          <View className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">
+            <View className="h-full w-2/5 rounded-full bg-red-500/40" />
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function UpcomingEpisodeListItem({
   episode,
   isWeb,
@@ -1573,6 +1604,49 @@ export function HomeScreen() {
   }, [currentMonthDate]);
 
   const isWatchlistLoading = watchlist === undefined;
+  const isWatchlistFutureCountsLoading =
+    activeTab === "watchlist" && watchlist !== undefined && watchlistFutureUpcomingCounts === undefined;
+  const upcomingCount = upcomingGroups.reduce((sum, group) => sum + group.episodes.length, 0);
+  const visibleWatchlistItems = useMemo(
+    () => filteredWatchlist.slice(0, watchlistVisibleCount),
+    [filteredWatchlist, watchlistVisibleCount]
+  );
+  const hasMoreWatchlist = watchlistVisibleCount < filteredWatchlist.length;
+  const visibleWatchlistRows = useMemo(
+    () => chunkItems(visibleWatchlistItems, columns),
+    [columns, visibleWatchlistItems]
+  );
+  const watchlistSkeletonCount = Math.max(columns * 2, 6);
+  const watchlistSkeletonRows = useMemo(
+    () => chunkItems(Array.from({ length: watchlistSkeletonCount }, (_, index) => index), columns),
+    [columns, watchlistSkeletonCount]
+  );
+  const watchlistTailSkeletonItems = useMemo(
+    () => watchlistSkeletonRows[0] ?? Array.from({ length: columns }, (_, index) => index),
+    [columns, watchlistSkeletonRows]
+  );
+  const pendingWatchlistTmdbLookups = useMemo(
+    () =>
+      visibleWatchlistItems.filter(
+        (item) =>
+          item.mediaType === "tv" &&
+          typeof item.tmdbId === "number" &&
+          item.remainingEpisodes !== null &&
+          item.remainingEpisodes > 0 &&
+          tmdbAiredEpisodeCountById[item.tmdbId] === undefined &&
+          (tmdbAiredLookupFailuresById[item.tmdbId] ?? 0) < 3
+      ).length,
+    [
+      tmdbAiredEpisodeCountById,
+      tmdbAiredLookupFailuresById,
+      visibleWatchlistItems,
+    ]
+  );
+  const isWatchlistFilterSettling =
+    activeTab === "watchlist" &&
+    watchlist !== undefined &&
+    (isWatchlistFutureCountsLoading || pendingWatchlistTmdbLookups > 0);
+  const isWatchlistVisualLoading = isWatchlistLoading || isWatchlistFilterSettling;
   const isUpcomingContentLoading =
     activeTab === "upcoming" && (upcoming === undefined || isHydratingInitialUpcoming);
 
@@ -1586,17 +1660,7 @@ export function HomeScreen() {
             : "Weekly mobile calendar with direct day picks and quick navigation.",
         };
 
-  const watchlistCount = filteredWatchlist.length;
-  const upcomingCount = upcomingGroups.reduce((sum, group) => sum + group.episodes.length, 0);
-  const visibleWatchlistItems = useMemo(
-    () => filteredWatchlist.slice(0, watchlistVisibleCount),
-    [filteredWatchlist, watchlistVisibleCount]
-  );
-  const hasMoreWatchlist = watchlistVisibleCount < filteredWatchlist.length;
-  const visibleWatchlistRows = useMemo(
-    () => chunkItems(visibleWatchlistItems, columns),
-    [columns, visibleWatchlistItems]
-  );
+  const watchlistCount = isWatchlistVisualLoading ? watchlistItems.length : filteredWatchlist.length;
 
   useEffect(() => {
     if (activeTab !== "upcoming" || !usesMonthCalendarLayout) {
@@ -1796,13 +1860,7 @@ export function HomeScreen() {
         onValueChange={(value: HomeMediaFilter) => setMediaFilter(value)}
       />
 
-      {isWatchlistLoading ? (
-        <View className="mt-6 items-center py-10">
-          <ActivityIndicator size="small" color="#ef4444" />
-        </View>
-      ) : null}
-
-      {!isWatchlistLoading && filteredWatchlist.length === 0 ? (
+      {!isWatchlistVisualLoading && filteredWatchlist.length === 0 ? (
         <View className="mt-6 items-center rounded-xl border-2 border-border-default bg-bg-surface px-6 py-12">
           <Text className="text-lg font-semibold text-text-primary">
             No active shows
@@ -1816,7 +1874,7 @@ export function HomeScreen() {
   );
 
   const watchlistFooter =
-    !isWatchlistLoading && hasMoreWatchlist ? (
+    !isWatchlistVisualLoading && hasMoreWatchlist ? (
       <View className="items-center py-4">
         <Pressable
           accessibilityRole="button"
@@ -1837,13 +1895,53 @@ export function HomeScreen() {
         </Pressable>
       </View>
     ) : null;
+  const watchlistSettlingFooter =
+    !isWatchlistLoading && isWatchlistFilterSettling ? (
+      <View className="gap-3 pt-3">
+        <View key="watchlist-skeleton-row-0" className="flex-row gap-3">
+          {watchlistTailSkeletonItems.map((item) => (
+            <View key={`watchlist-skeleton-${item}`} style={{ flex: 1 / columns }}>
+              <WatchlistCardSkeleton isWeb={isWeb} />
+            </View>
+          ))}
+        </View>
+      </View>
+    ) : null;
 
   return (
     <ScreenWrapper>
       <View className="flex-1" onLayout={(e) => setGridWidth(e.nativeEvent.layout.width)}>
         {gridWidth > 0 ? (
           activeTab === "watchlist" ? (
-            isWeb ? (
+            isWatchlistLoading ? (
+              <ScrollView
+                className="flex-1"
+                contentContainerStyle={{ paddingBottom: 24 }}
+                showsVerticalScrollIndicator={false}
+              >
+                {watchlistHeader}
+
+                <View className="gap-3">
+                  {watchlistSkeletonRows.map((row, rowIndex) => (
+                    <View key={`watchlist-skeleton-row-${rowIndex}`} className="flex-row gap-3">
+                      {row.map((item) => (
+                        <View key={`watchlist-skeleton-${item}`} style={{ flex: 1 / columns }}>
+                          <WatchlistCardSkeleton isWeb={isWeb} />
+                        </View>
+                      ))}
+                      {row.length < columns
+                        ? Array.from({ length: columns - row.length }, (_, fillerIndex) => (
+                            <View
+                              key={`watchlist-skeleton-row-${rowIndex}-filler-${fillerIndex}`}
+                              style={{ flex: 1 / columns }}
+                            />
+                          ))
+                        : null}
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+            ) : isWeb ? (
               <ScrollView
                 className="flex-1"
                 contentContainerStyle={{ paddingBottom: 24 }}
@@ -1864,14 +1962,35 @@ export function HomeScreen() {
                       ))}
                       {row.length < columns
                         ? Array.from({ length: columns - row.length }, (_, fillerIndex) => (
-                            <View
-                              key={`watchlist-row-${rowIndex}-filler-${fillerIndex}`}
-                              style={{ flex: 1 / columns }}
-                            />
+                            isWatchlistFilterSettling &&
+                            rowIndex === visibleWatchlistRows.length - 1 ? (
+                              <View
+                                key={`watchlist-skeleton-${watchlistTailSkeletonItems[fillerIndex]}`}
+                                style={{ flex: 1 / columns }}
+                              >
+                                <WatchlistCardSkeleton isWeb />
+                              </View>
+                            ) : (
+                              <View
+                                key={`watchlist-row-${rowIndex}-filler-${fillerIndex}`}
+                                style={{ flex: 1 / columns }}
+                              />
+                            )
                           ))
                         : null}
                     </View>
                   ))}
+                  {isWatchlistFilterSettling &&
+                  (visibleWatchlistRows.length === 0 ||
+                    visibleWatchlistRows[visibleWatchlistRows.length - 1]?.length === columns) ? (
+                    <View key="watchlist-skeleton-row-0" className="flex-row gap-3">
+                      {watchlistTailSkeletonItems.map((item) => (
+                        <View key={`watchlist-skeleton-${item}`} style={{ flex: 1 / columns }}>
+                          <WatchlistCardSkeleton isWeb />
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
                 </View>
 
                 {watchlistFooter}
@@ -1889,7 +2008,7 @@ export function HomeScreen() {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{ paddingBottom: 24 }}
                 ListHeaderComponent={watchlistHeader}
-                ListFooterComponent={watchlistFooter}
+                ListFooterComponent={isWatchlistFilterSettling ? watchlistSettlingFooter : watchlistFooter}
               />
             )
           ) : (

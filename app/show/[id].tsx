@@ -92,6 +92,8 @@ const TERMINAL_SHOW_LIFECYCLE_STATUSES = new Set([
   "canceled",
   "cancelled",
 ]);
+const SMALL_INITIAL_EPISODE_PAGE_BUDGET = 1;
+const FULL_JIKAN_EPISODE_PAGE_BUDGET = 100;
 
 function isValidAnimeHomeRelationMode(value: unknown): value is AnimeHomeRelationMode {
   return value === "core_only" || value === "all_relations";
@@ -739,7 +741,6 @@ export function ShowDetailScreen() {
   const [pendingOverrides, setPendingOverrides] = useState<Record<string, boolean>>({});
   const [pendingEpisodeKeys, setPendingEpisodeKeys] = useState<EpisodePendingState>({});
   const [seasonActionLoading, setSeasonActionLoading] = useState<SeasonActionState>({});
-  const [isAddingToWatchlist, setIsAddingToWatchlist] = useState(false);
   const [isRemovingFromWatchlist, setIsRemovingFromWatchlist] = useState(false);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
   const [isSettingStatus, setIsSettingStatus] = useState(false);
@@ -772,10 +773,27 @@ export function ShowDetailScreen() {
   const expandedSeasonsRef = useRef(expandedSeasons);
   const seasonWatchedKeysRef = useRef(seasonWatchedKeys);
   const loadingSeasonsRef = useRef<Set<number>>(new Set());
+  const seasonLoadGenerationRef = useRef(0);
+  const prevInWatchlistRef = useRef<boolean | null>(null);
   const [apiRelatedAnime, setApiRelatedAnime] = useState<AniListRelatedShow[]>([]);
   const [isLoadingRelatedAnime, setIsLoadingRelatedAnime] = useState(false);
 
-  const addToWatchlist = useMutation(api.shows.addToWatchlist);
+  const resetLocalTrackingProgress = useCallback(() => {
+    seasonLoadGenerationRef.current += 1;
+    loadingSeasonsRef.current.clear();
+    setPendingOverrides({});
+    setPendingEpisodeKeys({});
+    setSeasonActionLoading({});
+    setSeasonWatchedKeys({});
+    setEpisodeWatchCounts({});
+    setMovieWatchCount(null);
+    setOptimisticTrackingStatus(null);
+    setWatchActionTarget(null);
+    setNextSeasonPrompt(null);
+    setPreviousEpisodesPrompt(null);
+    setIsWatchActionRunning(false);
+  }, []);
+
   const removeFromWatchlist = useMutation(api.shows.removeFromWatchlist);
   const setWatchlistStatus = useMutation(api.shows.setWatchlistStatus);
   const setFavoriteStatus = useMutation(api.shows.setFavoriteStatus);
@@ -812,6 +830,8 @@ export function ShowDetailScreen() {
     trackingArgs
   );
   const canTrackShow = trackingArgs !== "skip";
+  const trackingLoaded = tracking !== undefined || !canTrackShow;
+  const isInWatchlist = trackingLoaded && tracking?.inWatchlist === true;
   
   // Use optimistic status if set, otherwise fall back to query result
   const activeTrackingStatus: ShowTrackingStatus = optimisticTrackingStatus ?? (
@@ -829,18 +849,24 @@ export function ShowDetailScreen() {
   }, [tracking?.status]);
 
   useEffect(() => {
-    if (isAddingToWatchlist && tracking?.inWatchlist) {
-      setIsAddingToWatchlist(false);
-    }
-
     if (isRemovingFromWatchlist && tracking?.inWatchlist === false) {
       setIsRemovingFromWatchlist(false);
     }
   }, [
-    isAddingToWatchlist,
     isRemovingFromWatchlist,
     tracking?.inWatchlist,
   ]);
+
+  useEffect(() => {
+    const currentInWatchlist =
+      typeof tracking?.inWatchlist === "boolean" ? tracking.inWatchlist : null;
+
+    if (prevInWatchlistRef.current === true && currentInWatchlist === false) {
+      resetLocalTrackingProgress();
+    }
+
+    prevInWatchlistRef.current = currentInWatchlist;
+  }, [resetLocalTrackingProgress, tracking?.inWatchlist]);
 
   useEffect(() => {
     if (!isUpdatingAnimeSettings) {
@@ -1085,7 +1111,10 @@ export function ShowDetailScreen() {
         counts[`${entry.season}:${entry.episode}`] = entry.count;
       }
       setEpisodeWatchCounts(counts);
+      return;
     }
+
+    setEpisodeWatchCounts({});
   }, [episodeWatchCountsData]);
 
   useEffect(() => {
@@ -1112,7 +1141,9 @@ export function ShowDetailScreen() {
 
   // Load watched episodes for expanded seasons
   useEffect(() => {
-    if (trackingArgs === "skip" || !getWatchedEpisodesForSeasonAction) return;
+    if (trackingArgs === "skip" || !getWatchedEpisodesForSeasonAction || !isInWatchlist) {
+      return;
+    }
 
     let isCancelled = false;
     const expandedSeasonNumbers = Object.entries(expandedSeasons)
@@ -1126,11 +1157,12 @@ export function ShowDetailScreen() {
       loadingSeasonsRef.current.add(seasonNumber);
 
       void (async () => {
+        const loadGeneration = seasonLoadGenerationRef.current;
         try {
           const args = { ...trackingArgs, season: seasonNumber };
           const keys = await getWatchedEpisodesForSeasonAction(args);
 
-          if (isCancelled) {
+          if (isCancelled || seasonLoadGenerationRef.current !== loadGeneration) {
             return;
           }
           if (expandedSeasonsRef.current[seasonNumber] !== true) {
@@ -1163,7 +1195,7 @@ export function ShowDetailScreen() {
     return () => {
       isCancelled = true;
     };
-  }, [expandedSeasons, trackingArgs, getWatchedEpisodesForSeasonAction]);
+  }, [expandedSeasons, trackingArgs, getWatchedEpisodesForSeasonAction, isInWatchlist]);
 
   useEffect(() => {
     if (typeof relatedAnimeLookupId !== "number") {
@@ -1476,7 +1508,6 @@ export function ShowDetailScreen() {
 
   // Auto-expand earliest season with unwatched episodes
   // Wait for tracking data so we know which episodes are watched
-  const trackingLoaded = tracking !== undefined || !canTrackShow;
   const seasonProgressLoaded = watchedSeasonProgress !== undefined || !canTrackShow;
 
   useEffect(() => {
@@ -1593,7 +1624,10 @@ export function ShowDetailScreen() {
           let animeEpisodes: NormalizedEpisode[] = [];
           if (typeof normalized.malId === "number") {
             try {
-              animeEpisodes = await getJikanAnimeEpisodes(normalized.malId);
+              animeEpisodes = await getJikanAnimeEpisodes(
+                normalized.malId,
+                SMALL_INITIAL_EPISODE_PAGE_BUDGET
+              );
             } catch (episodeError) {
               console.warn("Could not load Jikan episodes for AniList anime", episodeError);
             }
@@ -1607,12 +1641,40 @@ export function ShowDetailScreen() {
               normalized.backdropUrl ?? normalized.posterUrl
             )
           );
+
+          if (typeof normalized.malId === "number") {
+            void getJikanAnimeEpisodes(
+              normalized.malId,
+              FULL_JIKAN_EPISODE_PAGE_BUDGET
+            )
+              .then((fullEpisodes) => {
+                if (isCancelled || fullEpisodes.length === 0) {
+                  return;
+                }
+
+                setSeasons(
+                  createAnimeSeason(
+                    normalized.totalEpisodes,
+                    fullEpisodes,
+                    normalized.backdropUrl ?? normalized.posterUrl
+                  )
+                );
+              })
+              .catch((episodeError) => {
+                if (!isCancelled) {
+                  console.warn("Could not refresh full Jikan episodes for AniList anime", episodeError);
+                }
+              });
+          }
           return;
         }
 
         const [jikanShow, jikanEpisodes] = await Promise.all([
           getJikanAnime(parsedId.externalId),
-          getJikanAnimeEpisodes(parsedId.externalId).catch(() => [] as NormalizedEpisode[]),
+          getJikanAnimeEpisodes(
+            parsedId.externalId,
+            SMALL_INITIAL_EPISODE_PAGE_BUDGET
+          ).catch(() => [] as NormalizedEpisode[]),
         ]);
         if (isCancelled) return;
 
@@ -1645,6 +1707,29 @@ export function ShowDetailScreen() {
             resolvedShow.backdropUrl ?? resolvedShow.posterUrl
           )
         );
+
+        void getJikanAnimeEpisodes(
+          parsedId.externalId,
+          FULL_JIKAN_EPISODE_PAGE_BUDGET
+        )
+          .then((fullEpisodes) => {
+            if (isCancelled || fullEpisodes.length === 0) {
+              return;
+            }
+
+            setSeasons(
+              createAnimeSeason(
+                resolvedShow.totalEpisodes,
+                fullEpisodes,
+                resolvedShow.backdropUrl ?? resolvedShow.posterUrl
+              )
+            );
+          })
+          .catch((episodeError) => {
+            if (!isCancelled) {
+              console.warn("Could not refresh full Jikan episodes for MAL anime", episodeError);
+            }
+          });
       } catch (loadError) {
         if (isCancelled) return;
         console.error("Failed to load show detail", loadError);
@@ -1658,46 +1743,20 @@ export function ShowDetailScreen() {
     return () => { isCancelled = true; };
   }, [parsedId]);
 
-  const handleAddToWatchlist = async () => {
-    if (!show) return;
-    if (!canTrackShow) {
-      setTrackingError("This title cannot be tracked yet.");
-      return;
-    }
-    if (tracking?.inWatchlist) {
-      return;
-    }
-    if (isAddingToWatchlist || isRemovingFromWatchlist || isSettingStatus) {
-      return;
-    }
-
-    setIsAddingToWatchlist(true);
-    setTrackingError(null);
-    try {
-      const payload = buildShowPayload(show);
-      if (show.mediaType === "anime") {
-        await addAnimeToWatchlistWithRelations(payload);
-      } else {
-        await addToWatchlist(payload);
-      }
-    } catch (mutationError) {
-      console.error("Failed to add show to watchlist", mutationError);
-      setTrackingError("Could not add this show to watchlist.");
-    } finally {
-      setIsAddingToWatchlist(false);
-    }
-  };
-
   const handleRemoveFromWatchlist = async () => {
     if (!show) return false;
     if (!canTrackShow) {
       setTrackingError("This title cannot be tracked yet.");
       return false;
     }
-    if (!tracking?.inWatchlist) {
+    if (!trackingLoaded) {
+      setTrackingError("Tracking is still loading. Please try again.");
+      return false;
+    }
+    if (!isInWatchlist) {
       return true;
     }
-    if (isRemovingFromWatchlist || isAddingToWatchlist || isSettingStatus) {
+    if (isRemovingFromWatchlist || isSettingStatus) {
       return false;
     }
 
@@ -1707,11 +1766,7 @@ export function ShowDetailScreen() {
       await removeFromWatchlist({
         show: buildShowPayload(show),
       });
-      setPendingOverrides({});
-      setPendingEpisodeKeys({});
-      setEpisodeWatchCounts({});
-      setMovieWatchCount(null);
-      setWatchActionTarget(null);
+      resetLocalTrackingProgress();
       return true;
     } catch (mutationError) {
       console.error("Failed to remove show from watchlist", mutationError);
@@ -1726,6 +1781,10 @@ export function ShowDetailScreen() {
     if (!show) return;
     if (!canTrackShow) {
       setTrackingError("This title cannot be tracked yet.");
+      return;
+    }
+    if (!trackingLoaded) {
+      setTrackingError("Tracking is still loading. Please try again.");
       return;
     }
     if (isTogglingFavorite) {
@@ -1755,10 +1814,14 @@ export function ShowDetailScreen() {
       setTrackingError("This title cannot be tracked yet.");
       return false;
     }
-    if (isSettingStatus || isAddingToWatchlist || isRemovingFromWatchlist) {
+    if (!trackingLoaded) {
+      setTrackingError("Tracking is still loading. Please try again.");
       return false;
     }
-    if (tracking?.inWatchlist && tracking?.status === nextStatus) {
+    if (isSettingStatus || isRemovingFromWatchlist) {
+      return false;
+    }
+    if (isInWatchlist && tracking?.status === nextStatus) {
       return true;
     }
 
@@ -1767,7 +1830,7 @@ export function ShowDetailScreen() {
     setIsSettingStatus(true);
     setTrackingError(null);
     try {
-      if (!tracking?.inWatchlist && show.mediaType === "anime") {
+      if (!isInWatchlist && show.mediaType === "anime") {
         await addAnimeToWatchlistWithRelations(payload);
       }
 
@@ -1790,6 +1853,27 @@ export function ShowDetailScreen() {
     if (didUpdate) {
       setIsStatusMenuVisible(false);
     }
+  };
+
+  const handleOpenAddToWatchlistPrompt = () => {
+    if (!show) return;
+    if (!canTrackShow) {
+      setTrackingError("This title cannot be tracked yet.");
+      return;
+    }
+    if (!trackingLoaded) {
+      setTrackingError("Tracking is still loading. Please try again.");
+      return;
+    }
+    if (isInWatchlist) {
+      return;
+    }
+    if (isRemovingFromWatchlist || isSettingStatus) {
+      return;
+    }
+
+    setTrackingError(null);
+    setIsStatusMenuVisible(true);
   };
 
   const handleRemoveFromStatusMenu = async () => {
@@ -2179,11 +2263,10 @@ export function ShowDetailScreen() {
       return;
     }
 
-    // If any episodes are watched, show options instead of immediately unwatching.
-    const seasonWatchedCount = countWatchedEpisodesForSeason(season.seasonNumber, watchedEpisodeKeys);
-    const hasAnyWatched = seasonWatchedCount > 0;
+    const seasonWatchedCount = getSeasonWatchedCount(season.seasonNumber);
+    const isSeasonFullyWatched = seasonWatchedCount >= releasedEpisodes.length;
 
-    if (hasAnyWatched) {
+    if (isSeasonFullyWatched) {
       setWatchActionTarget({
         kind: "season",
         title: season.name || `Season ${season.seasonNumber}`,
@@ -2264,6 +2347,7 @@ export function ShowDetailScreen() {
     setTrackingError(null);
 
     const seasonPayloads: { seasonNumber: number; episodes: NormalizedEpisode[] }[] = [];
+    const allEpisodeKeys: string[] = [];
 
     try {
       for (const season of seasons) {
@@ -2286,19 +2370,33 @@ export function ShowDetailScreen() {
       }
 
       // Collect all episode keys for the current season payloads
-      const allEpisodeKeys: string[] = [];
       for (const payload of seasonPayloads) {
         for (const episode of payload.episodes) {
           allEpisodeKeys.push(`${episode.seasonNumber}:${episode.episodeNumber}`);
         }
       }
 
-      // Count how many of the collected keys are actually watched
-      const watchedCountInPayloads = allEpisodeKeys.filter(key => watchedEpisodeKeys.has(key)).length;
-      // Use total episodes from show data when available, otherwise fall back to released episodes count
-      const totalEpisodes = show?.totalEpisodes ?? allEpisodeKeys.length;
-      const isFullyWatched = watchedCountInPayloads >= totalEpisodes;
-      const currentlyWatchedEpisodeKeys = new Set(watchedEpisodeKeys);
+      const releasedEpisodeCount = allEpisodeKeys.length;
+      const watchedCountInPayloads = seasonPayloads.reduce(
+        (sum, payload) =>
+          sum + Math.min(getSeasonWatchedCount(payload.seasonNumber), payload.episodes.length),
+        0
+      );
+      const showActionEpisodeCount = totalEpisodesCount ?? releasedEpisodeCount;
+      const isFullyWatched =
+        showActionEpisodeCount > 0
+          ? totalWatchedEpisodesCount >= showActionEpisodeCount
+          : watchedCountInPayloads >= releasedEpisodeCount;
+
+      if (isFullyWatched) {
+        setWatchActionTarget({
+          kind: "show",
+          title: show.title,
+          subtitle: `${releasedEpisodeCount} released episodes`,
+          releasedEpisodes: seasonPayloads.flatMap((payload) => payload.episodes),
+        });
+        return;
+      }
 
       setSeasonActionLoading((prev) => {
         const next = { ...prev };
@@ -2308,115 +2406,76 @@ export function ShowDetailScreen() {
         return next;
       });
 
-      // Apply optimistic override using the previously collected keys
+      // Apply optimistic override using the previously collected keys.
       setPendingOverrides((prev) => {
         const next = { ...prev };
         for (const k of allEpisodeKeys) {
-          next[k] = !isFullyWatched;
+          next[k] = true;
         }
         return next;
       });
 
-      // Run mutations in parallel with allSettled to track individual success/failure
-      const promises = isFullyWatched
-        ? seasonPayloads.map((payload) =>
-            unmarkSeasonWatched({
-              show: buildShowPayload(show),
-              season: payload.seasonNumber,
-            })
-          )
-        : seasonPayloads.map((payload) =>
-            markSeasonWatched({
-              show: buildShowPayload(show),
-              season: payload.seasonNumber,
-              episodes: payload.episodes.map((episode) => ({
-                episode: episode.episodeNumber,
-                runtime: episode.runtime,
-              })),
-            })
-          );
+      const result = await batchMarkEpisodesWatched({
+        show: buildShowPayload(show),
+        episodes: seasonPayloads.flatMap((payload) =>
+          payload.episodes.map((episode) => ({
+            season: episode.seasonNumber,
+            episode: episode.episodeNumber,
+            runtime: episode.runtime,
+          }))
+        ),
+      });
 
-      const results = await Promise.allSettled(promises);
-
-      // Identify failed seasons
-      const failedIndices = results
-        .map((result, index) => (result.status === "rejected" ? index : -1))
-        .filter((index) => index !== -1);
-
-      if (failedIndices.length > 0) {
-        console.error("Some seasons failed to update:", failedIndices);
-        // Only revert optimistic overrides for failed seasons
-        const failedKeys: string[] = [];
-        for (const index of failedIndices) {
-          const payload = seasonPayloads[index];
-          for (const ep of payload.episodes) {
-            failedKeys.push(`${ep.seasonNumber}:${ep.episodeNumber}`);
+      setSeasonWatchedKeys((prev) => {
+        const next = { ...prev };
+        for (const payload of seasonPayloads) {
+          const seasonKeys = prev[payload.seasonNumber] ?? new Set<string>();
+          const newSeasonKeys = new Set(seasonKeys);
+          for (const episode of payload.episodes) {
+            const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
+            newSeasonKeys.add(key);
           }
+          next[payload.seasonNumber] = newSeasonKeys;
         }
-        setPendingOverrides((prev) => {
-          const next = { ...prev };
-          for (const k of failedKeys) {
-            delete next[k];
-          }
-          return next;
-        });
-        setTrackingError(
-          `Could not update ${failedIndices.length} season${failedIndices.length > 1 ? "s" : ""}. Please try again.`
-        );
-      } else {
-        // Success - update seasonWatchedKeys for all seasons
-        setSeasonWatchedKeys((prev) => {
-          const next = { ...prev };
-          for (const payload of seasonPayloads) {
-            const seasonKeys = prev[payload.seasonNumber] ?? new Set<string>();
-            const newSeasonKeys = new Set(seasonKeys);
-            for (const episode of payload.episodes) {
-              const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
-              if (!isFullyWatched) {
-                newSeasonKeys.add(key);
-              } else {
-                newSeasonKeys.delete(key);
-              }
-            }
-            next[payload.seasonNumber] = newSeasonKeys;
-          }
-          return next;
-        });
-        
-        // Update tracking status optimistically
-        if (show) {
-          const changedEpisodeCount = seasonPayloads.reduce(
-            (sum, payload) =>
-              sum +
-              payload.episodes.reduce((payloadSum, episode) => {
-                const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
-                const isCurrentlyWatched = currentlyWatchedEpisodeKeys.has(key);
-                const willBeWatched = !isFullyWatched;
-                return payloadSum + Number(isCurrentlyWatched !== willBeWatched);
-              }, 0),
-            0
-          );
-          const nextWatchedCount = isFullyWatched
-            ? Math.max(totalWatchedEpisodesCount - changedEpisodeCount, 0)
-            : totalWatchedEpisodesCount + changedEpisodeCount;
+        return next;
+      });
+
+      if (show) {
+        if (isTrackingStatus(result.status)) {
+          setOptimisticTrackingStatus(result.status);
+        } else {
+          const changedEpisodeCount = Math.max(releasedEpisodeCount - watchedCountInPayloads, 0);
+          const nextWatchedCount = totalWatchedEpisodesCount + changedEpisodeCount;
           setOptimisticTrackingStatus(
             shouldAutoCompleteShow(show, nextWatchedCount) ? "completed" : "watching"
           );
         }
-        
-        if (!isFullyWatched && show.mediaType === "anime") {
-          const firstPayload = seasonPayloads[0];
-          if (firstPayload) {
-            const season = seasons.find(
-              (entry) => entry.seasonNumber === firstPayload.seasonNumber
-            );
-            void maybePromptMoveToNextSeason(
-              firstPayload.seasonNumber,
-              season?.name || `Season ${firstPayload.seasonNumber}`
-            );
-          }
+      }
+
+      if (show.mediaType === "anime") {
+        const firstPayload = seasonPayloads[0];
+        if (firstPayload) {
+          const season = seasons.find(
+            (entry) => entry.seasonNumber === firstPayload.seasonNumber
+          );
+          void maybePromptMoveToNextSeason(
+            firstPayload.seasonNumber,
+            season?.name || `Season ${firstPayload.seasonNumber}`
+          );
         }
       }
+    } catch (mutationError) {
+      console.error("Failed to mark show watched", mutationError);
+      if (allEpisodeKeys.length > 0) {
+        setPendingOverrides((prev) => {
+          const next = { ...prev };
+          for (const k of allEpisodeKeys) {
+            delete next[k];
+          }
+          return next;
+        });
+      }
+      setTrackingError("Could not update show status.");
     } finally {
       setSeasonActionLoading((prev) => {
         const next = { ...prev };
@@ -2676,22 +2735,6 @@ export function ShowDetailScreen() {
     }
   };
 
-  const handleOpenShowActionMenu = async () => {
-    if (!show || !canTrackShow || show.mediaType === "movie") return;
-    const releasedEpisodes = await collectReleasedShowEpisodes();
-    if (!releasedEpisodes.length) {
-      setTrackingError("Episode list is not available for this show yet.");
-      return;
-    }
-
-    setWatchActionTarget({
-      kind: "show",
-      title: show.title,
-      subtitle: `${releasedEpisodes.length} released episodes`,
-      releasedEpisodes,
-    });
-  };
-
   const handleOpenMovieActionMenu = () => {
     if (!show || show.mediaType !== "movie") return;
     setWatchActionTarget({
@@ -2945,23 +2988,49 @@ export function ShowDetailScreen() {
     ? Math.min(1, clampedWatchedEpisodesCount / totalEpisodesCount)
     : 0;
 
+  const releasedEpisodeCountForShowAction = useMemo(() => {
+    let count = 0;
+
+    for (const season of seasons) {
+      const episodes = season.episodes ?? [];
+      if (episodes.length === 0) {
+        continue;
+      }
+
+      count += episodes.filter((episode) => isEpisodeReleased(episode.airDate)).length;
+    }
+
+    return count > 0 ? count : null;
+  }, [seasons]);
+
+  const showActionEpisodeCount =
+    totalEpisodesCount ?? releasedEpisodeCountForShowAction;
   const isShowFullyWatched =
-    totalEpisodesCount !== null && clampedWatchedEpisodesCount >= totalEpisodesCount;
+    showActionEpisodeCount !== null &&
+    totalWatchedEpisodesCount >= showActionEpisodeCount;
 
   const isFavorite = tracking?.isFavorite ?? false;
   const isWatchlistActionPending =
-    (isAddingToWatchlist && !tracking?.inWatchlist) ||
-    (isRemovingFromWatchlist && tracking?.inWatchlist !== false);
-  const isStatusMenuBusy = isSettingStatus || isWatchlistActionPending || isTogglingFavorite;
+    isSettingStatus || (isRemovingFromWatchlist && (trackingLoaded ? isInWatchlist : true));
+  const isStatusMenuBusy =
+    !trackingLoaded || isSettingStatus || isWatchlistActionPending || isTogglingFavorite;
+  const showMediaType = show?.mediaType;
+  const isFirstSavePrompt =
+    trackingLoaded && !isInWatchlist && showMediaType != null && showMediaType !== "movie";
+  const statusMenuOptions = isFirstSavePrompt
+    ? trackingStatusOptions.filter(
+        (option) => option.value === "watching" || option.value === "plan_to_watch"
+      )
+    : trackingStatusOptions;
   const activeTrackingOption =
     trackingStatusOptions.find((option) => option.value === activeTrackingStatusForMenu) ??
     trackingStatusOptions.find((option) => option.value === "plan_to_watch") ??
     trackingStatusOptions[0];
-  const watchlistActionLabel = isAddingToWatchlist && !tracking?.inWatchlist
-    ? "Adding..."
-    : isRemovingFromWatchlist && tracking?.inWatchlist !== false
+  const watchlistActionLabel = !trackingLoaded
+      ? "Loading..."
+      : isRemovingFromWatchlist && isInWatchlist
       ? "Removing..."
-      : tracking?.inWatchlist
+      : isInWatchlist
         ? "Remove from Watchlist"
         : "Add to Watchlist";
   const favoriteActionLabel = isTogglingFavorite
@@ -3112,9 +3181,11 @@ export function ShowDetailScreen() {
               <ProgressBar progress={watchProgressRatio} height={8} animated />
               <View className="mt-3 flex-row items-center justify-between">
                 <Text className="text-xs text-text-muted">
-                  {tracking?.inWatchlist
+                  {isInWatchlist
                     ? `Saved${tracking?.status ? ` · ${formatTrackingStatus(tracking.status)}` : ""}`
-                    : "Add to watchlist to track your progress"}
+                    : trackingLoaded
+                      ? "Add to watchlist to track your progress"
+                      : "Loading tracking..."}
                 </Text>
                 <Text className="text-xs font-semibold text-text-secondary">
                   {Math.round(watchProgressRatio * 100)}%
@@ -3131,7 +3202,9 @@ export function ShowDetailScreen() {
                     Tracking
                   </Text>
                   <Text className="mt-1 text-xs text-text-secondary">
-                    {tracking?.inWatchlist
+                    {!trackingLoaded
+                      ? "Loading your tracking state..."
+                      : isInWatchlist
                       ? `Current status: ${activeTrackingOption.label}`
                       : "Not in your watchlist yet."}
                   </Text>
@@ -3140,8 +3213,8 @@ export function ShowDetailScreen() {
                   </Text>
                 </View>
                 <Badge
-                  label={tracking?.inWatchlist ? activeTrackingOption.label : "Not Tracked"}
-                  variant={tracking?.inWatchlist ? "accent" : "default"}
+                  label={!trackingLoaded ? "Loading" : isInWatchlist ? activeTrackingOption.label : "Not Tracked"}
+                  variant={isInWatchlist ? "accent" : "default"}
                 />
               </View>
 
@@ -3152,11 +3225,11 @@ export function ShowDetailScreen() {
               >
                 <Pressable
                   onPress={() => {
-                    if (tracking?.inWatchlist) {
+                    if (isInWatchlist) {
                       void handleRemoveFromWatchlist();
                       return;
                     }
-                    void handleAddToWatchlist();
+                    handleOpenAddToWatchlistPrompt();
                   }}
                   disabled={!canTrackShow || isStatusMenuBusy}
                   accessibilityRole="button"
@@ -3173,14 +3246,14 @@ export function ShowDetailScreen() {
                     <ActivityIndicator size="small" color="#a1a1aa" />
                   ) : (
                     <Ionicons
-                      name={tracking?.inWatchlist ? "remove-circle-outline" : "add-circle-outline"}
+                      name={isInWatchlist ? "remove-circle-outline" : "add-circle-outline"}
                       size={15}
-                      color={tracking?.inWatchlist ? "#ef4444" : "#a1a1aa"}
+                      color={isInWatchlist ? "#ef4444" : "#a1a1aa"}
                     />
                   )}
                   <Text
                     className={`text-xs font-semibold uppercase tracking-wide ${
-                      tracking?.inWatchlist ? "text-primary" : "text-text-secondary"
+                      isInWatchlist ? "text-primary" : "text-text-secondary"
                     }`}
                   >
                     {watchlistActionLabel}
@@ -3313,11 +3386,7 @@ export function ShowDetailScreen() {
               {show.mediaType !== "movie" && seasons.length > 0 && (
                 <View className="flex-row items-center gap-3">
                   <Pressable
-                    onPress={
-                      isShowFullyWatched
-                        ? handleOpenShowActionMenu
-                        : handleMarkShowWatched
-                    }
+                    onPress={handleMarkShowWatched}
                     disabled={!canTrackShow || isMarkingShow}
                     accessibilityRole="button"
                     className="relative h-7 w-7 items-center justify-center"
@@ -3341,11 +3410,7 @@ export function ShowDetailScreen() {
                     )}
                   </Pressable>
                   <Pressable
-                    onPress={
-                      isShowFullyWatched
-                        ? handleOpenShowActionMenu
-                        : handleMarkShowWatched
-                    }
+                    onPress={handleMarkShowWatched}
                     disabled={!canTrackShow || isMarkingShow}
                     accessibilityRole="button"
                     className="active:opacity-70"
@@ -4095,19 +4160,28 @@ export function ShowDetailScreen() {
           <View className="w-full max-w-sm overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
             <View className="border-b border-border-default px-4 pb-3 pt-4">
               <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                {show.mediaType === "movie" ? "Edit Movie Status" : "Edit Tracking"}
+                {showMediaType === "movie" ? "Edit Movie Status" : "Edit Tracking"}
               </Text>
               <Text className="mt-1 text-lg font-black text-text-primary" numberOfLines={2}>
                 {cleanedShowTitle}
               </Text>
               <Text className="mt-2 text-sm text-text-secondary">
-                {tracking?.inWatchlist
+                {!trackingLoaded
+                  ? "Loading your current tracking state."
+                  : isInWatchlist
                   ? `Current status: ${activeTrackingOption.label}`
-                  : show.mediaType === "movie"
-                    ? "Pick a status to add this movie to your queue."
-                    : "Pick a status to add this title to your watchlist."}
+                  : isFirstSavePrompt
+                    ? "Choose whether this should appear on Home right away or stay saved for later."
+                    : showMediaType === "movie"
+                      ? "Pick a status to add this movie to your queue."
+                      : "Pick a status to add this title to your watchlist."}
               </Text>
-              {show.mediaType === "anime" ? (
+              {isFirstSavePrompt ? (
+                <Text className="mt-1 text-xs text-text-muted">
+                  Show on Home now sets it to Watching. Save for later sets it to Planned.
+                </Text>
+              ) : null}
+              {showMediaType === "anime" ? (
                 <Text className="mt-1 text-xs text-text-muted">
                   Franchise titles may auto-follow as part of your timeline.
                 </Text>
@@ -4115,9 +4189,21 @@ export function ShowDetailScreen() {
             </View>
 
             <View className="gap-2 p-4">
-              {trackingStatusOptions.map((option) => {
+              {statusMenuOptions.map((option) => {
                 const isActive =
-                  !!tracking?.inWatchlist && activeTrackingStatusForMenu === option.value;
+                  isInWatchlist && activeTrackingStatusForMenu === option.value;
+                const title =
+                  isFirstSavePrompt && option.value === "watching"
+                    ? "Show on Home now"
+                    : isFirstSavePrompt && option.value === "plan_to_watch"
+                      ? "Save for later"
+                      : option.label;
+                const description =
+                  isFirstSavePrompt && option.value === "watching"
+                    ? "Marks this as Watching so it appears in your Home watchlist."
+                    : isFirstSavePrompt && option.value === "plan_to_watch"
+                      ? "Marks this as Planned and keeps it off Home until you start it."
+                      : option.description;
                 return (
                   <Pressable
                     key={option.value}
@@ -4140,10 +4226,10 @@ export function ShowDetailScreen() {
                           isActive ? "text-primary" : "text-text-primary"
                         }`}
                       >
-                        {option.label}
+                        {title}
                       </Text>
                       <Text className="mt-0.5 text-xs text-text-secondary">
-                        {option.description}
+                        {description}
                       </Text>
                     </View>
                     <Ionicons
@@ -4155,7 +4241,7 @@ export function ShowDetailScreen() {
                 );
               })}
 
-              {tracking?.inWatchlist ? (
+              {isInWatchlist ? (
                 <Pressable
                   disabled={isStatusMenuBusy}
                   onPress={() => {

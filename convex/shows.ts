@@ -431,6 +431,15 @@ function hasWatchlistProgress(entry: Pick<WatchlistEntryLike, "watchedEpisodes">
   return entry.watchedEpisodes > 0;
 }
 
+function shouldShowHomeFeedWatchlistEntry(
+  entry: Pick<WatchlistEntryLike, "status" | "watchedEpisodes" | "remainingEpisodes">
+) {
+  return (
+    isHomeFeedDisplayableEntry(entry) &&
+    (hasWatchlistProgress(entry) || entry.status === "watching")
+  );
+}
+
 type AnimeFranchiseSelectionEntry = ProjectionFeedEntry &
   WatchlistEntryLike & {
     isAutoTracked: boolean;
@@ -575,13 +584,28 @@ function selectHomeAnimeFranchiseRepresentative<T extends AnimeFranchiseSelectio
     }
   }
 
-  const autoTrackedDisplayable = orderedTimeline.find(
-    (entry) => isHomeFeedDisplayableEntry(entry) && entry.isAutoTracked
+  const hasManualWatchlistDisplayable = orderedTimeline.some(
+    (entry) => shouldShowHomeFeedWatchlistEntry(entry) && !entry.isAutoTracked
   );
+  const autoTrackedDisplayable = hasManualWatchlistDisplayable
+    ? undefined
+    : orderedTimeline.find(
+        (entry) => isHomeFeedDisplayableEntry(entry) && entry.isAutoTracked
+      );
   if (autoTrackedDisplayable) {
     return {
       entry: autoTrackedDisplayable,
       lastActivityAt: autoTrackedDisplayable.lastWatchedAt,
+    };
+  }
+
+  const displayableEntry = orderedTimeline.find((entry) =>
+    shouldShowHomeFeedWatchlistEntry(entry)
+  );
+  if (displayableEntry) {
+    return {
+      entry: displayableEntry,
+      lastActivityAt: displayableEntry.lastWatchedAt,
     };
   }
 
@@ -780,7 +804,7 @@ export const getHomeFeed = query({
 
     for (const item of hydrated) {
       if (item.mediaType !== "anime") {
-        if (isHomeFeedDisplayableEntry(item) && hasWatchlistProgress(item)) {
+        if (shouldShowHomeFeedWatchlistEntry(item)) {
           selectedEntries.push(item);
         }
         continue;
@@ -1321,8 +1345,10 @@ function computeWatchedEpisodeAggregates(
 async function refreshUserShowTrackingAggregates(
   ctx: MutationCtx,
   userId: Id<"users">,
-  showId: Id<"shows">
+  showId: Id<"shows">,
+  options: { deriveStatus?: boolean } = {}
 ) {
+  const { deriveStatus = true } = options;
   const userShow = await ctx.db
     .query("userShows")
     .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
@@ -1343,18 +1369,58 @@ async function refreshUserShowTrackingAggregates(
     .collect();
 
   const aggregates = computeWatchedEpisodeAggregates(watchedEpisodes, show);
-
-  await ctx.db.patch(userShow._id, {
+  const now = Date.now();
+  const patch: Partial<Doc<"userShows">> = {
     watchedEpisodesCount: aggregates.watchedEpisodesCount,
     watchedTotalCount: aggregates.watchedTotalCount,
     watchedRuntimeMinutes: aggregates.watchedRuntimeMinutes,
     lastWatchedAt: aggregates.lastWatchedAt,
-  });
+  };
+  let nextStatus = userShow.status;
+
+  if (deriveStatus) {
+    nextStatus = getDerivedUserShowStatusFromProgress(
+      userShow.status,
+      {
+        mediaType: show.mediaType,
+        status: show.status,
+        totalEpisodes: show.totalEpisodes,
+        totalSeasons: show.totalSeasons,
+      },
+      aggregates.watchedEpisodesCount
+    );
+  }
+
+  if (nextStatus !== userShow.status) {
+    patch.status = nextStatus;
+    patch.statusChangedAt = now;
+
+    if (nextStatus === "completed") {
+      patch.completedAt = now;
+      patch.droppedAt = undefined;
+      patch.autoPausedAt = undefined;
+    } else {
+      if (userShow.completedAt) {
+        patch.completedAt = undefined;
+      }
+      if (userShow.droppedAt && nextStatus !== "dropped") {
+        patch.droppedAt = undefined;
+      }
+      if (userShow.autoPausedAt && nextStatus !== "paused") {
+        patch.autoPausedAt = undefined;
+      }
+    }
+  }
+
+  await ctx.db.patch(userShow._id, patch);
 
   // Keep feed projection in sync with the updated tracking aggregates.
   await upsertFeedProjectionForUserShow(ctx, userShow._id);
 
-  return aggregates;
+  return {
+    ...aggregates,
+    status: nextStatus,
+  };
 }
 
 function normalizePositiveEpisodeCount(value?: number | null) {
@@ -1425,6 +1491,46 @@ function extractLookupYear(value?: string | null) {
   }
 
   return year;
+}
+
+function hasConflictingLookupIdentity(
+  candidate: Doc<"shows">,
+  args: {
+    tmdbId?: number;
+    tvdbId?: number;
+    anilistId?: number;
+    malId?: number;
+    tvmazeId?: number;
+    imdbId?: string;
+  }
+) {
+  if (typeof args.tmdbId === "number" && typeof candidate.tmdbId === "number") {
+    return candidate.tmdbId !== args.tmdbId;
+  }
+
+  if (typeof args.tvdbId === "number" && typeof candidate.tvdbId === "number") {
+    return candidate.tvdbId !== args.tvdbId;
+  }
+
+  if (typeof args.anilistId === "number" && typeof candidate.anilistId === "number") {
+    return candidate.anilistId !== args.anilistId;
+  }
+
+  if (typeof args.malId === "number" && typeof candidate.malId === "number") {
+    return candidate.malId !== args.malId;
+  }
+
+  if (typeof args.tvmazeId === "number" && typeof candidate.tvmazeId === "number") {
+    return candidate.tvmazeId !== args.tvmazeId;
+  }
+
+  const requestedImdbId = args.imdbId?.trim().toLowerCase();
+  const candidateImdbId = candidate.imdbId?.trim().toLowerCase();
+  if (requestedImdbId && candidateImdbId) {
+    return candidateImdbId !== requestedImdbId;
+  }
+
+  return false;
 }
 
 async function findShowByLookup(
@@ -1536,19 +1642,30 @@ async function findShowByLookup(
     return null;
   }
 
-  const requestedYear = extractLookupYear(args.firstAired);
-  if (typeof requestedYear !== "number") {
-    return pickBestLookupCandidate(titleMatches, mediaType);
+  // Same-title remakes/reboots must not overwrite an existing row that is already
+  // tied to a different external ID.
+  const compatibleTitleMatches = titleMatches.filter(
+    (candidate) => !hasConflictingLookupIdentity(candidate, args)
+  );
+
+  if (compatibleTitleMatches.length === 0) {
+    return null;
   }
 
-  const yearMatches = titleMatches.filter(
+  const requestedYear = extractLookupYear(args.firstAired);
+  if (typeof requestedYear !== "number") {
+    return pickBestLookupCandidate(compatibleTitleMatches, mediaType);
+  }
+
+  const yearMatches = compatibleTitleMatches.filter(
     (candidate) => extractLookupYear(candidate.firstAired) === requestedYear
   );
 
-  return pickBestLookupCandidate(
-    yearMatches.length > 0 ? yearMatches : titleMatches,
-    mediaType
-  );
+  if (yearMatches.length === 0) {
+    return null;
+  }
+
+  return pickBestLookupCandidate(yearMatches, mediaType);
 }
 
 async function ensureShowRecordId(
@@ -3811,7 +3928,9 @@ export const importTrackedShows = mutation({
         insertedEpisodes += 1;
       }
 
-      const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId);
+      const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId, {
+        deriveStatus: false,
+      });
 
       const watchedEpisodesCount = Math.max(
         0,
@@ -3823,13 +3942,19 @@ export const importTrackedShows = mutation({
         watchedEpisodesCount
       );
 
-      if (normalizedImportStatus !== item.status) {
-        await ctx.db.patch(userShowId, {
-          status: normalizedImportStatus,
-          statusChangedAt: now,
+      if (normalizedImportStatus !== item.status || normalizedImportStatus === "paused") {
+        const importStatusPatch: Partial<Doc<"userShows">> = {
           completedAt: normalizedImportStatus === "completed" ? now : undefined,
           droppedAt: normalizedImportStatus === "dropped" ? now : undefined,
-        });
+          autoPausedAt: undefined,
+        };
+
+        if (normalizedImportStatus !== item.status) {
+          importStatusPatch.status = normalizedImportStatus;
+          importStatusPatch.statusChangedAt = now;
+        }
+
+        await ctx.db.patch(userShowId, importStatusPatch);
         await upsertFeedProjectionForUserShow(ctx, userShowId);
       }
 

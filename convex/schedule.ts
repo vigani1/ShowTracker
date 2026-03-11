@@ -135,6 +135,10 @@ function normalizeTitle(title: string) {
   return title.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+function getTitleLookupKey(mediaType: "tv" | "anime", normalizedTitle: string) {
+  return `${mediaType}:${normalizedTitle}`;
+}
+
 function compactScheduleEntries(entries: NormalizedScheduleEntry[]): CompactScheduleEntry[] {
   const dedupe = new Set<string>();
   const compacted: CompactScheduleEntry[] = [];
@@ -684,7 +688,10 @@ export const getUpcomingSchedule = query({
       if (typeof tracked.tvmazeId === "number") {
         byExternalKey.set(`tvmaze:${tracked.tvmazeId}`, tracked);
       }
-      byTitle.set(tracked.normalizedTitle, tracked);
+      byTitle.set(
+        getTitleLookupKey(tracked.mediaType, tracked.normalizedTitle),
+        tracked
+      );
     }
 
     const rows = mediaFilter
@@ -728,7 +735,9 @@ export const getUpcomingSchedule = query({
       for (const entry of entries) {
         const tracked =
           byExternalKey.get(entry.showId) ??
-          byTitle.get(entry.normalizedTitle);
+          byTitle.get(
+            getTitleLookupKey(row.mediaType as "tv" | "anime", entry.normalizedTitle)
+          );
 
         if (!tracked) continue;
         if (tracked.mediaType !== "tv" && tracked.mediaType !== "anime") continue;
@@ -844,7 +853,10 @@ export const getFutureUpcomingCountsForWatchlist = query({
       if (typeof tracked.tvmazeId === "number") {
         byExternalKey.set(`tvmaze:${tracked.tvmazeId}`, tracked);
       }
-      byTitle.set(tracked.normalizedTitle, tracked);
+      byTitle.set(
+        getTitleLookupKey(tracked.mediaType, tracked.normalizedTitle),
+        tracked
+      );
     }
 
     const rows = mediaFilter
@@ -873,7 +885,9 @@ export const getFutureUpcomingCountsForWatchlist = query({
       for (const entry of entries) {
         const tracked =
           byExternalKey.get(entry.showId) ??
-          byTitle.get(entry.normalizedTitle);
+          byTitle.get(
+            getTitleLookupKey(row.mediaType as "tv" | "anime", entry.normalizedTitle)
+          );
 
         if (!tracked || !tracked.watchlistId) continue;
         if (tracked.mediaType !== "tv" && tracked.mediaType !== "anime") continue;
