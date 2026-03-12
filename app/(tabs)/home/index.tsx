@@ -1304,6 +1304,7 @@ export function HomeScreen() {
     () => addDaysToDateString(todayKey, WATCHLIST_FUTURE_LOOKAHEAD_DAYS),
     [todayKey]
   );
+  const watchlistFutureCountsQueryKey = `${watchlistFutureStartDate}:${watchlistFutureEndDate}:${mediaFilter}`;
   const effectiveWidth = gridWidth || Math.max(width - 40, 0);
   const usesMonthCalendarLayout = isWeb && effectiveWidth >= 980;
 
@@ -1316,6 +1317,9 @@ export function HomeScreen() {
   const [tmdbAiredLookupFailuresById, setTmdbAiredLookupFailuresById] = useState<
     Record<number, number>
   >({});
+  const [resolvedFutureCountsQueryKey, setResolvedFutureCountsQueryKey] = useState<
+    string | null
+  >(null);
 
   const currentMonthDate = useMemo(
     () => startOfMonthDate(calendarAnchorDate),
@@ -1454,6 +1458,21 @@ export function HomeScreen() {
 
     return counts;
   }, [watchlistFutureUpcomingCounts]);
+
+  useEffect(() => {
+    if (
+      activeTab === "watchlist" &&
+      watchlist !== undefined &&
+      watchlistFutureUpcomingCounts !== undefined
+    ) {
+      setResolvedFutureCountsQueryKey(watchlistFutureCountsQueryKey);
+    }
+  }, [
+    activeTab,
+    watchlist,
+    watchlistFutureCountsQueryKey,
+    watchlistFutureUpcomingCounts,
+  ]);
 
   useEffect(() => {
     if (activeTab !== "watchlist") {
@@ -1604,8 +1623,13 @@ export function HomeScreen() {
   }, [currentMonthDate]);
 
   const isWatchlistLoading = watchlist === undefined;
+  const hasResolvedFutureCountsForCurrentKey =
+    resolvedFutureCountsQueryKey === watchlistFutureCountsQueryKey;
   const isWatchlistFutureCountsLoading =
-    activeTab === "watchlist" && watchlist !== undefined && watchlistFutureUpcomingCounts === undefined;
+    activeTab === "watchlist" &&
+    watchlist !== undefined &&
+    (!hasResolvedFutureCountsForCurrentKey ||
+      watchlistFutureUpcomingCounts === undefined);
   const upcomingCount = upcomingGroups.reduce((sum, group) => sum + group.episodes.length, 0);
   const visibleWatchlistItems = useMemo(
     () => filteredWatchlist.slice(0, watchlistVisibleCount),
@@ -1645,7 +1669,39 @@ export function HomeScreen() {
   const isWatchlistVisualLoading = isWatchlistLoading || isWatchlistFilterSettling;
   const isUpcomingContentLoading =
     activeTab === "upcoming" && (upcoming === undefined || isHydratingInitialUpcoming);
-  const [settledWatchlistItems, setSettledWatchlistItems] = useState<WatchlistItem[]>([]);
+  const watchlistSettleContextKey = useMemo(() => {
+    if (watchlist === undefined) {
+      return "";
+    }
+
+    const itemSignature = watchlistItems
+      .map((item) =>
+        [
+          item.mediaType,
+          item.id,
+          item.status,
+          item.trackingState,
+          item.remainingEpisodes ?? "unknown",
+          item.watchedEpisodes,
+          item.tmdbId ?? "no-tmdb",
+        ].join(":")
+      )
+      .join("|");
+
+    return `${watchlistFutureCountsQueryKey}:${itemSignature}`;
+  }, [watchlist, watchlistFutureCountsQueryKey, watchlistItems]);
+  const [settledWatchlistSnapshot, setSettledWatchlistSnapshot] = useState<{
+    key: string;
+    items: WatchlistItem[];
+  }>({
+    key: "",
+    items: [],
+  });
+  const canReuseSettledWatchlist =
+    settledWatchlistSnapshot.key === watchlistSettleContextKey;
+  const shouldRenderFullWatchlistSkeleton =
+    isWatchlistLoading ||
+    (isWatchlistFilterSettling && !canReuseSettledWatchlist);
 
   const headerText =
     activeTab === "watchlist"
@@ -1713,14 +1769,20 @@ export function HomeScreen() {
 
   useEffect(() => {
     if (watchlist === undefined) {
-      setSettledWatchlistItems([]);
+      setSettledWatchlistSnapshot({
+        key: "",
+        items: [],
+      });
       return;
     }
 
     if (!isWatchlistFilterSettling) {
-      setSettledWatchlistItems(filteredWatchlist);
+      setSettledWatchlistSnapshot({
+        key: watchlistSettleContextKey,
+        items: filteredWatchlist,
+      });
     }
-  }, [filteredWatchlist, isWatchlistFilterSettling, watchlist]);
+  }, [filteredWatchlist, isWatchlistFilterSettling, watchlist, watchlistSettleContextKey]);
 
   useEffect(() => {
     return () => {
@@ -1749,9 +1811,23 @@ export function HomeScreen() {
     isWatchlistLoading,
     watchlistPageSize,
   ]);
-  const displayWatchlistItems = isWatchlistFilterSettling
-    ? settledWatchlistItems.slice(0, watchlistVisibleCount)
-    : visibleWatchlistItems;
+  const displayWatchlistItems = useMemo(() => {
+    if (!isWatchlistFilterSettling) {
+      return visibleWatchlistItems;
+    }
+
+    if (!canReuseSettledWatchlist) {
+      return [];
+    }
+
+    return settledWatchlistSnapshot.items.slice(0, watchlistVisibleCount);
+  }, [
+    canReuseSettledWatchlist,
+    isWatchlistFilterSettling,
+    settledWatchlistSnapshot.items,
+    visibleWatchlistItems,
+    watchlistVisibleCount,
+  ]);
   const displayWatchlistRows = useMemo(
     () => chunkItems(displayWatchlistItems, columns),
     [columns, displayWatchlistItems]
@@ -1928,7 +2004,7 @@ export function HomeScreen() {
       <View className="flex-1" onLayout={(e) => setGridWidth(e.nativeEvent.layout.width)}>
         {gridWidth > 0 ? (
           activeTab === "watchlist" ? (
-            isWatchlistLoading ? (
+            shouldRenderFullWatchlistSkeleton ? (
               <ScrollView
                 className="flex-1"
                 contentContainerStyle={{ paddingBottom: 24 }}

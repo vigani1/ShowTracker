@@ -1,7 +1,6 @@
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Image,
   Modal,
   Pressable,
@@ -9,6 +8,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Ionicons } from "@expo/vector-icons";
@@ -30,7 +30,7 @@ interface WatchlistShow {
   status: string;
 }
 
-const ITEMS_PER_PAGE = 20;
+const ITEMS_PER_PAGE = 40;
 
 function ShowItemRow({
   show,
@@ -113,6 +113,8 @@ export function SearchShowsModal({ visible, onClose, listId, existingShowIds }: 
   const [addingShowId, setAddingShowId] = useState<string | null>(null);
   const [addError, setAddError] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const isMomentumLatchRef = useRef(false);
   const debouncedQuery = useDebouncedValue(query, 350);
 
   const watchlist = useQuery(api.shows.getUserWatchlistShows);
@@ -143,6 +145,23 @@ export function SearchShowsModal({ visible, onClose, listId, existingShowIds }: 
   }, [filteredShows, visibleCount]);
 
   const hasMore = paginatedShows.length < filteredShows.length;
+  const isLoading = watchlist === undefined;
+
+  useEffect(() => {
+    if (visible === false) {
+      setQuery("");
+      setAddError(null);
+      setAddingShowId(null);
+      setVisibleCount(ITEMS_PER_PAGE);
+      setIsLoadingMore(false);
+      isMomentumLatchRef.current = false;
+      return;
+    }
+
+    setVisibleCount(ITEMS_PER_PAGE);
+    setIsLoadingMore(false);
+    isMomentumLatchRef.current = false;
+  }, [debouncedQuery, visible]);
 
   const handleAddShow = useCallback(async (show: WatchlistShow) => {
     setAddError(null);
@@ -159,19 +178,36 @@ export function SearchShowsModal({ visible, onClose, listId, existingShowIds }: 
   }, [listId, addToList]);
 
   const handleLoadMore = useCallback(() => {
-    if (hasMore) {
-      setVisibleCount((prev) => prev + ITEMS_PER_PAGE);
+    if (!hasMore || isLoading || isLoadingMore || isMomentumLatchRef.current) {
+      return;
     }
-  }, [hasMore]);
+
+    isMomentumLatchRef.current = true;
+    setIsLoadingMore(true);
+    setVisibleCount((prev) => Math.min(prev + ITEMS_PER_PAGE, filteredShows.length));
+  }, [filteredShows.length, hasMore, isLoading, isLoadingMore]);
+
+  useEffect(() => {
+    if (!isLoadingMore) {
+      return;
+    }
+
+    setIsLoadingMore(false);
+  }, [isLoadingMore, paginatedShows.length]);
+
+  const handleMomentumScrollBegin = useCallback(() => {
+    isMomentumLatchRef.current = false;
+  }, []);
 
   const handleClose = () => {
     setQuery("");
     setVisibleCount(ITEMS_PER_PAGE);
+    setIsLoadingMore(false);
     setAddError(null);
+    setAddingShowId(null);
+    isMomentumLatchRef.current = false;
     onClose();
   };
-
-  const isLoading = watchlist === undefined;
 
   const renderItem = useCallback(({ item }: { item: WatchlistShow }) => {
     const isAlreadyInList = existingShowIdsSet.has(item.id);
@@ -188,16 +224,17 @@ export function SearchShowsModal({ visible, onClose, listId, existingShowIds }: 
   }, [existingShowIdsSet, addingShowId, handleAddShow]);
 
   const renderFooter = () => {
-    if (!hasMore) return null;
+    if (!hasMore && !isLoadingMore) return null;
     return (
-      <Pressable
-        onPress={handleLoadMore}
-        className="items-center justify-center py-4"
-      >
-        <Text className="text-sm text-primary font-medium">
-          Load more ({filteredShows.length - paginatedShows.length} remaining)
-        </Text>
-      </Pressable>
+      <View className="items-center justify-center py-4">
+        {isLoadingMore ? (
+          <ActivityIndicator size="small" color="#ef4444" />
+        ) : hasMore ? (
+          <Text className="text-xs font-medium text-text-secondary">
+            Scroll for more ({filteredShows.length - paginatedShows.length} remaining)
+          </Text>
+        ) : null}
+      </View>
     );
   };
 
@@ -293,11 +330,14 @@ export function SearchShowsModal({ visible, onClose, listId, existingShowIds }: 
                 </Text>
               </View>
             ) : (
-              <FlatList
+              <FlashList
                 data={paginatedShows}
                 keyExtractor={(item) => item.id}
                 renderItem={renderItem}
                 ListFooterComponent={renderFooter}
+                onEndReached={handleLoadMore}
+                onEndReachedThreshold={0.35}
+                onMomentumScrollBegin={handleMomentumScrollBegin}
                 contentContainerStyle={{ padding: 16 }}
                 showsVerticalScrollIndicator={false}
               />

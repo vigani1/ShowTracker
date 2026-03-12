@@ -1504,30 +1504,50 @@ function hasConflictingLookupIdentity(
     imdbId?: string;
   }
 ) {
-  if (typeof args.tmdbId === "number" && typeof candidate.tmdbId === "number") {
-    return candidate.tmdbId !== args.tmdbId;
+  if (
+    typeof args.tmdbId === "number" &&
+    typeof candidate.tmdbId === "number" &&
+    candidate.tmdbId !== args.tmdbId
+  ) {
+    return true;
   }
 
-  if (typeof args.tvdbId === "number" && typeof candidate.tvdbId === "number") {
-    return candidate.tvdbId !== args.tvdbId;
+  if (
+    typeof args.tvdbId === "number" &&
+    typeof candidate.tvdbId === "number" &&
+    candidate.tvdbId !== args.tvdbId
+  ) {
+    return true;
   }
 
-  if (typeof args.anilistId === "number" && typeof candidate.anilistId === "number") {
-    return candidate.anilistId !== args.anilistId;
+  if (
+    typeof args.anilistId === "number" &&
+    typeof candidate.anilistId === "number" &&
+    candidate.anilistId !== args.anilistId
+  ) {
+    return true;
   }
 
-  if (typeof args.malId === "number" && typeof candidate.malId === "number") {
-    return candidate.malId !== args.malId;
+  if (
+    typeof args.malId === "number" &&
+    typeof candidate.malId === "number" &&
+    candidate.malId !== args.malId
+  ) {
+    return true;
   }
 
-  if (typeof args.tvmazeId === "number" && typeof candidate.tvmazeId === "number") {
-    return candidate.tvmazeId !== args.tvmazeId;
+  if (
+    typeof args.tvmazeId === "number" &&
+    typeof candidate.tvmazeId === "number" &&
+    candidate.tvmazeId !== args.tvmazeId
+  ) {
+    return true;
   }
 
   const requestedImdbId = args.imdbId?.trim().toLowerCase();
   const candidateImdbId = candidate.imdbId?.trim().toLowerCase();
-  if (requestedImdbId && candidateImdbId) {
-    return candidateImdbId !== requestedImdbId;
+  if (requestedImdbId && candidateImdbId && candidateImdbId !== requestedImdbId) {
+    return true;
   }
 
   return false;

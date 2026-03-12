@@ -48,6 +48,11 @@ export type NormalizedEpisode = {
   runtime?: number;
 };
 
+export type JikanAnimeEpisodesPage = {
+  episodes: NormalizedEpisode[];
+  hasNextPage: boolean;
+};
+
 export type NormalizedScheduleEntry = {
   showId: string;
   showTitle: string;
