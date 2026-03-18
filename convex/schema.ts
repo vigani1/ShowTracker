@@ -143,7 +143,7 @@ export default defineSchema({
   }).index("by_user", ["userId"]),
   scheduleCache: defineTable({
     date: v.string(),
-    mediaType: v.string(),
+    mediaType: v.union(v.literal("tv"), v.literal("anime")),
     episodes: v.string(),
     lastUpdated: v.number(),
   })

@@ -43,10 +43,25 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - Use NativeWind className for all styling (no StyleSheet.create)
 - Use React Native `Image` from `react-native` for all app/component images (never `expo-image`)
 - For any frontend/UI work, always use the `frontend-design` skill as the default design workflow.
+- For browser-based development work on the web app, use Chrome DevTools MCP as the default browser debugging tool.
+- Use the `chrome-devtools` skill when the task needs browser inspection, screenshots, console/network analysis, or UI debugging.
+- Use the `agent-browser` skill when the task is a browser workflow task (login, guest flow, route walkthrough, data collection, persistent session/auth checks).
+- Use `npm run ui:inspect:quick` or `npm run ui:inspect` after UI changes when you need a route/theme/context screenshot sweep.
 - Convex queries/mutations in `convex/` directory, one file per domain (shows.ts, users.ts, lists.ts)
 - API clients return normalized types defined in `lib/api/types.ts`
 - File naming: kebab-case for files, PascalCase for components
 - Imports: absolute paths via `@/` alias (e.g., `@/components/ShowCard`)
+
+## Browser Tooling
+
+- **Default for UI debugging:** Chrome DevTools MCP
+- **Default for browser task execution:** `agent-browser`
+- **Default for fast visual regression sweeps:** `npm run ui:inspect:quick` (or `npm run ui:inspect` for a wider pass)
+- The repo assumes the user may have Chrome remote debugging enabled from `chrome://inspect/#remote-debugging`; when that is true, prefer attaching to the running browser with Chrome DevTools MCP instead of assuming a manually launched `--remote-debugging-port` browser.
+- Use Chrome DevTools MCP first when the task is to inspect, debug, fix, or polish the web UI.
+- Use `agent-browser` first when the task is to operate the app like a user, especially for auth flows, guest mode, and multi-step route walkthroughs.
+- Do not treat `ui:inspect` as the primary debugging tool; use it after a fix to verify route/theme/device coverage.
+- See `docs/BROWSER_AUTOMATION.md` for the full decision guide.
 
 ## Documentation Update Rule (Important)
 
@@ -58,7 +73,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 
 - This mode is active only when the user explicitly says the agent is the "feature owner" (or equivalent wording).
 - In Feature Owner Mode, the agent is expected to run end-to-end ownership: plan, implement, verify, fix, and close the loop without handoff.
-- The agent should proactively run robust verification, including browser-based checks with the `agent-browser` skill when the feature touches web UX.
+- The agent should proactively run robust verification when the feature touches web UX: use Chrome DevTools MCP for debugging/inspection, `agent-browser` for task-style flows, and `ui:inspect` for regression sweeps when appropriate.
 - The agent may create focused helper scripts, run targeted diagnostics, and call APIs/tools needed to validate behavior from start to finish.
 - The agent may use credentials already available in local environment/session for verification, but must never expose, log, or commit secrets.
 - The agent should keep iterating until done, and only stop when blocked by a true external dependency (missing credential/access, irreversible decision, or explicit user stop).
@@ -86,6 +101,7 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 
 - See docs/PLAN.md for implementation phases and feature breakdown
 - See docs/ARCHITECTURE.md for system design and data flow
-- See docs/TECH_STACK.md for setup, build, run, and debug instructions
+- See docs/DEVELOPMENT.md for setup, build, run, and debug instructions
+- See docs/BROWSER_AUTOMATION.md for browser tooling decisions and workflows
 - See docs/API_REFERENCE.md for external API details and rate limits
 - See PROGRESS.md for current status, completed work, and known issues

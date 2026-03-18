@@ -162,6 +162,18 @@ npx expo export --platform web
 
 ## Testing with Browser Automation
 
+This section is about browser-assisted development workflows, not formal test-suite authoring.
+
+### Tool Choice
+
+- **Chrome DevTools MCP** — default for inspecting, debugging, and improving the web UI during development
+- **`agent-browser`** — default for task-style browser flows like login, guest mode, walkthroughs, and data collection
+- **`npm run ui:inspect:quick` / `npm run ui:inspect`** — regression screenshot sweep after a UI fix
+
+Use Chrome DevTools MCP first when the task is to figure out what is wrong with the UI. Use `agent-browser` first when the task is to operate the app like a user.
+
+See `docs/BROWSER_AUTOMATION.md` for the full decision guide.
+
 ### Prerequisites
 
 1. **Start the Expo dev server:**
@@ -238,6 +250,21 @@ agent-browser open http://localhost:8081/login
 agent-browser find text "Continue as Guest" click
 agent-browser wait --url "**/home"
 ```
+
+### Existing Visual Sweep Script
+
+```bash
+# Fast pass: desktop only, dark mode only
+npm run ui:inspect:quick
+
+# Full pass: desktop/mobile/mobile-window + themes/routes
+npm run ui:inspect
+
+# Open Playwright against the running web app manually
+npm run ui:inspect:open
+```
+
+Use these after a fix to verify route and layout coverage. Do not rely on them as the first debugging tool when the issue is still unknown.
 
 ---
 

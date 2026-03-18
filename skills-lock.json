@@ -6,6 +6,11 @@
       "sourceType": "github",
       "computedHash": "8f84837208d0569009b2a39c49b16bdb52f35ce0e277e2d1f7f518dee96dd0b6"
     },
+    "chrome-devtools": {
+      "source": "chromedevtools/chrome-devtools-mcp",
+      "sourceType": "github",
+      "computedHash": "9bf87c1640e0d5ff76bdaabeb9d66ae00f526e72f9a5c3a010062a4e7d31626e"
+    },
     "frontend-design": {
       "source": "anthropics/skills",
       "sourceType": "github",
