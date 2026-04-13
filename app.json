@@ -1,11 +1,14 @@
 {
   "expo": {
     "name": "ShowTracker",
+    "description": "Track shows, anime, and movies across web and mobile.",
     "slug": "showtracker",
     "scheme": "showtracker",
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "backgroundColor": "#0b0f1a",
+    "primaryColor": "#ef4444",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/splash.png",
@@ -22,18 +25,29 @@
       "expo-font"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "icon": "./assets/icon.png",
+      "backgroundColor": "#0b0f1a"
     },
     "android": {
+      "icon": "./assets/icon.png",
+      "backgroundColor": "#0b0f1a",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/monochrome-icon.png",
         "backgroundColor": "#0b0f1a"
       }
     },
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "ShowTracker",
+      "shortName": "ShowTracker",
+      "description": "Track shows, anime, and movies across web and mobile.",
+      "themeColor": "#0b0f1a",
+      "backgroundColor": "#0b0f1a",
+      "display": "standalone"
     }
   }
 }
