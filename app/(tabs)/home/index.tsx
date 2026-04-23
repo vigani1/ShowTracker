@@ -25,6 +25,7 @@ import { toHttpsImageUrl } from "@/lib/image-url";
 
 type HomeTab = "watchlist" | "upcoming";
 type HomeMediaFilter = "all" | "tv" | "anime";
+type HomePausedSectionMode = "auto_paused_only" | "all_paused";
 
 type WatchlistItem = {
   id: string;
@@ -40,6 +41,8 @@ type WatchlistItem = {
   remainingEpisodes: number | null;
   watchedEpisodes: number;
   totalEpisodes: number | null;
+  autoPausedAt?: number | null;
+  lastWatchedAt?: number | null;
 };
 
 type UpcomingEpisode = {
@@ -52,6 +55,7 @@ type UpcomingEpisode = {
     seasonNumber: number;
     episodeNumber: number;
     name?: string;
+    airDate?: string;
   };
 };
 
@@ -104,11 +108,37 @@ function estimateAiredEpisodesFromTmdb(details: TmdbShowDetails) {
     return parsed.getTime() > startOfToday.getTime();
   };
 
+  const isReleasedEpisode = (airDate?: string | null) => {
+    const parsed = parseEpisodeAirDate(airDate);
+    if (!parsed) {
+      return false;
+    }
+    return parsed.getTime() < startOfToday.getTime();
+  };
+
   const nonSpecialSeasons = (details.seasons ?? []).filter(
     (season) => season.season_number >= 1
   );
 
   const getEpisodeOffset = (seasonNumber: number, episodeNumber: number) => {
+    const targetSeason = nonSpecialSeasons.find(
+      (season) => season.season_number === seasonNumber
+    );
+    const targetSeasonEpisodeCount =
+      typeof targetSeason?.episode_count === "number"
+        ? Math.max(targetSeason.episode_count, 0)
+        : null;
+
+    // Some TMDB TV entries report absolute episode numbers in
+    // `last_episode_to_air` / `next_episode_to_air` even when a season number
+    // is also present. When that happens, avoid double-counting prior seasons.
+    if (
+      typeof targetSeasonEpisodeCount === "number" &&
+      episodeNumber > targetSeasonEpisodeCount
+    ) {
+      return Math.max(episodeNumber, 0);
+    }
+
     const episodesBeforeSeason = nonSpecialSeasons.reduce((sum, season) => {
       if (season.season_number < seasonNumber) {
         return sum + Math.max(season.episode_count ?? 0, 0);
@@ -122,16 +152,26 @@ function estimateAiredEpisodesFromTmdb(details: TmdbShowDetails) {
   const nextEpisode = details.next_episode_to_air;
   if (
     typeof nextEpisode?.season_number === "number" &&
-    typeof nextEpisode.episode_number === "number" &&
-    isFutureEpisode(nextEpisode.air_date)
+    typeof nextEpisode.episode_number === "number"
   ) {
-    const airedBeforeNext = getEpisodeOffset(
+    const releasedThroughNext = getEpisodeOffset(
       nextEpisode.season_number,
-      nextEpisode.episode_number - 1
+      nextEpisode.episode_number
     );
 
-    if (airedBeforeNext > 0) {
-      return airedBeforeNext;
+    if (isReleasedEpisode(nextEpisode.air_date) && releasedThroughNext > 0) {
+      return releasedThroughNext;
+    }
+
+    if (isFutureEpisode(nextEpisode.air_date)) {
+      const airedBeforeNext = getEpisodeOffset(
+        nextEpisode.season_number,
+        nextEpisode.episode_number - 1
+      );
+
+      if (airedBeforeNext > 0) {
+        return airedBeforeNext;
+      }
     }
   }
 
@@ -142,16 +182,14 @@ function estimateAiredEpisodesFromTmdb(details: TmdbShowDetails) {
     typeof lastSeasonNumber === "number" &&
     typeof lastEpisodeNumber === "number"
   ) {
+    const adjustedEpisodeNumber = isReleasedEpisode(lastEpisode?.air_date)
+      ? lastEpisodeNumber
+      : lastEpisodeNumber - 1;
+
     if (nonSpecialSeasons.length === 0) {
-      const adjustedEpisodeNumber = isFutureEpisode(lastEpisode?.air_date)
-        ? lastEpisodeNumber - 1
-        : lastEpisodeNumber;
       return Math.max(adjustedEpisodeNumber, 0);
     }
 
-    const adjustedEpisodeNumber = isFutureEpisode(lastEpisode?.air_date)
-      ? lastEpisodeNumber - 1
-      : lastEpisodeNumber;
     const airedAcrossSeasons = getEpisodeOffset(lastSeasonNumber, adjustedEpisodeNumber);
 
     if (airedAcrossSeasons > 0) {
@@ -200,6 +238,52 @@ function getUpcomingDistanceLabel(daysUntil: number) {
   if (daysUntil === -1) return "Yesterday";
   if (daysUntil > 1) return `In ${daysUntil}d`;
   return `${Math.abs(daysUntil)}d ago`;
+}
+
+function parseEpisodeAirtime(airDate?: string | null) {
+  const trimmed = airDate?.trim();
+  if (
+    !trimmed ||
+    /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ||
+    !/[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)
+  ) {
+    return null;
+  }
+
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatEpisodeAirtime(airDate?: string | null) {
+  const parsed = parseEpisodeAirtime(airDate);
+  if (!parsed) {
+    return null;
+  }
+
+  return parsed.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatPausedSinceLabel(timestamp?: number | null) {
+  if (typeof timestamp !== "number") {
+    return "Auto-paused";
+  }
+
+  const pausedAt = new Date(timestamp);
+  const now = Date.now();
+  const diffDays = Math.max(0, Math.floor((now - pausedAt.getTime()) / DAY_IN_MS));
+
+  if (diffDays < 7) {
+    return diffDays <= 1 ? "Paused recently" : `Paused ${diffDays}d ago`;
+  }
+
+  if (diffDays < 30) {
+    return `Paused ${Math.floor(diffDays / 7)}w ago`;
+  }
+
+  return `Paused ${Math.floor(diffDays / 30)}mo ago`;
 }
 
 function getColumnCount(width: number, isWeb: boolean) {
@@ -359,6 +443,8 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
   const statusLabel = item.status
     .replace(/_/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+  const isAutoPaused = item.status === "paused" && typeof item.autoPausedAt === "number";
+  const metadataLabel = isAutoPaused ? formatPausedSinceLabel(item.autoPausedAt) : statusLabel;
 
   const card = (
     <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
@@ -397,11 +483,16 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
           </Text>
           <View className="mt-1 flex-row items-center gap-2">
             <Text className="text-[10px] uppercase tracking-wide text-zinc-300">
-              {statusLabel}
+              {metadataLabel}
             </Text>
             {item.isAutoTracked ? (
               <Text className="rounded-sm border border-red-400/40 bg-red-500/20 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-red-100">
                 Auto
+              </Text>
+            ) : null}
+            {isAutoPaused ? (
+              <Text className="rounded-sm border border-amber-300/30 bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-100">
+                Snoozed
               </Text>
             ) : null}
           </View>
@@ -472,6 +563,7 @@ function UpcomingEpisodeListItem({
   isWeb: boolean;
 }) {
   const distanceLabel = getUpcomingDistanceLabel(episode.daysUntil);
+  const airtimeLabel = formatEpisodeAirtime(episode.episode.airDate);
   const episodeTitle =
     episode.episode.name && episode.episode.name !== episode.showTitle
       ? episode.episode.name
@@ -535,6 +627,13 @@ function UpcomingEpisodeListItem({
           <Text className="text-[10px] font-black uppercase tracking-[1.2px] text-zinc-400">
             {getEpisodeCodeLabel(episode.episode)}
           </Text>
+          {airtimeLabel ? (
+            <View className="rounded-full border border-[#5a3139] bg-[#241419] px-2 py-1">
+              <Text className="text-[10px] font-black uppercase tracking-[1.1px] text-[#ffae9f]">
+                {airtimeLabel}
+              </Text>
+            </View>
+          ) : null}
           <View className="rounded-full border border-[#342126] bg-[#1a1316] px-2 py-1">
             <Text className="text-[10px] font-black uppercase tracking-[1.1px] text-zinc-300">
               {episode.mediaType === "anime" ? "Anime" : "TV"}
@@ -1287,6 +1386,8 @@ export function HomeScreen() {
   const [activeTab, setActiveTab] = useState<HomeTab>("watchlist");
   const [mediaFilter, setMediaFilter] = useState<HomeMediaFilter>("all");
   const [watchlistVisibleCount, setWatchlistVisibleCount] = useState(0);
+  const [pausedVisibleCount, setPausedVisibleCount] = useState(0);
+  const [notStartedVisibleCount, setNotStartedVisibleCount] = useState(0);
   const [isLoadingMoreWatchlist, setIsLoadingMoreWatchlist] = useState(false);
   const [isHydratingInitialUpcoming, setIsHydratingInitialUpcoming] = useState(false);
   const [isMonthPickerVisible, setIsMonthPickerVisible] = useState(false);
@@ -1373,6 +1474,10 @@ export function HomeScreen() {
   );
   const hydrateScheduleRange = useAction(api.schedule.hydrateScheduleRange);
   const syncTrackedAnimeRelations = useAction(api.shows.syncTrackedAnimeRelations);
+  const homeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
+  const pausedSectionMode =
+    (homeSettings?.pausedSectionMode as HomePausedSectionMode | undefined) ??
+    "auto_paused_only";
 
   const hydrateRange = useCallback(
     async (startDate: string, days: number) => {
@@ -1484,8 +1589,6 @@ export function HomeScreen() {
         (item) =>
           item.mediaType === "tv" &&
           typeof item.tmdbId === "number" &&
-          item.remainingEpisodes !== null &&
-          item.remainingEpisodes > 0 &&
           tmdbAiredEpisodeCountById[item.tmdbId] === undefined &&
           (tmdbAiredLookupFailuresById[item.tmdbId] ?? 0) < 3
       )
@@ -1561,12 +1664,16 @@ export function HomeScreen() {
         : 0;
       const allRemainingEpisodesAreFuture =
         typeof item.remainingEpisodes === "number" &&
+        item.remainingEpisodes > 0 &&
         futureUpcomingCount >= item.remainingEpisodes;
 
       if (item.status === "paused") return false;
       if (item.status === "dropped") return false;
       if (item.trackingState === "upcoming") return false;
       if (item.status === "completed") return false;
+      if (item.watchedEpisodes <= 0) {
+        return false;
+      }
       if (allRemainingEpisodesAreFuture) {
         return false;
       }
@@ -1599,6 +1706,62 @@ export function HomeScreen() {
     watchlistItems,
   ]);
 
+  const pausedSectionWatchlist = useMemo(() => {
+    return watchlistItems.filter((item) => {
+      if (item.status !== "paused") {
+        return false;
+      }
+      if (typeof item.remainingEpisodes !== "number" || item.remainingEpisodes <= 0) {
+        return false;
+      }
+      if (typeof item.watchedEpisodes !== "number" || item.watchedEpisodes <= 0) {
+        return false;
+      }
+      if (
+        pausedSectionMode === "auto_paused_only" &&
+        typeof item.autoPausedAt !== "number"
+      ) {
+        return false;
+      }
+      if (item.trackingState === "upcoming") {
+        return false;
+      }
+      if (mediaFilter !== "all" && item.mediaType !== mediaFilter) {
+        return false;
+      }
+      return true;
+    }).sort((a, b) => {
+      const autoPausedDelta = Number(Boolean(b.autoPausedAt)) - Number(Boolean(a.autoPausedAt));
+      if (autoPausedDelta !== 0) {
+        return autoPausedDelta;
+      }
+
+      const pausedAtDelta = (b.autoPausedAt ?? 0) - (a.autoPausedAt ?? 0);
+      if (pausedAtDelta !== 0) {
+        return pausedAtDelta;
+      }
+
+      return (b.lastWatchedAt ?? 0) - (a.lastWatchedAt ?? 0);
+    });
+  }, [mediaFilter, pausedSectionMode, watchlistItems]);
+
+  const notStartedSectionWatchlist = useMemo(() => {
+    return watchlistItems
+      .filter((item) => {
+        if (item.status === "paused" || item.status === "dropped" || item.status === "completed") {
+          return false;
+        }
+        if (item.watchedEpisodes > 0) {
+          return false;
+        }
+        if (mediaFilter !== "all" && item.mediaType !== mediaFilter) {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => (b.lastWatchedAt ?? 0) - (a.lastWatchedAt ?? 0));
+  }, [mediaFilter, watchlistItems]);
+
   const upcomingGroups = useMemo(() => ((upcoming ?? []) as UpcomingGroup[]), [upcoming]);
   const episodesByDate = useMemo(() => {
     const nextMap = new Map<string, UpcomingEpisode[]>();
@@ -1610,6 +1773,7 @@ export function HomeScreen() {
 
   const columns = getColumnCount(effectiveWidth, isWeb);
   const watchlistPageSize = Math.max(columns * 3, 6);
+  const secondarySectionPageSize = Math.max(columns * 2, 6);
   const isWideCalendar = usesMonthCalendarLayout && effectiveWidth >= 1180;
   const webCalendarDays = useMemo(() => {
     const gridStart = startOfWeekDate(currentMonthDate);
@@ -1651,8 +1815,6 @@ export function HomeScreen() {
         (item) =>
           item.mediaType === "tv" &&
           typeof item.tmdbId === "number" &&
-          item.remainingEpisodes !== null &&
-          item.remainingEpisodes > 0 &&
           tmdbAiredEpisodeCountById[item.tmdbId] === undefined &&
           (tmdbAiredLookupFailuresById[item.tmdbId] ?? 0) < 3
       ).length,
@@ -1713,7 +1875,9 @@ export function HomeScreen() {
             : "Weekly mobile calendar with direct day picks and quick navigation.",
         };
 
-  const watchlistCount = isWatchlistVisualLoading ? watchlistItems.length : filteredWatchlist.length;
+  const watchlistCount = isWatchlistVisualLoading
+    ? watchlistItems.length
+    : filteredWatchlist.length + pausedSectionWatchlist.length + notStartedSectionWatchlist.length;
 
   useEffect(() => {
     if (activeTab !== "upcoming" || !usesMonthCalendarLayout) {
@@ -1766,6 +1930,24 @@ export function HomeScreen() {
     });
     setIsLoadingMoreWatchlist(false);
   }, [filteredWatchlist.length, watchlistPageSize]);
+
+  useEffect(() => {
+    setPausedVisibleCount((current) =>
+      Math.min(
+        pausedSectionWatchlist.length,
+        Math.max(current, secondarySectionPageSize)
+      )
+    );
+  }, [pausedSectionWatchlist.length, secondarySectionPageSize]);
+
+  useEffect(() => {
+    setNotStartedVisibleCount((current) =>
+      Math.min(
+        notStartedSectionWatchlist.length,
+        Math.max(current, secondarySectionPageSize)
+      )
+    );
+  }, [notStartedSectionWatchlist.length, secondarySectionPageSize]);
 
   useEffect(() => {
     if (watchlist === undefined) {
@@ -1831,6 +2013,25 @@ export function HomeScreen() {
   const displayWatchlistRows = useMemo(
     () => chunkItems(displayWatchlistItems, columns),
     [columns, displayWatchlistItems]
+  );
+  const visiblePausedSectionItems = useMemo(
+    () => pausedSectionWatchlist.slice(0, pausedVisibleCount),
+    [pausedSectionWatchlist, pausedVisibleCount]
+  );
+  const visibleNotStartedSectionItems = useMemo(
+    () => notStartedSectionWatchlist.slice(0, notStartedVisibleCount),
+    [notStartedSectionWatchlist, notStartedVisibleCount]
+  );
+  const hasMorePausedSection = pausedVisibleCount < pausedSectionWatchlist.length;
+  const hasMoreNotStartedSection =
+    notStartedVisibleCount < notStartedSectionWatchlist.length;
+  const autoPausedRows = useMemo(
+    () => chunkItems(visiblePausedSectionItems, columns),
+    [visiblePausedSectionItems, columns]
+  );
+  const notStartedRows = useMemo(
+    () => chunkItems(visibleNotStartedSectionItems, columns),
+    [visibleNotStartedSectionItems, columns]
   );
 
   const goToTodayCalendar = useCallback(() => {
@@ -1951,7 +2152,10 @@ export function HomeScreen() {
         onValueChange={(value: HomeMediaFilter) => setMediaFilter(value)}
       />
 
-      {!isWatchlistVisualLoading && filteredWatchlist.length === 0 ? (
+      {!isWatchlistVisualLoading &&
+      filteredWatchlist.length === 0 &&
+      pausedSectionWatchlist.length === 0 &&
+      notStartedSectionWatchlist.length === 0 ? (
         <View className="mt-6 items-center rounded-xl border-2 border-border-default bg-bg-surface px-6 py-12">
           <Text className="text-lg font-semibold text-text-primary">
             No active shows
@@ -1963,6 +2167,164 @@ export function HomeScreen() {
       ) : null}
     </View>
   );
+
+  const autoPausedSection =
+    !isWatchlistVisualLoading && pausedSectionWatchlist.length > 0 ? (
+      <View className="mt-6 overflow-hidden rounded-[28px] border border-[#4d3831] bg-[#120f0f]">
+        <LinearGradient
+          colors={["rgba(251,191,36,0.12)", "rgba(120,53,15,0.08)", "rgba(18,15,15,0.98)"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
+        />
+        <View className="border-b border-[#382921] px-5 py-4">
+          <View className="flex-row items-start justify-between gap-4">
+            <View className="flex-1">
+              <Text className="text-[10px] font-black uppercase tracking-[1.8px] text-amber-200/70">
+                {pausedSectionMode === "all_paused"
+                  ? "Paused Queue"
+                  : "Haven't Watched In A While"}
+              </Text>
+              <Text className="mt-2 text-2xl font-black text-white">
+                {pausedSectionMode === "all_paused" ? "Paused" : "Auto-paused"}
+              </Text>
+              <Text className="mt-1 text-sm text-zinc-400">
+                {pausedSectionMode === "all_paused"
+                  ? "Everything you've paused, including titles snoozed automatically."
+                  : "Shows you were following that got snoozed after inactivity."}
+              </Text>
+            </View>
+
+            <View className="rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5">
+              <Text className="text-[10px] font-black uppercase tracking-[1.2px] text-amber-100">
+                {pausedSectionWatchlist.length} paused
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <View className="px-4 py-4">
+          <View className="gap-3">
+            {autoPausedRows.map((row, rowIndex) => (
+              <View key={`auto-paused-row-${rowIndex}`} className="flex-row gap-3">
+                {row.map((item) => (
+                  <View key={`auto-paused-${item.mediaType}-${item.id}`} style={{ flex: 1 / columns }}>
+                    <WatchlistCard item={item} isWeb={isWeb} />
+                  </View>
+                ))}
+                {row.length < columns
+                  ? Array.from({ length: columns - row.length }, (_, fillerIndex) => (
+                      <View
+                        key={`auto-paused-row-${rowIndex}-filler-${fillerIndex}`}
+                        style={{ flex: 1 / columns }}
+                      />
+                    ))
+                  : null}
+              </View>
+            ))}
+          </View>
+          {hasMorePausedSection ? (
+            <View className="items-center pt-4">
+              <Pressable
+                accessibilityRole="button"
+                className="rounded-full border border-amber-300/20 bg-amber-400/10 px-4 py-2.5"
+                onPress={() =>
+                  setPausedVisibleCount((count) =>
+                    Math.min(
+                      count + secondarySectionPageSize,
+                      pausedSectionWatchlist.length
+                    )
+                  )
+                }
+                style={({ pressed }) => ({
+                  opacity: pressed ? 0.9 : 1,
+                })}
+              >
+                <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-amber-100">
+                  Show more
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    ) : null;
+
+  const notStartedSection =
+    !isWatchlistVisualLoading && notStartedSectionWatchlist.length > 0 ? (
+      <View className="mt-6 overflow-hidden rounded-[28px] border border-[#243744] bg-[#0c1216]">
+        <LinearGradient
+          colors={["rgba(56,189,248,0.12)", "rgba(14,116,144,0.08)", "rgba(12,18,22,0.98)"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
+        />
+        <View className="border-b border-[#20313c] px-5 py-4">
+          <View className="flex-row items-start justify-between gap-4">
+            <View className="flex-1">
+              <Text className="text-[10px] font-black uppercase tracking-[1.8px] text-sky-200/70">
+                In Your Backlog
+              </Text>
+              <Text className="mt-2 text-2xl font-black text-white">Haven&apos;t started</Text>
+              <Text className="mt-1 text-sm text-zinc-400">
+                Shows you&apos;ve added but haven&apos;t watched yet.
+              </Text>
+            </View>
+
+            <View className="rounded-full border border-sky-300/25 bg-sky-400/10 px-3 py-1.5">
+              <Text className="text-[10px] font-black uppercase tracking-[1.2px] text-sky-100">
+                {notStartedSectionWatchlist.length} queued
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <View className="px-4 py-4">
+          <View className="gap-3">
+            {notStartedRows.map((row, rowIndex) => (
+              <View key={`not-started-row-${rowIndex}`} className="flex-row gap-3">
+                {row.map((item) => (
+                  <View key={`not-started-${item.mediaType}-${item.id}`} style={{ flex: 1 / columns }}>
+                    <WatchlistCard item={item} isWeb={isWeb} />
+                  </View>
+                ))}
+                {row.length < columns
+                  ? Array.from({ length: columns - row.length }, (_, fillerIndex) => (
+                      <View
+                        key={`not-started-row-${rowIndex}-filler-${fillerIndex}`}
+                        style={{ flex: 1 / columns }}
+                      />
+                    ))
+                  : null}
+              </View>
+            ))}
+          </View>
+          {hasMoreNotStartedSection ? (
+            <View className="items-center pt-4">
+              <Pressable
+                accessibilityRole="button"
+                className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2.5"
+                onPress={() =>
+                  setNotStartedVisibleCount((count) =>
+                    Math.min(
+                      count + secondarySectionPageSize,
+                      notStartedSectionWatchlist.length
+                    )
+                  )
+                }
+                style={({ pressed }) => ({
+                  opacity: pressed ? 0.9 : 1,
+                })}
+              >
+                <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-sky-100">
+                  Show more
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    ) : null;
 
   const watchlistFooter =
     !isWatchlistVisualLoading && hasMoreWatchlist ? (
@@ -2084,6 +2446,9 @@ export function HomeScreen() {
                   ) : null}
                 </View>
 
+                {autoPausedSection}
+                {notStartedSection}
+
                 {watchlistFooter}
               </ScrollView>
             ) : (
@@ -2099,7 +2464,13 @@ export function HomeScreen() {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{ paddingBottom: 24 }}
                 ListHeaderComponent={watchlistHeader}
-                ListFooterComponent={isWatchlistFilterSettling ? watchlistSettlingFooter : watchlistFooter}
+                ListFooterComponent={
+                  <>
+                    {autoPausedSection}
+                    {notStartedSection}
+                    {isWatchlistFilterSettling ? watchlistSettlingFooter : watchlistFooter}
+                  </>
+                }
               />
             )
           ) : (

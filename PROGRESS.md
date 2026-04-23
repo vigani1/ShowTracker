@@ -224,4 +224,10 @@ Phase 12: Notifications
 
 - [ ] Add an "inactive" or "snoozed" state between watching and paused: if a watchlist show has no watch activity for around 30 days, move it out of the active watchlist into a softer auto-paused bucket without changing the user's real paused status
 
+### Next Up
+
+- [x] Home schedule: show items based on actual air time when the source provides it, instead of only date buckets
+- [x] Home screen: add an auto-paused section under the main active shows list for "haven't watched in a while" entries
+- [ ] Production tracking audit: investigate why some recently watched shows are already marked paused by the next episode window (example: One Piece)
+
 ### Known Issues (To Fix)

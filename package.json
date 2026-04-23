@@ -5,16 +5,16 @@
   "private": true,
   "scripts": {
     "start": "expo start",
-    "start:web": "env -u CI expo start --web",
-    "start:web:clear": "env -u CI expo start --web --clear",
+    "start:web": "cross-env CI=false expo start --web",
+    "start:web:clear": "cross-env CI=false expo start --web --clear",
     "start:clear": "expo start --clear",
     "lint": "expo lint",
     "audit:data-quality": "node scripts/data-quality-audit.mjs",
     "audit:anime-relations": "node scripts/anime-relations-audit.mjs",
     "ui:inspect": "node scripts/ui-inspect.mjs",
-    "ui:inspect:quick": "UI_INSPECT_PRESET=quick node scripts/ui-inspect.mjs",
-    "ui:inspect:headed": "PW_HEADLESS=false node scripts/ui-inspect.mjs",
-    "ui:inspect:quick:headed": "UI_INSPECT_PRESET=quick PW_HEADLESS=false node scripts/ui-inspect.mjs",
+    "ui:inspect:quick": "cross-env UI_INSPECT_PRESET=quick node scripts/ui-inspect.mjs",
+    "ui:inspect:headed": "cross-env PW_HEADLESS=false node scripts/ui-inspect.mjs",
+    "ui:inspect:quick:headed": "cross-env UI_INSPECT_PRESET=quick PW_HEADLESS=false node scripts/ui-inspect.mjs",
     "ui:inspect:open": "npx playwright open http://localhost:8081"
   },
   "dependencies": {
@@ -47,6 +47,7 @@
   "devDependencies": {
     "@playwright/test": "^1.58.0",
     "@types/react": "~19.1.10",
+    "cross-env": "^7.0.3",
     "eslint": "^8.57.1",
     "eslint-config-expo": "~10.0.0",
     "tailwindcss": "^3.4.14",

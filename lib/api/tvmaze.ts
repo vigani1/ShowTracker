@@ -24,6 +24,8 @@ export type TvMazeEpisode = {
   number: number;
   summary?: string | null;
   airdate?: string | null;
+  airtime?: string | null;
+  airstamp?: string | null;
   runtime?: number | null;
   image?: { medium?: string; original?: string } | null;
 };
@@ -32,6 +34,8 @@ export type TvMazeScheduleEntry = {
   id: number;
   name: string;
   airdate?: string | null;
+  airtime?: string | null;
+  airstamp?: string | null;
   season: number;
   number: number;
   runtime?: number | null;

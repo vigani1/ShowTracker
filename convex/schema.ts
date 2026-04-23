@@ -38,6 +38,9 @@ export default defineSchema({
       v.literal("auto_open_next"),
       v.literal("auto_pause_others_keep_next")
     ),
+    pausedSectionMode: v.optional(
+      v.union(v.literal("auto_paused_only"), v.literal("all_paused"))
+    ),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
   userAnimeFranchiseSettings: defineTable({

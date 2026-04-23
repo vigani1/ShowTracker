@@ -274,6 +274,8 @@ export function normalizeTvMazeScheduleEntry(
   const normalizedRuntime = entry.runtime && entry.runtime > 0
     ? entry.runtime
     : DEFAULTS.EPISODE_RUNTIME_MINUTES;
+  const normalizedAirDate =
+    entry.airstamp?.trim() || (entry.airdate ?? undefined);
 
   return {
     showId: `tvmaze:${entry.show.id}`,
@@ -286,7 +288,7 @@ export function normalizeTvMazeScheduleEntry(
       name: entry.name?.trim() || `Episode ${entry.number}`,
       overview: entry.show.summary ?? undefined,
       stillUrl: entry.image?.original ?? entry.image?.medium ?? undefined,
-      airDate: entry.airdate ?? undefined,
+      airDate: normalizedAirDate,
       runtime: normalizedRuntime,
     },
     posterUrl: entry.show.image?.original ?? entry.show.image?.medium ?? undefined,

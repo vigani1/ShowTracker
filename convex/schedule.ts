@@ -127,6 +127,20 @@ function formatDate(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function getEpisodeAirtimeTimestamp(airDate?: string | null) {
+  const trimmed = airDate?.trim();
+  if (
+    !trimmed ||
+    /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ||
+    !/[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)
+  ) {
+    return null;
+  }
+
+  const parsed = new Date(trimmed);
+  return Number.isFinite(parsed.getTime()) ? parsed.getTime() : null;
+}
+
 function startOfDay(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
@@ -743,15 +757,10 @@ export const getUpcomingSchedule = query({
         if (tracked.mediaType !== "tv" && tracked.mediaType !== "anime") continue;
         if (args.mediaFilter && tracked.mediaType !== args.mediaFilter) continue;
 
-        const episodeDate = entry.episode.airDate
-          ? new Date(entry.episode.airDate)
-          : new Date(row.date);
-        const validDate = Number.isFinite(episodeDate.getTime())
-          ? episodeDate
-          : new Date(row.date);
-        const dayKey = formatDate(validDate);
+        const dayKey = row.date;
+        const bucketDate = new Date(row.date);
         const daysUntil = Math.floor(
-          (startOfDay(validDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
+          (startOfDay(bucketDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
 
         const uniqueKey = `${dayKey}:${tracked.routeId ?? entry.showId}:${entry.episode.seasonNumber}:${entry.episode.episodeNumber}`;
@@ -783,7 +792,17 @@ export const getUpcomingSchedule = query({
       .map(([date, episodes]) => ({
         date,
         episodes: episodes.sort((a, b) => {
-          if (a.daysUntil !== b.daysUntil) return a.daysUntil - b.daysUntil;
+          const aAirtime = getEpisodeAirtimeTimestamp(a.episode.airDate);
+          const bAirtime = getEpisodeAirtimeTimestamp(b.episode.airDate);
+
+          if (aAirtime !== null && bAirtime !== null && aAirtime !== bAirtime) {
+            return aAirtime - bAirtime;
+          }
+
+          if (aAirtime !== null || bAirtime !== null) {
+            return aAirtime === null ? 1 : -1;
+          }
+
           return a.showTitle.localeCompare(b.showTitle);
         }),
       }));
@@ -893,15 +912,10 @@ export const getFutureUpcomingCountsForWatchlist = query({
         if (tracked.mediaType !== "tv" && tracked.mediaType !== "anime") continue;
         if (args.mediaFilter && tracked.mediaType !== args.mediaFilter) continue;
 
-        const episodeDate = entry.episode.airDate
-          ? new Date(entry.episode.airDate)
-          : new Date(row.date);
-        const validDate = Number.isFinite(episodeDate.getTime())
-          ? episodeDate
-          : new Date(row.date);
-        const dayKey = formatDate(validDate);
+        const dayKey = row.date;
+        const bucketDate = new Date(row.date);
         const daysUntil = Math.floor(
-          (startOfDay(validDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
+          (startOfDay(bucketDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
 
         if (daysUntil <= 0) {

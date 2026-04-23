@@ -44,3 +44,7 @@ Thumbs.db
 # Testing
 coverage/
 artifacts/
+
+# Local exports / scratch data
+backup-export/
+backups

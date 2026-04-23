@@ -91,6 +91,7 @@ type AnimeCompletionBehavior =
   | "ask_every_time"
   | "auto_open_next"
   | "auto_pause_others_keep_next";
+type HomePausedSectionMode = "auto_paused_only" | "all_paused";
 
 const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
 
@@ -661,6 +662,9 @@ export default function ProfileScreen() {
   const animeCompletionBehavior =
     (animeHomeSettings?.completionBehavior as AnimeCompletionBehavior | undefined) ??
     "ask_every_time";
+  const homePausedSectionMode =
+    (animeHomeSettings?.pausedSectionMode as HomePausedSectionMode | undefined) ??
+    "auto_paused_only";
 
   const isInitialLoading = profileSummary === undefined || animeHomeSettings === undefined;
   const isHeavySectionsLoading =
@@ -961,6 +965,7 @@ export default function ProfileScreen() {
     async (args: {
       relationMode?: AnimeHomeFranchiseMode;
       completionBehavior?: AnimeCompletionBehavior;
+      pausedSectionMode?: HomePausedSectionMode;
     }) => {
       if (isSavingAnimeSettingsRef.current) {
         return false;
@@ -1058,6 +1063,13 @@ export default function ProfileScreen() {
   const handleSetCompletionBehavior = useCallback(
     async (completionBehavior: AnimeCompletionBehavior) => {
       await updateAnimeSettings({ completionBehavior });
+    },
+    [updateAnimeSettings]
+  );
+
+  const handleSetPausedSectionMode = useCallback(
+    async (pausedSectionMode: HomePausedSectionMode) => {
+      await updateAnimeSettings({ pausedSectionMode });
     },
     [updateAnimeSettings]
   );
@@ -1889,8 +1901,94 @@ export default function ProfileScreen() {
                   </View>
                 </View>
 
+                <View>
+                  <Text className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    Home Paused Shelf
+                  </Text>
+
+                  <View className="gap-2">
+                    <Pressable
+                      disabled={isSavingAnimeSettings}
+                      onPress={() => {
+                        void handleSetPausedSectionMode("auto_paused_only");
+                      }}
+                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                        homePausedSectionMode === "auto_paused_only"
+                          ? "border-primary/60 bg-primary/15"
+                          : "border-border-default bg-bg-base"
+                      }`}
+                      style={({ pressed }) => ({
+                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                      })}
+                    >
+                      <View className="flex-1">
+                        <Text
+                          className={`text-sm font-semibold ${
+                            homePausedSectionMode === "auto_paused_only"
+                              ? "text-primary"
+                              : "text-text-primary"
+                          }`}
+                        >
+                          Auto-paused Only
+                        </Text>
+                        <Text className="mt-0.5 text-xs text-text-secondary">
+                          Show just the titles snoozed by inactivity.
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={
+                          homePausedSectionMode === "auto_paused_only"
+                            ? "radio-button-on"
+                            : "radio-button-off"
+                        }
+                        size={18}
+                        color={homePausedSectionMode === "auto_paused_only" ? "#ef4444" : "#71717a"}
+                      />
+                    </Pressable>
+
+                    <Pressable
+                      disabled={isSavingAnimeSettings}
+                      onPress={() => {
+                        void handleSetPausedSectionMode("all_paused");
+                      }}
+                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
+                        homePausedSectionMode === "all_paused"
+                          ? "border-primary/60 bg-primary/15"
+                          : "border-border-default bg-bg-base"
+                      }`}
+                      style={({ pressed }) => ({
+                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
+                      })}
+                    >
+                      <View className="flex-1">
+                        <Text
+                          className={`text-sm font-semibold ${
+                            homePausedSectionMode === "all_paused"
+                              ? "text-primary"
+                              : "text-text-primary"
+                          }`}
+                        >
+                          All Paused Shows
+                        </Text>
+                        <Text className="mt-0.5 text-xs text-text-secondary">
+                          Include both manually paused and auto-paused titles.
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={
+                          homePausedSectionMode === "all_paused"
+                            ? "radio-button-on"
+                            : "radio-button-off"
+                        }
+                        size={18}
+                        color={homePausedSectionMode === "all_paused" ? "#ef4444" : "#71717a"}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+
                 <Text className="text-xs text-text-muted">
-                  Tip: per-franchise overrides are available from each anime show page.
+                  Tip: anime franchise overrides are available from each anime show page.
                 </Text>
 
                 {animeSettingsError ? (
