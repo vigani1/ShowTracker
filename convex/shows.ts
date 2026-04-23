@@ -25,6 +25,10 @@ import { getTmdbShowDetails } from "@/lib/api/tmdb";
 import type { NormalizedShow } from "@/lib/api/types";
 
 const RELATION_SYNC_THROTTLE_MS = 1000 * 60 * 60 * 6;
+const REFRESH_THROTTLE_MS = 1000 * 60 * 60;
+const AUDIT_PAGE_SIZE_DEFAULT = 5;
+const AUDIT_PAGE_SIZE_MAX = 10;
+const AUDIT_LIVE_LOOKUP_FRESH_MS = 1000 * 60 * 60 * 6;
 const RELATION_SYNC_BATCH_LIMIT = 6;
 const RELATION_SYNC_MAX_GRAPH_NODES = 30;
 const IMPORT_TRACKED_SHOWS_MAX_ITEMS = 20;
@@ -473,6 +477,7 @@ function isHomeFeedNotStartedSectionEntry(
   return (
     !isCompletedWatchlistEntry(entry) &&
     !hasWatchlistProgress(entry) &&
+    entry.status !== "watching" &&
     entry.status !== "paused" &&
     entry.status !== "dropped"
   );
@@ -651,7 +656,8 @@ function selectHomeAnimeFranchiseRepresentative<T extends AnimeFranchiseSelectio
   const pausedSectionDisplayable = orderedTimeline
     .filter((entry) => isHomeFeedPausedSectionEntry(entry, options.pausedSectionMode))
     .sort((a, b) => {
-      const autoPausedDelta = Number(Boolean(b.autoPausedAt)) - Number(Boolean(a.autoPausedAt));
+      const autoPausedDelta =
+        Number(typeof b.autoPausedAt === "number") - Number(typeof a.autoPausedAt === "number");
       if (autoPausedDelta !== 0) {
         return autoPausedDelta;
       }
@@ -993,7 +999,8 @@ export const getHomeFeed = query({
     const selectedPausedEntries = selectedEntries
       .filter((entry) => isHomeFeedPausedSectionEntry(entry, pausedSectionMode))
       .sort((a, b) => {
-        const autoPausedDelta = Number(Boolean(b.autoPausedAt)) - Number(Boolean(a.autoPausedAt));
+        const autoPausedDelta =
+          Number(typeof b.autoPausedAt === "number") - Number(typeof a.autoPausedAt === "number");
         if (autoPausedDelta !== 0) {
           return autoPausedDelta;
         }
@@ -1322,8 +1329,12 @@ function buildShowPatch(
   return {
     ...incoming,
     titleLower: incoming.title.toLowerCase().trim(),
+    tmdbId: incoming.tmdbId ?? existing?.tmdbId,
     tvdbId: incoming.tvdbId ?? existing?.tvdbId,
+    anilistId: incoming.anilistId ?? existing?.anilistId,
     malId: incoming.malId ?? existing?.malId,
+    tvmazeId: incoming.tvmazeId ?? existing?.tvmazeId,
+    imdbId: incoming.imdbId ?? existing?.imdbId,
     anilistFormat: incoming.anilistFormat ?? existing?.anilistFormat,
     animeSeason: incoming.animeSeason ?? existing?.animeSeason,
     animeSeasonYear: incoming.animeSeasonYear ?? existing?.animeSeasonYear,
@@ -2888,7 +2899,7 @@ async function refreshShowMetadataAndRepairTracking(
       refreshed: false;
       repairedUsers: number;
       externalShowId: string | null;
-      reason: "show_not_found" | "unsupported_show_source" | "not_tracked";
+      reason: "show_not_found" | "unsupported_show_source" | "not_tracked" | "throttled";
     }
   | {
       refreshed: true;
@@ -2910,6 +2921,20 @@ async function refreshShowMetadataAndRepairTracking(
     };
   }
 
+  if (Date.now() - show.lastUpdated < REFRESH_THROTTLE_MS) {
+    console.info("Skipping tracked show metadata refresh because show was updated recently", {
+      showId,
+      lastUpdated: show.lastUpdated,
+    });
+
+    return {
+      refreshed: false,
+      repairedUsers: 0,
+      externalShowId: getShowRouteId(show),
+      reason: "throttled" as const,
+    };
+  }
+
   const latest = await fetchLatestNormalizedShowForExistingShow(show);
   if (!latest) {
     return {
@@ -2920,22 +2945,15 @@ async function refreshShowMetadataAndRepairTracking(
     };
   }
 
-  const refreshedShowId = await ctx.runMutation(internal.shows.upsertShowByInternalId, {
-    showId,
-    show: buildShowPayloadFromNormalized(latest, {
-      tvdbId: latest.tvdbId ?? show.tvdbId,
-    }),
-  });
-
   const userShows = await ctx.runQuery(internal.shows.findUserShowByShowId, {
-    showId: refreshedShowId,
+    showId,
   });
   const targetUserShows =
     options?.repairUserId !== undefined
       ? userShows.filter((userShow) => userShow.userId === options.repairUserId)
       : userShows;
 
-  if (options?.repairUserId !== undefined && targetUserShows.length === 0) {
+  if (targetUserShows.length === 0) {
     return {
       refreshed: false,
       repairedUsers: 0,
@@ -2949,6 +2967,13 @@ async function refreshShowMetadataAndRepairTracking(
       reason: "not_tracked" as const,
     };
   }
+
+  const refreshedShowId = await ctx.runMutation(internal.shows.upsertShowByInternalId, {
+    showId,
+    show: buildShowPayloadFromNormalized(latest, {
+      tvdbId: latest.tvdbId ?? show.tvdbId,
+    }),
+  });
 
   const repairedUsers = new Set<string>();
   if (options?.repairUserId !== undefined) {
@@ -3039,7 +3064,7 @@ export const auditTrackedShowHealth = action({
     }>;
   }> => {
     const userId = await getCurrentUserId(ctx);
-    const pageSize = Math.max(1, Math.min(args.pageSize ?? 25, 100));
+    const pageSize = Math.max(1, Math.min(args.pageSize ?? AUDIT_PAGE_SIZE_DEFAULT, AUDIT_PAGE_SIZE_MAX));
     const userShowsPage: {
       page: Array<Doc<"userShows">>;
       continueCursor: string;
@@ -3093,27 +3118,32 @@ export const auditTrackedShowHealth = action({
       }
 
       let latest: NormalizedShow | null = null;
-      try {
-        latest = await fetchLatestNormalizedShowForExistingShow(show);
-      } catch (error) {
-        results.push({
-          externalShowId: getShowRouteId(show),
-          title: show.title,
-          mediaType: show.mediaType,
-          status: userShow.status,
-          watchedEpisodesCount: Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0)),
-          storedTotalEpisodes:
-            typeof show.totalEpisodes === "number" ? show.totalEpisodes : null,
-          liveTotalEpisodes: null,
-          staleMetadata: false,
-          shouldResumeFromAutoPause: false,
-          homeVisibilityRisk: false,
-          notes: [
-            "metadata refresh failed during audit",
-            error instanceof Error ? error.message : "Unknown error",
-          ],
-        });
-        continue;
+      const wasRecentlyUpdated = Date.now() - show.lastUpdated < AUDIT_LIVE_LOOKUP_FRESH_MS;
+      if (wasRecentlyUpdated) {
+        latest = null;
+      } else {
+        try {
+          latest = await fetchLatestNormalizedShowForExistingShow(show);
+        } catch (error) {
+          results.push({
+            externalShowId: getShowRouteId(show),
+            title: show.title,
+            mediaType: show.mediaType,
+            status: userShow.status,
+            watchedEpisodesCount: Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0)),
+            storedTotalEpisodes:
+              typeof show.totalEpisodes === "number" ? show.totalEpisodes : null,
+            liveTotalEpisodes: null,
+            staleMetadata: false,
+            shouldResumeFromAutoPause: false,
+            homeVisibilityRisk: false,
+            notes: [
+              "metadata refresh failed during audit",
+              error instanceof Error ? error.message : "Unknown error",
+            ],
+          });
+          continue;
+        }
       }
       const watchedEpisodesCount = Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0));
       const storedTotalEpisodes = typeof show.totalEpisodes === "number" ? show.totalEpisodes : null;
@@ -3131,6 +3161,10 @@ export const auditTrackedShowHealth = action({
 
       if (staleMetadata) {
         notes.push(`stored total ${storedTotalEpisodes ?? "unknown"} vs live ${liveTotalEpisodes}`);
+      }
+
+      if (wasRecentlyUpdated) {
+        notes.push("skipped live provider lookup because metadata is still fresh");
       }
 
       if (shouldResumeFromAutoPause) {

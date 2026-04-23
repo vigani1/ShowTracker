@@ -243,7 +243,7 @@ function parseEpisodeAirtime(airDate?: string | null) {
   if (
     !trimmed ||
     /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ||
-    !/[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)
+    !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)
   ) {
     return null;
   }
@@ -1729,7 +1729,8 @@ export function HomeScreen() {
       }
       return true;
     }).sort((a, b) => {
-      const autoPausedDelta = Number(Boolean(b.autoPausedAt)) - Number(Boolean(a.autoPausedAt));
+      const autoPausedDelta =
+        Number(typeof b.autoPausedAt === "number") - Number(typeof a.autoPausedAt === "number");
       if (autoPausedDelta !== 0) {
         return autoPausedDelta;
       }
@@ -1747,6 +1748,9 @@ export function HomeScreen() {
     return watchlistItems
       .filter((item) => {
         if (item.status === "paused" || item.status === "dropped" || item.status === "completed") {
+          return false;
+        }
+        if (item.trackingState === "upcoming" || item.trackingState === "tba") {
           return false;
         }
         if (item.watchedEpisodes > 0) {

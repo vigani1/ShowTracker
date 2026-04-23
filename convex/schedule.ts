@@ -127,12 +127,25 @@ function formatDate(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function parseScheduleDateKey(dateString: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+    return null;
+  }
+
+  const parsed = new Date(`${dateString}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime())) {
+    return null;
+  }
+
+  return formatDate(parsed) === dateString ? parsed : null;
+}
+
 function getEpisodeAirtimeTimestamp(airDate?: string | null) {
   const trimmed = airDate?.trim();
   if (
     !trimmed ||
     /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ||
-    !/[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)
+    !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)
   ) {
     return null;
   }
@@ -330,7 +343,11 @@ function getWatchlistIdForProjection(p: {
 }
 
 function getUnixRangeForDate(dateString: string) {
-  const date = new Date(dateString);
+  const date = parseScheduleDateKey(dateString);
+  if (!date) {
+    throw new Error(`Invalid schedule date: ${dateString}`);
+  }
+
   const start = Math.floor(startOfDay(date).getTime() / 1000);
   const end = start + 24 * 60 * 60;
   return { start, end };
@@ -349,10 +366,17 @@ export const upsertScheduleBucket = mutation({
       throw new Error("Unauthorized: unauthenticated access to schedule cache");
     }
 
+    const normalizedDate = parseScheduleDateKey(args.date);
+    if (!normalizedDate) {
+      throw new Error(`Invalid schedule cache date: ${args.date}`);
+    }
+
+    const dateKey = formatDate(normalizedDate);
+
     const existing = await ctx.db
       .query("scheduleCache")
       .withIndex("by_date_type", (q) =>
-        q.eq("date", args.date).eq("mediaType", args.mediaType)
+        q.eq("date", dateKey).eq("mediaType", args.mediaType)
       )
       .collect();
 
@@ -378,7 +402,7 @@ export const upsertScheduleBucket = mutation({
     }
 
     await ctx.db.insert("scheduleCache", {
-      date: args.date,
+      date: dateKey,
       mediaType: args.mediaType,
       episodes: args.episodes,
       lastUpdated: args.lastUpdated,
@@ -758,7 +782,9 @@ export const getUpcomingSchedule = query({
         if (args.mediaFilter && tracked.mediaType !== args.mediaFilter) continue;
 
         const dayKey = row.date;
-        const bucketDate = new Date(row.date);
+        const bucketDate = parseScheduleDateKey(dayKey);
+        if (!bucketDate) continue;
+
         const daysUntil = Math.floor(
           (startOfDay(bucketDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
@@ -913,7 +939,9 @@ export const getFutureUpcomingCountsForWatchlist = query({
         if (args.mediaFilter && tracked.mediaType !== args.mediaFilter) continue;
 
         const dayKey = row.date;
-        const bucketDate = new Date(row.date);
+        const bucketDate = parseScheduleDateKey(dayKey);
+        if (!bucketDate) continue;
+
         const daysUntil = Math.floor(
           (startOfDay(bucketDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
