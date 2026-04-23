@@ -71,49 +71,47 @@ const TMDB_AIRED_LOOKUP_BATCH_SIZE = 8;
 const WATCHLIST_FUTURE_LOOKAHEAD_DAYS = 365;
 
 function estimateAiredEpisodesFromTmdb(details: TmdbShowDetails) {
-  const today = new Date();
-  const startOfToday = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate(),
-    0,
-    0,
-    0,
-    0
-  );
+  const now = new Date();
 
-  const parseEpisodeAirDate = (airDate?: string | null) => {
-    if (!airDate) {
+  const parseEpisodeReleaseTime = (airDate?: string | null) => {
+    const trimmed = airDate?.trim();
+    if (!trimmed) {
       return null;
     }
 
-    const parsedLocal = parseLocalDate(airDate.slice(0, 10));
-    if (parsedLocal) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const parsedLocal = parseLocalDate(trimmed);
+      if (!parsedLocal) {
+        return null;
+      }
+
       return parsedLocal;
     }
 
-    const parsed = new Date(airDate);
+    const parsed = new Date(trimmed);
     if (Number.isNaN(parsed.getTime())) {
       return null;
     }
 
-    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 0, 0, 0, 0);
+    return parsed;
   };
 
   const isFutureEpisode = (airDate?: string | null) => {
-    const parsed = parseEpisodeAirDate(airDate);
+    const parsed = parseEpisodeReleaseTime(airDate);
     if (!parsed) {
       return false;
     }
-    return parsed.getTime() > startOfToday.getTime();
+
+    return parsed.getTime() > now.getTime();
   };
 
   const isReleasedEpisode = (airDate?: string | null) => {
-    const parsed = parseEpisodeAirDate(airDate);
+    const parsed = parseEpisodeReleaseTime(airDate);
     if (!parsed) {
       return false;
     }
-    return parsed.getTime() < startOfToday.getTime();
+
+    return parsed.getTime() <= now.getTime();
   };
 
   const nonSpecialSeasons = (details.seasons ?? []).filter(
@@ -245,7 +243,7 @@ function parseEpisodeAirtime(airDate?: string | null) {
   if (
     !trimmed ||
     /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ||
-    !/[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)
+    !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)
   ) {
     return null;
   }
@@ -1731,7 +1729,8 @@ export function HomeScreen() {
       }
       return true;
     }).sort((a, b) => {
-      const autoPausedDelta = Number(Boolean(b.autoPausedAt)) - Number(Boolean(a.autoPausedAt));
+      const autoPausedDelta =
+        Number(typeof b.autoPausedAt === "number") - Number(typeof a.autoPausedAt === "number");
       if (autoPausedDelta !== 0) {
         return autoPausedDelta;
       }
@@ -1749,6 +1748,9 @@ export function HomeScreen() {
     return watchlistItems
       .filter((item) => {
         if (item.status === "paused" || item.status === "dropped" || item.status === "completed") {
+          return false;
+        }
+        if (item.trackingState === "upcoming" || item.trackingState === "tba") {
           return false;
         }
         if (item.watchedEpisodes > 0) {
