@@ -859,7 +859,6 @@ export function ShowDetailScreen() {
   const resetLocalTrackingProgress = useCallback(() => {
     seasonLoadGenerationRef.current += 1;
     loadingSeasonsRef.current.clear();
-    inFlightSeasonsRef.current.clear();
     setPendingOverrides({});
     setPendingEpisodeKeys({});
     setSeasonActionLoading({});
@@ -1692,7 +1691,6 @@ export function ShowDetailScreen() {
       setExpandedSeasonsInitialized(false);
       setSeasonLoading({});
       setSeasonErrors({});
-      inFlightSeasonsRef.current.clear();
       setPendingOverrides({});
       setPendingEpisodeKeys({});
       setSeasonActionLoading({});
@@ -3352,8 +3350,9 @@ export function ShowDetailScreen() {
         kind: "episode",
         episode,
         watched: watchedEpisodeKeys.has(key),
-        isUpdating: pendingEpisodeKeys[key] || false,
-        hasError: seasonWatchedKeyErrors[episode.seasonNumber] !== undefined,
+        isUpdating:
+          (pendingEpisodeKeys[key] || false) ||
+          seasonWatchedKeyErrors[episode.seasonNumber] !== undefined,
         watchCount: episodeWatchCounts[key],
         availability: getEpisodeAvailabilityLabel(episode.airDate),
       });
@@ -4016,9 +4015,6 @@ export function ShowDetailScreen() {
                 void loadAdjacentRailSeason("next");
               }}
               onToggleEpisode={handleToggleEpisodeWatched}
-              onRetrySeason={(seasonNumber) => {
-                void loadWatchedKeysForSeason(seasonNumber);
-              }}
               fallbackImageUrl={show.backdropUrl ?? show.posterUrl ?? null}
               initialScrollIndex={railAnchorMeta.initialScrollIndex}
               resetScrollKey={railAnchorEpisode ? `${show.id}:${getEpisodePositionKey(railAnchorEpisode)}` : show.id}

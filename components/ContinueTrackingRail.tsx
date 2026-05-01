@@ -27,7 +27,6 @@ export type ContinueTrackingRailItem =
       episode: NormalizedEpisode;
       watched: boolean;
       isUpdating: boolean;
-      hasError?: boolean;
       watchCount?: number;
       availability: EpisodeAvailability;
     }
@@ -46,7 +45,6 @@ type ContinueTrackingRailProps = {
   onLoadPrevious: () => void;
   onLoadNext: () => void;
   onToggleEpisode: (episode: NormalizedEpisode) => void;
-  onRetrySeason?: (seasonNumber: number) => void;
   fallbackImageUrl?: string | null;
   initialScrollIndex?: number;
   resetScrollKey: string;
@@ -66,7 +64,6 @@ export function ContinueTrackingRail({
   onLoadPrevious,
   onLoadNext,
   onToggleEpisode,
-  onRetrySeason,
   fallbackImageUrl,
   initialScrollIndex = 0,
   resetScrollKey,
@@ -224,12 +221,10 @@ export function ContinueTrackingRail({
             );
           }
 
-          const { episode, watched, isUpdating, hasError, watchCount, availability } = item;
+          const { episode, watched, isUpdating, watchCount, availability } = item;
           const imageUrl = toHttpsImageUrl(episode.stillUrl ?? fallbackImageUrl ?? undefined);
           const canToggle = availability.isReleased || watched;
-          const statusText = hasError
-            ? "Retry"
-            : isUpdating
+          const statusText = isUpdating
             ? "Saving..."
             : watched
               ? watchCount && watchCount > 1
@@ -244,14 +239,8 @@ export function ContinueTrackingRail({
           return (
             <Pressable
               key={`${episode.seasonNumber}:${episode.episodeNumber}`}
-              onPress={() => {
-                if (hasError) {
-                  onRetrySeason?.(episode.seasonNumber);
-                  return;
-                }
-                onToggleEpisode(episode);
-              }}
-              disabled={isUpdating || (!hasError && !canToggle)}
+              onPress={() => onToggleEpisode(episode)}
+              disabled={isUpdating || !canToggle}
               accessibilityRole="button"
               className="w-48 overflow-hidden rounded-2xl border-2 border-border-default bg-bg-base active:bg-bg-elevated/70 disabled:opacity-45"
               style={({ pressed }) => ({
@@ -276,9 +265,7 @@ export function ContinueTrackingRail({
                   </View>
                   <View
                     className={`h-7 w-7 items-center justify-center rounded-full border-2 ${
-                      hasError
-                        ? "border-primary/80"
-                        : watched
+                      watched
                         ? "border-success bg-success"
                         : availability.isReleased
                           ? "border-border-bright"
@@ -287,8 +274,6 @@ export function ContinueTrackingRail({
                   >
                     {isUpdating ? (
                       <ActivityIndicator size="small" color="#a1a1aa" />
-                    ) : hasError ? (
-                      <Ionicons name="refresh" size={13} color="#ef4444" />
                     ) : watched ? (
                       <Ionicons name="checkmark" size={14} color="#ffffff" />
                     ) : !availability.isReleased ? (
@@ -297,7 +282,7 @@ export function ContinueTrackingRail({
                   </View>
                 </View>
                 <Text className="text-[11px] font-semibold uppercase tracking-wide text-white/80">
-                  {hasError ? "Retry status" : watched ? "Previous" : availability.isReleased ? "Next up" : "Upcoming"}
+                  {watched ? "Previous" : availability.isReleased ? "Next up" : "Upcoming"}
                 </Text>
               </View>
 
@@ -322,8 +307,6 @@ export function ContinueTrackingRail({
                     className={`text-[11px] font-bold ${
                       watched
                         ? "text-success"
-                        : hasError
-                          ? "text-primary"
                         : availability.isReleased
                           ? "text-primary"
                           : "text-warning"
