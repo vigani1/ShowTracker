@@ -45,9 +45,12 @@
       "name": "ShowTracker",
       "shortName": "ShowTracker",
       "description": "Track shows, anime, and movies across web and mobile.",
+      "scope": "/",
       "themeColor": "#0b0f1a",
       "backgroundColor": "#0b0f1a",
-      "display": "standalone"
+      "display": "standalone",
+      "startUrl": "/home",
+      "barStyle": "black-translucent"
     }
   }
 }

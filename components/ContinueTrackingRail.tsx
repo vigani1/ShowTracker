@@ -8,9 +8,11 @@ import {
   ScrollView,
   Text,
   View,
+  useWindowDimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
+import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
 import type { NormalizedEpisode } from "@/lib/api/types";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
@@ -69,6 +71,8 @@ export function ContinueTrackingRail({
   resetScrollKey,
   prependItemCount = 0,
 }: ContinueTrackingRailProps) {
+  const { width } = useWindowDimensions();
+  const isDesktopWeb = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
   const scrollViewRef = useRef<ScrollView | null>(null);
   const scrollOffsetXRef = useRef(0);
   const dragStartScrollXRef = useRef(0);
@@ -116,7 +120,7 @@ export function ContinueTrackingRail({
 
   const panResponder = useMemo(
     () =>
-      Platform.OS === "web"
+      isDesktopWeb
         ? PanResponder.create({
             onMoveShouldSetPanResponderCapture: (_, gestureState) =>
               Math.abs(gestureState.dx) > 6 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
@@ -138,7 +142,7 @@ export function ContinueTrackingRail({
             },
           })
         : null,
-    []
+    [isDesktopWeb]
   );
 
   if (items.length === 0) {
@@ -163,7 +167,7 @@ export function ContinueTrackingRail({
     <View
       className="mb-6 overflow-hidden rounded-2xl border-2 border-border-default bg-bg-surface py-4 web:select-none"
       {...(panResponder?.panHandlers ?? {})}
-      style={Platform.OS === "web" ? { cursor: "pointer" } : undefined}
+      style={isDesktopWeb ? { cursor: "pointer" } : undefined}
     >
       <View className="mb-3 flex-row items-start justify-between gap-4 px-4">
         <View className="flex-1">
@@ -329,7 +333,7 @@ export function ContinueTrackingRail({
         ) : null}
       </ScrollView>
 
-      {Platform.OS === "web" ? (
+      {isDesktopWeb ? (
         <Text className="px-4 pt-3 text-[11px] text-text-muted">
           Click and drag to scrub through episodes.
         </Text>

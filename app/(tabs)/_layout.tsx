@@ -8,14 +8,14 @@ export default function TabsLayout() {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const isDesktop = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
-  const iosBottomInset = Math.max(insets.bottom, 14);
+  const iosBottomInset = Math.max(insets.bottom, 22);
   const mobileTabBarPaddingBottom =
-    Platform.OS === "ios" ? iosBottomInset + 5 : 6;
+    Platform.OS === "ios" ? iosBottomInset + 12 : 10;
   const mobileTabBarPaddingTop = Platform.OS === "ios" ? 2 : 6;
   const mobileTabBarHeight =
     Platform.OS === "ios"
-      ? Math.max(78, 50 + mobileTabBarPaddingTop + mobileTabBarPaddingBottom)
-      : 62;
+      ? Math.max(90, 50 + mobileTabBarPaddingTop + mobileTabBarPaddingBottom)
+      : 68;
 
   return (
     <View className="flex-1" style={{ backgroundColor: "#09090b" }}>
@@ -39,7 +39,7 @@ export default function TabsLayout() {
               Platform.OS === "ios"
                 ? {
                     paddingTop: 0,
-                    paddingBottom: 2,
+                    paddingBottom: 8,
                   }
                 : undefined,
             tabBarIconStyle: Platform.OS === "ios" ? { marginTop: -2 } : undefined,
