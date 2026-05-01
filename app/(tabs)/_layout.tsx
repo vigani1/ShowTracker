@@ -8,14 +8,18 @@ export default function TabsLayout() {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const isDesktop = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
-  const iosBottomInset = Math.max(insets.bottom, 22);
+  const isMobileWeb = Platform.OS === "web" && !isDesktop;
+  const shouldLiftTabContent = Platform.OS === "ios" || Platform.OS === "android" || isMobileWeb;
+  const iosBottomInset = Math.max(insets.bottom, 18);
   const mobileTabBarPaddingBottom =
-    Platform.OS === "ios" ? iosBottomInset + 12 : 10;
+    Platform.OS === "ios" ? iosBottomInset + 8 : isMobileWeb ? 18 : 10;
   const mobileTabBarPaddingTop = Platform.OS === "ios" ? 2 : 6;
   const mobileTabBarHeight =
     Platform.OS === "ios"
-      ? Math.max(90, 50 + mobileTabBarPaddingTop + mobileTabBarPaddingBottom)
-      : 68;
+      ? Math.max(84, 50 + mobileTabBarPaddingTop + mobileTabBarPaddingBottom)
+      : isMobileWeb
+        ? 68
+        : 68;
 
   return (
     <View className="flex-1" style={{ backgroundColor: "#09090b" }}>
@@ -35,20 +39,19 @@ export default function TabsLayout() {
                 },
             tabBarActiveTintColor: "#ef4444",
             tabBarInactiveTintColor: "#a1a1aa",
-            tabBarItemStyle:
-              Platform.OS === "ios"
-                ? {
-                    paddingTop: 0,
-                    paddingBottom: 8,
-                  }
-                : undefined,
-            tabBarIconStyle: Platform.OS === "ios" ? { marginTop: -2 } : undefined,
+            tabBarIconStyle: shouldLiftTabContent
+              ? {
+                  marginTop: Platform.OS === "ios" ? -2 : 0,
+                  transform: [{ translateY: -6 }],
+                }
+              : undefined,
             tabBarLabelStyle: {
               fontSize: 10,
               fontWeight: "900",
               textTransform: "uppercase" as const,
               letterSpacing: 0.5,
               marginBottom: Platform.OS === "ios" ? 2 : 0,
+              ...(shouldLiftTabContent ? { transform: [{ translateY: -6 }] } : null),
             },
             tabBarShowLabel: true,
           }}
