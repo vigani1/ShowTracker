@@ -17,7 +17,7 @@ const headTags = `
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="ShowTracker" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" href="/assets/icon.png" />`;
 
@@ -45,7 +45,7 @@ let html = await readFile(indexPath, "utf8");
 
 html = html.replace(
   /<meta name="viewport"[^>]*>/,
-  '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />'
+  '<meta name="viewport" content="width=device-width, initial-scale=1" />'
 );
 
 for (const pattern of [

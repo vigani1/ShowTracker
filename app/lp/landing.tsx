@@ -7,15 +7,17 @@ function NavLink({
   href,
   label,
   primary = false,
+  fullWidth = false,
 }: {
   href: "/login" | "/register";
   label: string;
   primary?: boolean;
+  fullWidth?: boolean;
 }) {
   return (
     <Link href={href} asChild>
       <Pressable
-        className={`rounded-lg border-2 px-4 py-2 ${
+        className={`rounded-lg border-2 px-4 py-2 ${fullWidth ? "flex-1 items-center" : ""} ${
           primary ? "border-primary bg-primary" : "border-border-bright bg-bg-elevated"
         }`}
       >
@@ -114,7 +116,11 @@ export default function LandingPage() {
 
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
         <View className="px-5 pb-12 pt-4">
-          <View className="mb-4 flex-row items-center justify-between rounded-2xl border-2 border-border-bright bg-bg-surface px-4 py-3">
+          <View
+            className={`mb-4 rounded-2xl border-2 border-border-bright bg-bg-surface px-4 py-3 ${
+              isDesktop ? "flex-row items-center justify-between" : "gap-3"
+            }`}
+          >
             <View className="flex-row items-center gap-2">
               <View className="h-8 w-8 items-center justify-center rounded-md border-2 border-primary bg-primary/20">
                 <Text className="text-sm font-black text-primary">ST</Text>
@@ -126,9 +132,14 @@ export default function LandingPage() {
                 ShowTracker
               </Text>
             </View>
-            <View className="flex-row gap-2">
-              <NavLink href="/login" label="Sign In" />
-              <NavLink href="/register" label="Create Account" primary />
+            <View className={`flex-row gap-2 ${isDesktop ? "" : "w-full"}`}>
+              <NavLink href="/login" label="Sign In" fullWidth={!isDesktop} />
+              <NavLink
+                href="/register"
+                label="Create Account"
+                primary
+                fullWidth={!isDesktop}
+              />
             </View>
           </View>
 

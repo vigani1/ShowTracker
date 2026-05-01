@@ -50,7 +50,7 @@
       "backgroundColor": "#0b0f1a",
       "display": "standalone",
       "startUrl": "/home",
-      "barStyle": "black-translucent"
+      "barStyle": "black"
     }
   }
 }

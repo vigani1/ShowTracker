@@ -9,15 +9,16 @@ export default function TabsLayout() {
   const insets = useSafeAreaInsets();
   const isDesktop = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
   const isMobileWeb = Platform.OS === "web" && !isDesktop;
+  const mobileWebBottomInset = isMobileWeb ? 16 : 0;
   const iosBottomInset = Math.max(insets.bottom, 16);
   const mobileTabBarPaddingBottom =
-    Platform.OS === "ios" ? iosBottomInset + 10 : isMobileWeb ? 0 : 8;
+    Platform.OS === "ios" ? iosBottomInset + 10 : isMobileWeb ? mobileWebBottomInset : 8;
   const mobileTabBarPaddingTop = Platform.OS === "ios" ? 2 : isMobileWeb ? 0 : 6;
   const mobileTabBarHeight =
     Platform.OS === "ios"
       ? Math.max(90, 50 + mobileTabBarPaddingTop + mobileTabBarPaddingBottom)
       : isMobileWeb
-        ? 58
+        ? 58 + mobileWebBottomInset
         : 64;
 
   return (
@@ -35,8 +36,6 @@ export default function TabsLayout() {
                   height: mobileTabBarHeight,
                   paddingBottom: mobileTabBarPaddingBottom,
                   paddingTop: mobileTabBarPaddingTop,
-                  bottom: isMobileWeb ? 0 : undefined,
-                  position: isMobileWeb ? "absolute" : undefined,
                 },
             tabBarItemStyle: isMobileWeb ? { height: 58 } : undefined,
             tabBarActiveTintColor: "#ef4444",
