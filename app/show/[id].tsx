@@ -828,6 +828,7 @@ export function ShowDetailScreen() {
   const [isTogglingMovieWatch, setIsTogglingMovieWatch] = useState(false);
   const [movieWatchCount, setMovieWatchCount] = useState<number | null>(null);
   const [episodeWatchCounts, setEpisodeWatchCounts] = useState<Record<string, number>>({});
+  const [hasRailInitialized, setHasRailInitialized] = useState(false);
   const [seasonWatchedKeys, setSeasonWatchedKeys] = useState<Record<number, Set<string>>>({});
   const [optimisticTrackingStatus, setOptimisticTrackingStatus] = useState<ShowTrackingStatus | null>(null);
   const [watchActionTarget, setWatchActionTarget] = useState<WatchActionTarget | null>(null);
@@ -850,6 +851,7 @@ export function ShowDetailScreen() {
   const seasonWatchedKeyErrorsRef = useRef(seasonWatchedKeyErrors);
   const loadingSeasonsRef = useRef<Set<number>>(new Set());
   const inFlightSeasonsRef = useRef<Set<string>>(new Set());
+  const railAutoPrefetchKeyRef = useRef<string | null>(null);
   const seasonLoadGenerationRef = useRef(0);
   const prevInWatchlistRef = useRef<boolean | null>(null);
   const metadataRefreshKeyRef = useRef<string | null>(null);
@@ -859,12 +861,14 @@ export function ShowDetailScreen() {
   const resetLocalTrackingProgress = useCallback(() => {
     seasonLoadGenerationRef.current += 1;
     loadingSeasonsRef.current.clear();
+    railAutoPrefetchKeyRef.current = null;
     setPendingOverrides({});
     setPendingEpisodeKeys({});
     setSeasonActionLoading({});
     setSeasonWatchedKeys({});
     setSeasonWatchedKeyErrors({});
     setEpisodeWatchCounts({});
+    setHasRailInitialized(false);
     setMovieWatchCount(null);
     setOptimisticTrackingStatus(null);
     setWatchActionTarget(null);
@@ -1696,6 +1700,7 @@ export function ShowDetailScreen() {
       setSeasonActionLoading({});
       setIsRailLoadingMore(false);
       setEpisodeWatchCounts({});
+      setHasRailInitialized(false);
       setIsMarkingShow(false);
       setMovieWatchCount(null);
       setWatchActionTarget(null);
@@ -2265,11 +2270,59 @@ export function ShowDetailScreen() {
   const getPreviousUnwatchedEpisodes = useCallback(
     async (targetEpisode: NormalizedEpisode) => {
       const priorEpisodes: NormalizedEpisode[] = [];
+      const knownWatchedKeys = new Set(watchedEpisodeKeys);
       const relevantSeasons = seasons
         .filter((season) => season.seasonNumber <= targetEpisode.seasonNumber)
         .sort((a, b) => a.seasonNumber - b.seasonNumber);
 
       for (const season of relevantSeasons) {
+        let seasonKeys = seasonWatchedKeysRef.current[season.seasonNumber];
+        if (
+          !seasonKeys &&
+          trackingArgs !== "skip" &&
+          getWatchedEpisodesForSeasonAction &&
+          isInWatchlist
+        ) {
+          const loadedKeys = await getWatchedEpisodesForSeasonAction({
+            ...trackingArgs,
+            season: season.seasonNumber,
+          });
+          seasonKeys = new Set(loadedKeys);
+          setSeasonWatchedKeys((prev) => {
+            if (prev[season.seasonNumber]) {
+              return prev;
+            }
+
+            return {
+              ...prev,
+              [season.seasonNumber]: seasonKeys,
+            };
+          });
+        }
+
+        if (seasonKeys) {
+          for (const key of seasonKeys) {
+            knownWatchedKeys.add(key);
+          }
+        }
+
+        for (const [key, isWatched] of Object.entries(pendingOverrides)) {
+          if (isWatched) {
+            knownWatchedKeys.add(key);
+          } else {
+            knownWatchedKeys.delete(key);
+          }
+        }
+
+        if (
+          season.seasonNumber < targetEpisode.seasonNumber &&
+          typeof season.episodeCount === "number" &&
+          season.episodeCount > 0 &&
+          countWatchedEpisodesForSeason(season.seasonNumber, knownWatchedKeys) >= season.episodeCount
+        ) {
+          continue;
+        }
+
         const seasonEpisodes =
           season.seasonNumber === targetEpisode.seasonNumber && season.episodes?.length
             ? season.episodes
@@ -2293,7 +2346,7 @@ export function ShowDetailScreen() {
           }
 
           const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
-          if (!watchedEpisodeKeys.has(key)) {
+          if (!knownWatchedKeys.has(key)) {
             priorEpisodes.push(episode);
           }
         }
@@ -2301,7 +2354,15 @@ export function ShowDetailScreen() {
 
       return priorEpisodes;
     },
-    [resolveSeasonEpisodes, seasons, watchedEpisodeKeys]
+    [
+      getWatchedEpisodesForSeasonAction,
+      isInWatchlist,
+      pendingOverrides,
+      resolveSeasonEpisodes,
+      seasons,
+      trackingArgs,
+      watchedEpisodeKeys,
+    ]
   );
 
   const handleToggleEpisodeWatched = async (episode: NormalizedEpisode) => {
@@ -3222,6 +3283,37 @@ export function ShowDetailScreen() {
       .sort(sortEpisodesByPosition);
   }, [seasons]);
 
+  const railLoadedSeasonNumbers = useMemo(() => {
+    return Array.from(
+      new Set(loadedRailEpisodes.map((episode) => episode.seasonNumber))
+    );
+  }, [loadedRailEpisodes]);
+
+  const railWatchedKeysReady = useMemo(() => {
+    if (!show || show.mediaType === "movie" || !canTrackShow || !isInWatchlist) {
+      return true;
+    }
+
+    return railLoadedSeasonNumbers.every(
+      (seasonNumber) =>
+        seasonWatchedKeys[seasonNumber] !== undefined ||
+        seasonWatchedKeyErrors[seasonNumber] !== undefined
+    );
+  }, [
+    canTrackShow,
+    isInWatchlist,
+    railLoadedSeasonNumbers,
+    seasonWatchedKeyErrors,
+    seasonWatchedKeys,
+    show,
+  ]);
+
+  useEffect(() => {
+    if (railWatchedKeysReady && loadedRailEpisodes.length > 0) {
+      setHasRailInitialized(true);
+    }
+  }, [loadedRailEpisodes.length, railWatchedKeysReady]);
+
   const railAnchorMeta = useMemo(() => {
     let latestWatchedIndex = -1;
     let firstUnwatchedIndex = -1;
@@ -3252,13 +3344,10 @@ export function ShowDetailScreen() {
     }
 
     const initialScrollIndex = Math.max(0, nextEpisodeIndex - 2);
-    const prependItemCount = initialScrollIndex;
-
     return {
       latestWatchedIndex,
       nextEpisodeIndex,
       initialScrollIndex,
-      prependItemCount,
     };
   }, [loadedRailEpisodes, watchedEpisodeKeys]);
 
@@ -3275,6 +3364,7 @@ export function ShowDetailScreen() {
 
   const railAnchorEpisode = loadedRailEpisodes[railAnchorMeta.nextEpisodeIndex] ?? null;
   const hasRailWatchedKeyError = Object.keys(seasonWatchedKeyErrors).length > 0;
+  const railAnchorEpisodeKey = railAnchorEpisode ? getEpisodePositionKey(railAnchorEpisode) : null;
 
   const getAdjacentRailSeason = useCallback(
     (direction: "previous" | "next") => {
@@ -3401,17 +3491,15 @@ export function ShowDetailScreen() {
   ]);
 
   useEffect(() => {
-    if (railAnchorEpisode || !canLoadNextRail || show?.mediaType !== "tv") {
+    if (!railWatchedKeysReady || !railAnchorEpisode || show?.mediaType !== "tv") {
       return;
     }
 
-    void loadAdjacentRailSeason("next");
-  }, [canLoadNextRail, loadAdjacentRailSeason, railAnchorEpisode, show?.mediaType]);
-
-  useEffect(() => {
-    if (!railAnchorEpisode || show?.mediaType !== "tv") {
+    const prefetchKey = `${show.id}:${railLoadedSeasonRange.first ?? "none"}:${railLoadedSeasonRange.last ?? "none"}`;
+    if (railAutoPrefetchKeyRef.current === prefetchKey) {
       return;
     }
+    railAutoPrefetchKeyRef.current = prefetchKey;
 
     const anchorSeason = seasons.find(
       (season) => season.seasonNumber === railAnchorEpisode.seasonNumber
@@ -3445,9 +3533,12 @@ export function ShowDetailScreen() {
     canLoadPreviousRail,
     loadAdjacentRailSeason,
     railAnchorEpisode,
+    railAnchorEpisodeKey,
     railLoadedSeasonRange.first,
     railLoadedSeasonRange.last,
+    railWatchedKeysReady,
     seasons,
+    show?.id,
     show?.mediaType,
   ]);
 
@@ -4002,7 +4093,7 @@ export function ShowDetailScreen() {
             </View>
           )}
 
-          {show.mediaType !== "movie" && canTrackShow && (
+          {show.mediaType !== "movie" && canTrackShow && (railWatchedKeysReady || hasRailInitialized) && (
             <ContinueTrackingRail
               items={continueTrackingRailItems}
               isLoadingMore={isRailLoadingMore}
@@ -4017,8 +4108,7 @@ export function ShowDetailScreen() {
               onToggleEpisode={handleToggleEpisodeWatched}
               fallbackImageUrl={show.backdropUrl ?? show.posterUrl ?? null}
               initialScrollIndex={railAnchorMeta.initialScrollIndex}
-              resetScrollKey={railAnchorEpisode ? `${show.id}:${getEpisodePositionKey(railAnchorEpisode)}` : show.id}
-              prependItemCount={railAnchorMeta.prependItemCount}
+              resetScrollKey={show.id}
             />
           )}
 

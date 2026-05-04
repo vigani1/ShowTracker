@@ -462,10 +462,15 @@ function WatchlistCard({ item, isWeb }: { item: WatchlistItem; isWeb: boolean })
         )}
         <LinearGradient
           pointerEvents="none"
-          colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.62)"]}
+          colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.55)", "rgba(0,0,0,0.86)"]}
           start={{ x: 0.5, y: 0 }}
           end={{ x: 0.5, y: 1 }}
-          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 96 }}
+          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 118 }}
+        />
+        <View
+          pointerEvents="none"
+          className="absolute bottom-0 left-0 right-0 border-t border-white/10 bg-black/50"
+          style={{ height: 82 }}
         />
         <View className="absolute right-2 top-2 rounded-md border-2 border-white/20 bg-black/80 px-2.5 py-1.5">
           <Text className="text-[11px] font-black uppercase tracking-wide text-white">

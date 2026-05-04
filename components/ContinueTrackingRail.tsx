@@ -50,13 +50,21 @@ type ContinueTrackingRailProps = {
   fallbackImageUrl?: string | null;
   initialScrollIndex?: number;
   resetScrollKey: string;
-  prependItemCount?: number;
 };
 
 const LOAD_MORE_THRESHOLD_PX = 180;
 const RAIL_CARD_WIDTH = 192;
 const RAIL_CARD_GAP = 12;
 const RAIL_SIDE_PADDING = 16;
+const DRAG_CLICK_SUPPRESSION_MS = 120;
+
+function getRailItemKey(item: ContinueTrackingRailItem) {
+  if (item.kind === "caught-up") {
+    return "caught-up";
+  }
+
+  return `${item.episode.seasonNumber}:${item.episode.episodeNumber}`;
+}
 
 export function ContinueTrackingRail({
   items,
@@ -69,35 +77,53 @@ export function ContinueTrackingRail({
   fallbackImageUrl,
   initialScrollIndex = 0,
   resetScrollKey,
-  prependItemCount = 0,
 }: ContinueTrackingRailProps) {
   const { width } = useWindowDimensions();
   const isDesktopWeb = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
   const scrollViewRef = useRef<ScrollView | null>(null);
   const scrollOffsetXRef = useRef(0);
   const dragStartScrollXRef = useRef(0);
+  const previousItemKeysRef = useRef<string[]>([]);
   const hasAutoPositionedRef = useRef(false);
-  const previousPrependCountRef = useRef(0);
-  const [, setIsDragging] = useState(false);
+  const isDragClickSuppressedRef = useRef(false);
+  const dragClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     hasAutoPositionedRef.current = false;
+    previousItemKeysRef.current = [];
+    isDragClickSuppressedRef.current = false;
   }, [resetScrollKey]);
 
   useEffect(() => {
-    const previousCount = previousPrependCountRef.current;
-    if (!hasAutoPositionedRef.current || prependItemCount <= previousCount) {
-      previousPrependCountRef.current = prependItemCount;
+    const nextItemKeys = items.map(getRailItemKey);
+    const previousItemKeys = previousItemKeysRef.current;
+    const previousFirstItemKey = previousItemKeys[0];
+
+    previousItemKeysRef.current = nextItemKeys;
+
+    if (!hasAutoPositionedRef.current || !previousFirstItemKey) {
       return;
     }
 
-    const addedCount = prependItemCount - previousCount;
-    const offsetDelta = addedCount * (RAIL_CARD_WIDTH + RAIL_CARD_GAP);
+    const previousFirstItemIndex = nextItemKeys.indexOf(previousFirstItemKey);
+    if (previousFirstItemIndex <= 0) {
+      return;
+    }
+
+    const offsetDelta = previousFirstItemIndex * (RAIL_CARD_WIDTH + RAIL_CARD_GAP);
     const nextOffset = scrollOffsetXRef.current + offsetDelta;
     scrollViewRef.current?.scrollTo({ x: nextOffset, animated: false });
     scrollOffsetXRef.current = nextOffset;
-    previousPrependCountRef.current = prependItemCount;
-  }, [prependItemCount]);
+  }, [items]);
+
+  useEffect(() => {
+    return () => {
+      if (dragClickSuppressionTimerRef.current) {
+        clearTimeout(dragClickSuppressionTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -126,6 +152,11 @@ export function ContinueTrackingRail({
               Math.abs(gestureState.dx) > 6 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
             onPanResponderGrant: () => {
               dragStartScrollXRef.current = scrollOffsetXRef.current;
+              isDragClickSuppressedRef.current = true;
+              if (dragClickSuppressionTimerRef.current) {
+                clearTimeout(dragClickSuppressionTimerRef.current);
+                dragClickSuppressionTimerRef.current = null;
+              }
               setIsDragging(true);
             },
             onPanResponderMove: (_, gestureState) => {
@@ -136,9 +167,21 @@ export function ContinueTrackingRail({
             },
             onPanResponderRelease: () => {
               setIsDragging(false);
+              if (isDragClickSuppressedRef.current) {
+                dragClickSuppressionTimerRef.current = setTimeout(() => {
+                  isDragClickSuppressedRef.current = false;
+                  dragClickSuppressionTimerRef.current = null;
+                }, DRAG_CLICK_SUPPRESSION_MS);
+              }
             },
             onPanResponderTerminate: () => {
               setIsDragging(false);
+              if (isDragClickSuppressedRef.current) {
+                dragClickSuppressionTimerRef.current = setTimeout(() => {
+                  isDragClickSuppressedRef.current = false;
+                  dragClickSuppressionTimerRef.current = null;
+                }, DRAG_CLICK_SUPPRESSION_MS);
+              }
             },
           })
         : null,
@@ -167,7 +210,7 @@ export function ContinueTrackingRail({
     <View
       className="mb-6 overflow-hidden rounded-2xl border-2 border-border-default bg-bg-surface py-4 web:select-none"
       {...(panResponder?.panHandlers ?? {})}
-      style={isDesktopWeb ? { cursor: "pointer" } : undefined}
+      style={isDesktopWeb ? { cursor: isDragging ? "grabbing" : "grab" } : undefined}
     >
       <View className="mb-3 flex-row items-start justify-between gap-4 px-4">
         <View className="flex-1">
@@ -243,7 +286,13 @@ export function ContinueTrackingRail({
           return (
             <Pressable
               key={`${episode.seasonNumber}:${episode.episodeNumber}`}
-              onPress={() => onToggleEpisode(episode)}
+              onPress={() => {
+                if (isDesktopWeb && isDragClickSuppressedRef.current) {
+                  return;
+                }
+
+                onToggleEpisode(episode);
+              }}
               disabled={isUpdating || !canToggle}
               accessibilityRole="button"
               className="w-48 overflow-hidden rounded-2xl border-2 border-border-default bg-bg-base active:bg-bg-elevated/70 disabled:opacity-45"
