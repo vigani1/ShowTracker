@@ -5,6 +5,7 @@ import {
   Text,
   View,
   useWindowDimensions,
+  type LayoutChangeEvent,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { useQuery } from "convex/react";
@@ -109,6 +110,7 @@ function isAbortError(error: unknown) {
 
 function getGridColumnCount(width: number, isWeb: boolean) {
   if (!isWeb) return 2;
+  if (width < 640) return 2;
   if (width >= 1800) return 8;
   if (width >= 1500) return 7;
   if (width >= 1260) return 6;
@@ -321,7 +323,14 @@ export function RecommendationsScreen() {
   const [activeTab, setActiveTab] = useState<RecTab>("all");
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
-  const columns = getGridColumnCount(width, isWeb);
+  const [gridWidth, setGridWidth] = useState(0);
+  const effectiveWidth = gridWidth || Math.max(width - 40, 0);
+  const isCompactLayout = effectiveWidth < 640;
+  const columns = getGridColumnCount(effectiveWidth, isWeb);
+
+  const onGridLayout = useCallback((event: LayoutChangeEvent) => {
+    setGridWidth(event.nativeEvent.layout.width);
+  }, []);
 
   const [recommendations, setRecommendations] = useState<NormalizedShow[]>([]);
   const [tvRecommendations, setTvRecommendations] = useState<NormalizedShow[]>([]);
@@ -835,7 +844,7 @@ export function RecommendationsScreen() {
 
   return (
     <ScreenWrapper>
-      <View className="flex-1">
+      <View className="flex-1" onLayout={onGridLayout}>
         <FlashList
           data={recommendations}
           key={`rec-grid-${columns}`}
@@ -856,6 +865,7 @@ export function RecommendationsScreen() {
                     : undefined
                 }
                 className="mb-4"
+                compact={isCompactLayout}
               />
 
               <SegmentedControl
@@ -863,6 +873,7 @@ export function RecommendationsScreen() {
                 value={activeTab}
                 onValueChange={setActiveTab}
                 className="mb-4"
+                compact={isCompactLayout}
               />
 
               {isLoading && (
@@ -923,7 +934,7 @@ export function RecommendationsScreen() {
                   params: { id: createShowRouteId(item) },
                 }}
                 className="w-full"
-                posterClassName={isWeb ? "h-56" : "h-64"}
+                posterClassName={isCompactLayout ? "h-48" : isWeb ? "h-56" : "h-64"}
               />
             </View>
           )}

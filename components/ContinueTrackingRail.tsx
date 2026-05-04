@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -87,7 +87,6 @@ export function ContinueTrackingRail({
   const hasAutoPositionedRef = useRef(false);
   const isDragClickSuppressedRef = useRef(false);
   const dragClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     hasAutoPositionedRef.current = false;
@@ -157,7 +156,6 @@ export function ContinueTrackingRail({
                 clearTimeout(dragClickSuppressionTimerRef.current);
                 dragClickSuppressionTimerRef.current = null;
               }
-              setIsDragging(true);
             },
             onPanResponderMove: (_, gestureState) => {
               scrollViewRef.current?.scrollTo({
@@ -166,7 +164,6 @@ export function ContinueTrackingRail({
               });
             },
             onPanResponderRelease: () => {
-              setIsDragging(false);
               if (isDragClickSuppressedRef.current) {
                 dragClickSuppressionTimerRef.current = setTimeout(() => {
                   isDragClickSuppressedRef.current = false;
@@ -175,7 +172,6 @@ export function ContinueTrackingRail({
               }
             },
             onPanResponderTerminate: () => {
-              setIsDragging(false);
               if (isDragClickSuppressedRef.current) {
                 dragClickSuppressionTimerRef.current = setTimeout(() => {
                   isDragClickSuppressedRef.current = false;
@@ -210,7 +206,7 @@ export function ContinueTrackingRail({
     <View
       className="mb-6 overflow-hidden rounded-2xl border-2 border-border-default bg-bg-surface py-4 web:select-none"
       {...(panResponder?.panHandlers ?? {})}
-      style={isDesktopWeb ? { cursor: isDragging ? "grabbing" : "grab" } : undefined}
+      style={isDesktopWeb ? { cursor: "pointer" } : undefined}
     >
       <View className="mb-3 flex-row items-start justify-between gap-4 px-4">
         <View className="flex-1">

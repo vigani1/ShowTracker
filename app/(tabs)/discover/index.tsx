@@ -51,6 +51,7 @@ const tabOptions = [
 
 function getGridColumnCount(width: number, isWeb: boolean) {
   if (!isWeb) return 2;
+  if (width < 640) return 2;
   if (width >= 1800) return 8;
   if (width >= 1500) return 7;
   if (width >= 1260) return 6;
@@ -218,6 +219,7 @@ export function DiscoverScreen() {
 
   const effectiveWidth = gridWidth || Math.max(width - 40, 0);
   const columns = getGridColumnCount(effectiveWidth, isWeb);
+  const isCompactLayout = effectiveWidth < 640;
   const gridItemWidth = (effectiveWidth - (columns - 1) * GRID_GAP) / columns;
 
   // Get filter options for current tab
@@ -627,11 +629,11 @@ export function DiscoverScreen() {
           href={{ pathname: "/show/[id]", params: { id: createShowRouteId(item) } }}
           rank={index < 3 ? index + 1 : undefined}
           className="w-full"
-          posterClassName={isWeb ? "h-56" : "h-64"}
+          posterClassName={isCompactLayout ? "h-48" : isWeb ? "h-56" : "h-64"}
         />
       </View>
     ),
-    [gridItemWidth, columns, isWeb]
+    [gridItemWidth, columns, isCompactLayout, isWeb]
   );
 
   const renderFooter = useCallback(() => {
@@ -682,6 +684,7 @@ export function DiscoverScreen() {
             activeState.items.length > 0 ? `${activeState.items.length} live` : undefined
           }
           className="mb-4"
+          compact={isCompactLayout}
         />
 
         {!isDesktop ? (
@@ -728,6 +731,7 @@ export function DiscoverScreen() {
             clearFilters();
           }}
           className="mb-3"
+          compact={isCompactLayout}
         />
 
         {/* Filter Buttons */}
@@ -938,6 +942,7 @@ export function DiscoverScreen() {
       genreOptions,
       yearOptions,
       ratingOptions,
+      isCompactLayout,
     ]
   );
 

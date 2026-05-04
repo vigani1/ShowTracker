@@ -259,7 +259,7 @@ function SectionHeader({
         <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
           <Ionicons name={icon} size={14} color="#ef4444" />
         </View>
-        <Text className="text-lg font-extrabold tracking-tight text-text-primary">
+        <Text className="text-lg font-extrabold tracking-tight text-text-primary" numberOfLines={1}>
           {title}
         </Text>
       </View>
@@ -315,21 +315,26 @@ function StatsPanelUnified({
         style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
       />
 
-      <View className="relative flex-row items-center justify-between px-5 pb-4 pt-5">
-        <View>
+      <View className="relative flex-row items-center justify-between gap-3 px-5 pb-4 pt-5">
+        <View className="min-w-0 flex-1">
           <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
             Total Watch Time
           </Text>
-          <Text className="mt-1 text-4xl font-black text-text-primary">
+          <Text
+            className="mt-1 text-4xl font-black text-text-primary"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
             {stats.totalWatchTimeFormatted ?? "0min"}
           </Text>
         </View>
-        <View className="items-end">
+        <View className="w-24 shrink-0 items-end">
           <View className="flex-row items-center gap-1.5">
             <Ionicons name="checkmark-circle" size={14} color="#ef4444" />
-            <Text className="text-sm font-bold text-text-primary">
-              {completed}/{total}
-            </Text>
+              <Text className="text-sm font-bold text-text-primary" numberOfLines={1}>
+                {completed}/{total}
+              </Text>
           </View>
           <View className="mt-1.5 h-1.5 w-24 overflow-hidden rounded-full bg-bg-elevated">
             <View
@@ -470,8 +475,12 @@ function StatsPanelCards({
               <Ionicons name={m.icon} size={14} color="#ef4444" />
             </View>
             <View>
-              <Text className="text-base font-black text-text-primary">{m.value}</Text>
-              <Text className="text-[9px] font-semibold uppercase tracking-widest text-text-muted">{m.label}</Text>
+              <Text className="text-base font-black text-text-primary" numberOfLines={1}>
+                {m.value}
+              </Text>
+              <Text className="text-[9px] font-semibold uppercase tracking-widest text-text-muted" numberOfLines={1}>
+                {m.label}
+              </Text>
             </View>
           </View>
         ))}
@@ -493,12 +502,16 @@ function StatsPanelCards({
                   <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
                     <Ionicons name={card.icon} size={14} color="#ef4444" />
                   </View>
-                  <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+                  <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted" numberOfLines={1}>
                     {card.label}
                   </Text>
                 </View>
-                <Text className="text-2xl font-black text-text-primary">{card.value}</Text>
-                <Text className="mt-0.5 text-[11px] text-text-secondary">{card.subtitle}</Text>
+                <Text className="text-2xl font-black text-text-primary" numberOfLines={1}>
+                  {card.value}
+                </Text>
+                <Text className="mt-0.5 text-[11px] text-text-secondary" numberOfLines={1}>
+                  {card.subtitle}
+                </Text>
                 {segments.length > 0 ? (
                   <View className="mt-2 flex-row flex-wrap gap-1.5">
                     {segments.map((s) => (

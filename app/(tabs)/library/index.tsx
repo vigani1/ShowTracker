@@ -146,14 +146,36 @@ function getHomeColumnCount(width: number, isWeb: boolean) {
   return width >= 500 ? 3 : 2;
 }
 
-function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boolean }) {
+function LibraryCard({
+  item,
+  isCompact,
+  isSmallPhone,
+}: {
+  item: LibraryDashboardItem;
+  isCompact: boolean;
+  isSmallPhone: boolean;
+}) {
+  const isFabricEnabled =
+    "NativeFabricUIManager" in globalThis || "__turboModuleProxy" in globalThis;
+  const missingPosterTitleFitProps = isFabricEnabled
+    ? {}
+    : {
+        adjustsFontSizeToFit: true,
+        minimumFontScale: 0.72,
+      };
+  const titleFitProps = isFabricEnabled
+    ? {}
+    : {
+        adjustsFontSizeToFit: true,
+        minimumFontScale: 0.62,
+      };
   const routeId = getRouteId(item);
   const isMovie = item.mediaType === "movie";
   const rawPercent =
     typeof item.progressPercent === "number" ? item.progressPercent : 0;
   const progress = Math.max(0, Math.min(100, rawPercent)) / 100;
 
-  const posterHeight = isWeb ? 280 : 240;
+  const posterHeight = isCompact ? 206 : 280;
 
   const card = (
     <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
@@ -166,7 +188,13 @@ function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boole
           />
         ) : (
           <View className="flex-1 items-center justify-center bg-zinc-800 px-3">
-            <Text className="text-center text-sm font-semibold text-zinc-400">
+            <Text
+              className="text-center text-sm font-semibold text-zinc-400"
+              numberOfLines={3}
+              ellipsizeMode="tail"
+              style={isFabricEnabled ? { fontSize: 14, lineHeight: 18 } : undefined}
+              {...missingPosterTitleFitProps}
+            >
               {item.title}
             </Text>
           </View>
@@ -186,7 +214,13 @@ function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boole
           </View>
         ) : null}
         <View className="absolute bottom-0 left-0 right-0 px-2.5 pb-2.5">
-          <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>
+          <Text
+            className={`${isSmallPhone ? "text-[11px]" : "text-sm"} mb-0.5 font-bold leading-4 text-white`}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={isFabricEnabled ? { fontSize: isSmallPhone ? 11 : 14, lineHeight: 16 } : undefined}
+            {...titleFitProps}
+          >
             {item.title}
           </Text>
           <Text className="text-xs text-zinc-400" numberOfLines={1}>
@@ -409,6 +443,8 @@ export default function LibraryScreen() {
   const isLoading = libraryItems === undefined;
   const effectiveWidth = gridWidth || width;
   const columns = getHomeColumnCount(effectiveWidth, isWeb);
+  const isCompactLayout = effectiveWidth < 640;
+  const isSmallPhone = width < 390;
   const pageSize = Math.max(columns * 3, 6);
   const hasMore = visibleCount < activeItems.length;
 
@@ -486,11 +522,15 @@ export default function LibraryScreen() {
             paddingRight: columnIndex === columns - 1 ? 0 : halfGap,
           }}
         >
-          <LibraryCard item={item} isWeb={isWeb} />
+          <LibraryCard
+            item={item}
+            isCompact={isCompactLayout}
+            isSmallPhone={isSmallPhone}
+          />
         </View>
       );
     },
-    [columns, isWeb]
+    [columns, isCompactLayout, isSmallPhone]
   );
 
   const headerText =
@@ -540,6 +580,7 @@ export default function LibraryScreen() {
                   }
                   rightLabel={`${activeItems.length} matched`}
                   className="mb-4"
+                  compact={isCompactLayout}
                 />
 
                 <SegmentedControl
@@ -547,6 +588,7 @@ export default function LibraryScreen() {
                   value={activeTab}
                   onValueChange={setActiveTab}
                   className="mb-3"
+                  compact={isCompactLayout}
                 />
 
                 <SearchInput
