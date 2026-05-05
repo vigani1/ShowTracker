@@ -10,6 +10,7 @@ import {
 import { router } from "expo-router";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { AppBackButton } from "@/components/AppBackButton";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 
@@ -56,6 +57,7 @@ export default function CreateListScreen() {
             eyebrow="Collection"
             icon="list-outline"
             className="mb-3"
+            leftSlot={<AppBackButton fallbackHref="/profile" />}
           />
 
           <View className="rounded-2xl border border-border-default bg-bg-surface p-4">

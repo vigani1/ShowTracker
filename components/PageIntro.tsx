@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { Text, View } from "react-native";
 
@@ -6,6 +7,8 @@ interface PageIntroProps {
   subtitle?: string;
   eyebrow?: string;
   rightLabel?: string;
+  leftSlot?: ReactNode;
+  rightSlot?: ReactNode;
   icon?: keyof typeof Ionicons.glyphMap;
   className?: string;
   compact?: boolean;
@@ -16,6 +19,8 @@ export function PageIntro({
   subtitle,
   eyebrow,
   rightLabel,
+  leftSlot,
+  rightSlot,
   icon,
   className,
   compact = false,
@@ -35,6 +40,7 @@ export function PageIntro({
     >
       <View className={`relative px-4 ${compact ? "py-2.5" : "py-4"}`}>
         <View className="flex-row items-start justify-between gap-3">
+          {leftSlot ? <View className="shrink-0 pt-0.5">{leftSlot}</View> : null}
           <View className="flex-1">
             {eyebrow || icon ? (
               <View className={`${compact ? "mb-1" : "mb-2"} flex-row items-center gap-2`}>
@@ -65,8 +71,10 @@ export function PageIntro({
             ) : null}
           </View>
 
-          {rightLabel && !compact ? (
-            <View className="rounded-md border border-border-default bg-bg-base/45 px-2 py-1">
+          {rightSlot && !compact ? (
+            <View className="shrink-0">{rightSlot}</View>
+          ) : rightLabel && !compact ? (
+            <View className="shrink-0 rounded-md border border-border-default bg-bg-base/45 px-2 py-1">
               <Text className="text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
                 {rightLabel}
               </Text>

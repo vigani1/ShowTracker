@@ -15,12 +15,17 @@ import { useQuery } from "convex/react";
 import { Link } from "expo-router";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/Button";
+import {
+  ClearFilterChip,
+  DropdownFilterChip,
+  FilterBar,
+} from "@/components/FilterBar";
 import { HeroSection } from "@/components/HeroSection";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { SegmentedControl } from "@/components/SegmentedControl";
 import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
+import { useStableCount } from "@/hooks/use-stable-display-value";
 import { getTrendingAniList, searchAniList } from "@/lib/api/anilist";
 import { discoverTmdb, getTrendingTmdb, type TmdbFilterParams } from "@/lib/api/tmdb";
 import type { NormalizedShow } from "@/lib/api/types";
@@ -614,6 +619,18 @@ export function DiscoverScreen() {
   ]);
 
   const heroShow = activeState.items[0] ?? null;
+  const discoverCountContextKey = [
+    "discover",
+    activeTab,
+    selectedGenres.join(","),
+    selectedYear,
+    selectedRating,
+  ].join(":");
+  const stableDiscoverCount = useStableCount(
+    activeState.items.length,
+    discoverCountContextKey,
+    activeState.isLoading
+  );
 
   const renderItem = useCallback(
     ({ item, index }: { item: NormalizedShow; index: number }) => (
@@ -681,7 +698,9 @@ export function DiscoverScreen() {
           eyebrow={hasActiveFilters ? "Filtered" : "Fresh picks"}
           icon="compass-outline"
           rightLabel={
-            activeState.items.length > 0 ? `${activeState.items.length} live` : undefined
+            typeof stableDiscoverCount === "number" && stableDiscoverCount > 0
+              ? `${stableDiscoverCount} live`
+              : undefined
           }
           className="mb-4"
           compact={isCompactLayout}
@@ -723,7 +742,7 @@ export function DiscoverScreen() {
           </View>
         ) : null}
 
-        <SegmentedControl
+        <FilterBar
           options={tabOptions}
           value={activeTab}
           onValueChange={(newTab) => {
@@ -731,6 +750,7 @@ export function DiscoverScreen() {
             clearFilters();
           }}
           className="mb-3"
+          leadingLabel="Media"
           compact={isCompactLayout}
         />
 
@@ -738,66 +758,43 @@ export function DiscoverScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, paddingBottom: 8 }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            gap: 8,
+            justifyContent: "center",
+            paddingBottom: 8,
+          }}
           className="mb-2"
         >
           {genreOptions.length > 0 && (
-            <Pressable
+            <DropdownFilterChip
               onPress={() => setOpenDropdown(openDropdown === "genres" ? null : "genres")}
-              className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-                selectedGenres.length > 0
-                  ? "border-primary bg-primary"
-                  : "border-border-default bg-bg-surface"
-              }`}
-            >
-              <Text className={`text-sm font-semibold ${selectedGenres.length > 0 ? "text-white" : "text-text-secondary"}`}>
-                {selectedGenres.length > 0 ? `${selectedGenres.length} Genre${selectedGenres.length > 1 ? "s" : ""}` : "Genre"}
-              </Text>
-              <Text className={selectedGenres.length > 0 ? "text-white" : "text-text-secondary"}>
-                {openDropdown === "genres" ? "▲" : "▼"}
-              </Text>
-            </Pressable>
+              active={selectedGenres.length > 0}
+              open={openDropdown === "genres"}
+              label={selectedGenres.length > 0 ? `${selectedGenres.length} Genre${selectedGenres.length > 1 ? "s" : ""}` : "Genre"}
+            />
           )}
 
           {yearOptions.length > 0 && (
-            <Pressable
+            <DropdownFilterChip
               onPress={() => setOpenDropdown(openDropdown === "year" ? null : "year")}
-              className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-                selectedYear ? "border-primary bg-primary" : "border-border-default bg-bg-surface"
-              }`}
-            >
-              <Text className={`text-sm font-semibold ${selectedYear ? "text-white" : "text-text-secondary"}`}>
-                {selectedYear || "Year"}
-              </Text>
-              <Text className={selectedYear ? "text-white" : "text-text-secondary"}>
-                {openDropdown === "year" ? "▲" : "▼"}
-              </Text>
-            </Pressable>
+              active={Boolean(selectedYear)}
+              open={openDropdown === "year"}
+              label={selectedYear || "Year"}
+            />
           )}
 
           {ratingOptions.length > 0 && (
-            <Pressable
+            <DropdownFilterChip
               onPress={() => setOpenDropdown(openDropdown === "rating" ? null : "rating")}
-              className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-                selectedRating ? "border-primary bg-primary" : "border-border-default bg-bg-surface"
-              }`}
-            >
-              <Text className={`text-sm font-semibold ${selectedRating ? "text-white" : "text-text-secondary"}`}>
-                {selectedRating ? `${selectedRating}+ ⭐` : "Rating"}
-              </Text>
-              <Text className={selectedRating ? "text-white" : "text-text-secondary"}>
-                {openDropdown === "rating" ? "▲" : "▼"}
-              </Text>
-            </Pressable>
+              active={Boolean(selectedRating)}
+              open={openDropdown === "rating"}
+              label={selectedRating ? `${selectedRating}+` : "Rating"}
+            />
           )}
 
           {hasActiveFilters && (
-            <Pressable
-              onPress={clearFilters}
-              className="rounded-full border border-border-default bg-bg-surface px-4 py-2"
-            >
-              <Text className="text-sm font-semibold text-text-secondary">Clear</Text>
-            </Pressable>
+            <ClearFilterChip onPress={clearFilters} />
           )}
         </ScrollView>
 
@@ -913,7 +910,8 @@ export function DiscoverScreen() {
           </View>
         )}
 
-        {activeState.items.length > 0 ? (
+        {(activeState.items.length > 0 ||
+          (typeof stableDiscoverCount === "number" && stableDiscoverCount > 0)) ? (
           <SectionHeader
             title={hasActiveFilters ? "Filtered Results" : `Trending ${
               activeTab === "anime"
@@ -924,7 +922,7 @@ export function DiscoverScreen() {
                     ? "TV Shows"
                     : "Content"
             }`}
-            count={activeState.items.length}
+            count={stableDiscoverCount ?? activeState.items.length}
           />
         ) : null}
       </View>
@@ -942,6 +940,7 @@ export function DiscoverScreen() {
       genreOptions,
       yearOptions,
       ratingOptions,
+      stableDiscoverCount,
       isCompactLayout,
     ]
   );

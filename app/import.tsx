@@ -11,6 +11,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useAction, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { AppBackButton } from "@/components/AppBackButton";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { getAniListMediaById, getAniListMediaByMalId, searchAniList } from "@/lib/api/anilist";
@@ -1145,6 +1146,7 @@ export function ImportScreen() {
           eyebrow="Migration"
           icon="download-outline"
           className="mb-4"
+          leftSlot={<AppBackButton fallbackHref="/profile" />}
         />
 
         <View className="overflow-hidden rounded-xl border border-border-default bg-bg-surface p-4">

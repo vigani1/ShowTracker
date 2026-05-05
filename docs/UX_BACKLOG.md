@@ -50,7 +50,7 @@ Loose notes for future UX fixes and experiments. These are intentionally not imp
   - Mark all watched
   - Add to list
 - Notes:
-  - Hide "add to list" when it is not needed or not available.
+  - Treat "add to list" as a normal show-level action; hide it only when it is not available.
   - Test whether icon-only actions are clear enough, possibly with labels/tooltips where appropriate.
 
 ## Episodes

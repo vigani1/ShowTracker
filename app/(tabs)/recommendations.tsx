@@ -10,10 +10,10 @@ import {
 import { FlashList } from "@shopify/flash-list";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { FilterBar } from "@/components/FilterBar";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { SegmentedControl } from "@/components/SegmentedControl";
 import {
   getMovieRecommendations,
   getTvRecommendations,
@@ -868,11 +868,12 @@ export function RecommendationsScreen() {
                 compact={isCompactLayout}
               />
 
-              <SegmentedControl
+              <FilterBar
                 options={tabOptions}
                 value={activeTab}
                 onValueChange={setActiveTab}
                 className="mb-4"
+                align="center"
                 compact={isCompactLayout}
               />
 

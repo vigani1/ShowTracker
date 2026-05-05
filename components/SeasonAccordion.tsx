@@ -1,7 +1,7 @@
-import { Pressable, View, Text, ActivityIndicator, Animated } from "react-native";
-import { useRef, useEffect } from "react";
+import { Pressable, View, Text, ActivityIndicator } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import type { NormalizedEpisode } from "@/lib/api/types";
-import { EpisodeCard } from "./EpisodeCard";
+import { SwipeableEpisodeCard } from "@/components/SwipeableEpisodeCard";
 
 interface EpisodeAvailability {
   isReleased: boolean;
@@ -27,6 +27,10 @@ interface SeasonAccordionProps {
   onToggle: () => void;
   onMarkSeason: () => void;
   onToggleEpisode: (episode: NormalizedEpisode) => void;
+  onEpisodeSwipeAction?: (
+    episode: NormalizedEpisode,
+    action: "watch" | "unwatch" | "rewatch"
+  ) => void;
   episodeWatchCounts?: Record<string, number>;
 }
 
@@ -47,10 +51,9 @@ export function SeasonAccordion({
   onToggle,
   onMarkSeason,
   onToggleEpisode,
+  onEpisodeSwipeAction,
   episodeWatchCounts,
 }: SeasonAccordionProps) {
-  const rotationAnim = useRef(new Animated.Value(0)).current;
-
   // Check if all episodes are watched
   // When episodes are loaded, compare against released count
   // When episodes aren't loaded yet, compare against total episode count
@@ -63,24 +66,14 @@ export function SeasonAccordion({
   // Button is enabled if episodes haven't been loaded yet, or if there are released episodes
   const canMarkSeason = episodes.length === 0 || releasedCount > 0;
 
-  useEffect(() => {
-    Animated.spring(rotationAnim, {
-      toValue: isExpanded ? 1 : 0,
-      useNativeDriver: true,
-      friction: 8,
-    }).start();
-  }, [isExpanded, rotationAnim]);
-
-  const spin = rotationAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0deg", "180deg"],
-  });
-
   return (
     <View className="overflow-hidden rounded-xl border-2 border-border-default bg-bg-surface">
       {/* Header */}
       <Pressable
         onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityLabel={isExpanded ? "Collapse season" : "Expand season"}
+        accessibilityState={{ expanded: isExpanded }}
         className="p-4 active:bg-bg-elevated/50"
         style={({ pressed }) => ({
           backgroundColor: pressed ? "rgba(39,39,42,0.3)" : undefined,
@@ -115,6 +108,9 @@ export function SeasonAccordion({
                 onMarkSeason();
               }}
               disabled={isMarking || isLoading || !canMarkSeason}
+              accessibilityRole="button"
+              accessibilityLabel={isFullyWatched ? "Mark season unwatched" : "Mark season watched"}
+              accessibilityState={{ disabled: isMarking || isLoading || !canMarkSeason }}
               className="relative h-7 w-7 items-center justify-center"
               style={({ pressed }) => ({
                 opacity: isMarking || isLoading || !canMarkSeason ? 0.5 : 1,
@@ -152,13 +148,22 @@ export function SeasonAccordion({
               )}
             </Pressable>
 
+            <View className="h-7 w-px bg-border-default" />
+
             {/* Chevron */}
-            <Animated.Text
-              style={{ transform: [{ rotate: spin }] }}
-              className="text-xl text-text-secondary"
+            <View
+              className={`h-8 w-8 items-center justify-center rounded-lg border ${
+                isExpanded
+                  ? "border-primary/45 bg-primary/15"
+                  : "border-border-default bg-bg-elevated"
+              }`}
             >
-              ▼
-            </Animated.Text>
+              <Ionicons
+                name={isExpanded ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={isExpanded ? "#ef4444" : "#d4d4d8"}
+              />
+            </View>
           </View>
         </View>
       </Pressable>
@@ -192,7 +197,7 @@ export function SeasonAccordion({
                   const watchCount = episodeWatchCounts?.[key];
 
                   return (
-                    <EpisodeCard
+                    <SwipeableEpisodeCard
                       key={episode.id}
                       id={episode.id}
                       episodeNumber={episode.episodeNumber}
@@ -205,6 +210,7 @@ export function SeasonAccordion({
                       isUpdating={isUpdating}
                       availability={availability}
                       onToggle={() => onToggleEpisode(episode)}
+                      onSwipeAction={(action) => onEpisodeSwipeAction?.(episode, action)}
                       watchCount={watchCount}
                     />
                   );

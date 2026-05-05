@@ -21,6 +21,7 @@ import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@/convex/_generated/api";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { useStableCount } from "@/hooks/use-stable-display-value";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
 type TimeBreakdown = {
@@ -847,6 +848,41 @@ export default function ProfileScreen() {
       })),
     [libraryEntries]
   );
+  const stableListCount = useStableCount(
+    lists?.length,
+    "profile-lists",
+    isHeavySectionsLoading
+  );
+  const stableFavoriteTvCount = useStableCount(
+    favoriteTvRailItems.length,
+    "profile-favorite-tv",
+    isHeavySectionsLoading
+  );
+  const stableFavoriteAnimeCount = useStableCount(
+    favoriteAnimeRailItems.length,
+    "profile-favorite-anime",
+    isHeavySectionsLoading
+  );
+  const stableFavoriteMovieCount = useStableCount(
+    favoriteMovieRailItems.length,
+    "profile-favorite-movie",
+    isHeavySectionsLoading
+  );
+  const stableActiveTvCount = useStableCount(
+    activeTvRailItems.length,
+    "profile-active-tv",
+    isHeavySectionsLoading
+  );
+  const stableActiveAnimeCount = useStableCount(
+    activeAnimeRailItems.length,
+    "profile-active-anime",
+    isHeavySectionsLoading
+  );
+  const stableActiveMovieCount = useStableCount(
+    activeMovieRailItems.length,
+    "profile-active-movie",
+    isHeavySectionsLoading
+  );
 
   const railPageSize = isDesktop ? 14 : 8;
   const activeRailVisibleCount = Math.max(visibleRailCount, 40);
@@ -1330,7 +1366,13 @@ export default function ProfileScreen() {
         ) : null}
 
         <View className="mt-8">
-          <SectionHeader title="Lists" icon="list-outline" rightLabel={`${lists?.length ?? 0} TOTAL`} />
+          <SectionHeader
+            title="Lists"
+            icon="list-outline"
+            rightLabel={
+              typeof stableListCount === "number" ? `${stableListCount} TOTAL` : undefined
+            }
+          />
 
           <Link href="/list/create" asChild>
             <Pressable className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
@@ -1384,7 +1426,7 @@ export default function ProfileScreen() {
             <SectionHeader
               title="Favorite TV"
               icon="heart"
-              rightLabel={`${favoriteTvRailItems.length} FAVORITES`}
+              rightLabel={`${stableFavoriteTvCount ?? favoriteTvRailItems.length} FAVORITES`}
             />
             <PosterRail
               items={visibleFavoriteTvRailItems}
@@ -1399,7 +1441,7 @@ export default function ProfileScreen() {
             <SectionHeader
               title="Favorite Anime"
               icon="heart"
-              rightLabel={`${favoriteAnimeRailItems.length} FAVORITES`}
+              rightLabel={`${stableFavoriteAnimeCount ?? favoriteAnimeRailItems.length} FAVORITES`}
             />
             <PosterRail
               items={visibleFavoriteAnimeRailItems}
@@ -1414,7 +1456,7 @@ export default function ProfileScreen() {
             <SectionHeader
               title="Favorite Movies"
               icon="heart"
-              rightLabel={`${favoriteMovieRailItems.length} FAVORITES`}
+              rightLabel={`${stableFavoriteMovieCount ?? favoriteMovieRailItems.length} FAVORITES`}
             />
             <PosterRail
               items={visibleFavoriteMovieRailItems}
@@ -1428,7 +1470,7 @@ export default function ProfileScreen() {
           <SectionHeader
             title="TV Shows"
             icon="tv-outline"
-            rightLabel={`${activeTvRailItems.length} TRACKED`}
+            rightLabel={`${stableActiveTvCount ?? activeTvRailItems.length} TRACKED`}
             actionLabel="Show all"
             actionHref="/library?media=tv"
           />
@@ -1443,7 +1485,7 @@ export default function ProfileScreen() {
           <SectionHeader
             title="Anime"
             icon="planet-outline"
-            rightLabel={`${activeAnimeRailItems.length} TRACKED`}
+            rightLabel={`${stableActiveAnimeCount ?? activeAnimeRailItems.length} TRACKED`}
             actionLabel="Show all"
             actionHref="/library?media=anime"
           />
@@ -1458,7 +1500,7 @@ export default function ProfileScreen() {
           <SectionHeader
             title="Movies"
             icon="film-outline"
-            rightLabel={`${activeMovieRailItems.length} TRACKED`}
+            rightLabel={`${stableActiveMovieCount ?? activeMovieRailItems.length} TRACKED`}
             actionLabel="Show all"
             actionHref="/library?media=movie"
           />

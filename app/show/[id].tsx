@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Modal,
   Platform,
@@ -17,6 +18,7 @@ import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { Badge } from "@/components/Badge";
 import { ProgressBar } from "@/components/ProgressBar";
 import { ShowHeader } from "@/components/ShowHeader";
+import { ShowActionBar } from "@/components/ShowActionBar";
 import { SeasonAccordion } from "@/components/SeasonAccordion";
 import {
   ContinueTrackingRail,
@@ -2044,6 +2046,41 @@ export function ShowDetailScreen() {
     setIsStatusMenuVisible(true);
   };
 
+  const confirmRemoveFromLibrary = () => {
+    const message =
+      watchedEpisodesCount > 0 || tracking?.status
+        ? "This removes tracking status and watched episode progress for this title. Favorites and custom lists are unchanged."
+        : "This removes the title from your tracked library. Favorites and custom lists are unchanged.";
+
+    if (Platform.OS === "web") {
+      return window.confirm(`Remove from Library?\n\n${message}`);
+    }
+
+    return new Promise<boolean>((resolve) => {
+      Alert.alert("Remove from Library?", message, [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => resolve(true),
+        },
+      ]);
+    });
+  };
+
+  const handleToggleLibrary = async () => {
+    if (isInWatchlist) {
+      const didConfirm = await confirmRemoveFromLibrary();
+      if (!didConfirm) {
+        return;
+      }
+      void handleRemoveFromWatchlist();
+      return;
+    }
+
+    handleOpenAddToWatchlistPrompt();
+  };
+
   const handleRemoveFromStatusMenu = async () => {
     const didRemove = await handleRemoveFromWatchlist();
     if (didRemove) {
@@ -2754,6 +2791,23 @@ export function ShowDetailScreen() {
     await runEpisodeToggle(episode, "rewatch");
   };
 
+  const handleEpisodeSwipeAction = async (
+    episode: NormalizedEpisode,
+    action: "watch" | "unwatch" | "rewatch"
+  ) => {
+    if (action === "watch") {
+      await handleToggleEpisodeWatched(episode);
+      return;
+    }
+
+    if (action === "rewatch") {
+      await handleRewatchEpisode(episode);
+      return;
+    }
+
+    await runEpisodeToggle(episode, "toggle");
+  };
+
   const handleRewatchSeason = async (
     season: NormalizedSeason,
     releasedEpisodesOverride?: NormalizedEpisode[]
@@ -3248,18 +3302,8 @@ export function ShowDetailScreen() {
     trackingStatusOptions.find((option) => option.value === activeTrackingStatusForMenu) ??
     trackingStatusOptions.find((option) => option.value === "plan_to_watch") ??
     trackingStatusOptions[0];
-  const watchlistActionLabel = !trackingLoaded
-      ? "Loading..."
-      : isRemovingFromWatchlist && isInWatchlist
-      ? "Removing..."
-      : isInWatchlist
-        ? "Remove from Watchlist"
-        : "Add to Watchlist";
-  const favoriteActionLabel = isTogglingFavorite
-    ? "Updating favorite..."
-    : isFavorite
-      ? "Favorited"
-      : "Add Favorite";
+  const canMarkShowWatchedFromActionBar =
+    show?.mediaType !== "movie" && seasons.length > 0 && !isShowFullyWatched;
   const globalFranchiseModeLabel =
     globalAnimeRelationMode === "all_relations"
       ? "All franchise titles"
@@ -3607,6 +3651,35 @@ export function ShowDetailScreen() {
           firstAired={show.firstAired}
           rating={show.rating}
           isDesktop={isDesktop}
+          showBackButton
+          backFallbackHref="/home"
+          actionSlot={
+            canTrackShow ? (
+              <ShowActionBar
+                statusLabel={
+                  !trackingLoaded
+                    ? "Loading"
+                    : isInWatchlist
+                      ? activeTrackingOption.label
+                      : "Not Tracked"
+                }
+                isTracked={isInWatchlist}
+                isFavorite={isFavorite}
+                canAddToList
+                isBusy={!canTrackShow || isStatusMenuBusy}
+                isCompact={!isDesktop}
+                isTogglingFavorite={isTogglingFavorite}
+                onToggleWatchlist={() => {
+                  void handleToggleLibrary();
+                }}
+                onToggleFavorite={() => {
+                  void handleToggleFavorite();
+                }}
+                onEditStatus={() => setIsStatusMenuVisible(true)}
+                onAddToList={() => setIsAddToListModalVisible(true)}
+              />
+            ) : null
+          }
         />
 
         {/* Main Content */}
@@ -3694,130 +3767,9 @@ export function ShowDetailScreen() {
           )}
 
           {canTrackShow && (
-            <View className="mb-6 rounded-xl border-2 border-border-default bg-bg-surface p-5">
-              <View className="mb-3 flex-row items-start justify-between gap-3">
-                <View className="flex-1">
-                  <Text className="text-sm font-semibold text-text-primary">
-                    Tracking
-                  </Text>
-                  <Text className="mt-1 text-xs text-text-secondary">
-                    {!trackingLoaded
-                      ? "Loading your tracking state..."
-                      : isInWatchlist
-                      ? `Current status: ${activeTrackingOption.label}`
-                      : "Not in your watchlist yet."}
-                  </Text>
-                  <Text className="mt-1 text-xs text-text-muted">
-                    {isFavorite ? "In your favorites" : "Not in favorites"}
-                  </Text>
-                </View>
-                <Badge
-                  label={!trackingLoaded ? "Loading" : isInWatchlist ? activeTrackingOption.label : "Not Tracked"}
-                  variant={isInWatchlist ? "accent" : "default"}
-                />
-              </View>
-
-              <View
-                className={`gap-2 ${
-                  isDesktop ? "flex-row flex-wrap items-center" : "flex-col"
-                }`}
-              >
-                <Pressable
-                  onPress={() => {
-                    if (isInWatchlist) {
-                      void handleRemoveFromWatchlist();
-                      return;
-                    }
-                    handleOpenAddToWatchlistPrompt();
-                  }}
-                  disabled={!canTrackShow || isStatusMenuBusy}
-                  accessibilityRole="button"
-                  className={`rounded-lg border border-border-default bg-bg-base px-3.5 py-2.5 ${
-                    isDesktop
-                      ? "flex-row items-center gap-1.5"
-                      : "w-full flex-row items-center justify-center gap-1.5"
-                  }`}
-                  style={({ pressed }) => ({
-                    opacity: !canTrackShow || isStatusMenuBusy ? 0.45 : pressed ? 0.85 : 1,
-                  })}
-                >
-                  {isWatchlistActionPending ? (
-                    <ActivityIndicator size="small" color="#a1a1aa" />
-                  ) : (
-                    <Ionicons
-                      name={isInWatchlist ? "remove-circle-outline" : "add-circle-outline"}
-                      size={15}
-                      color={isInWatchlist ? "#ef4444" : "#a1a1aa"}
-                    />
-                  )}
-                  <Text
-                    className={`text-xs font-semibold uppercase tracking-wide ${
-                      isInWatchlist ? "text-primary" : "text-text-secondary"
-                    }`}
-                  >
-                    {watchlistActionLabel}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => {
-                    void handleToggleFavorite();
-                  }}
-                  disabled={!canTrackShow || isStatusMenuBusy}
-                  accessibilityRole="button"
-                  className={`rounded-lg border border-border-default bg-bg-base px-3.5 py-2.5 ${
-                    isDesktop
-                      ? "flex-row items-center gap-1.5"
-                      : "w-full flex-row items-center justify-center gap-1.5"
-                  }`}
-                  style={({ pressed }) => ({
-                    opacity: !canTrackShow || isStatusMenuBusy ? 0.45 : pressed ? 0.85 : 1,
-                  })}
-                >
-                  {isTogglingFavorite ? (
-                    <ActivityIndicator size="small" color="#a1a1aa" />
-                  ) : (
-                    <Ionicons
-                      name={isFavorite ? "heart" : "heart-outline"}
-                      size={15}
-                      color={isFavorite ? "#ef4444" : "#a1a1aa"}
-                    />
-                  )}
-                  <Text
-                    className={`text-xs font-semibold uppercase tracking-wide ${
-                      isFavorite ? "text-primary" : "text-text-secondary"
-                    }`}
-                  >
-                    {favoriteActionLabel}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setIsStatusMenuVisible(true)}
-                  disabled={!canTrackShow || isStatusMenuBusy}
-                  accessibilityRole="button"
-                  className={`rounded-lg border border-border-default bg-bg-base px-3.5 py-2.5 ${
-                    isDesktop
-                      ? "flex-row items-center gap-1.5"
-                      : "w-full flex-row items-center justify-center gap-1.5"
-                  }`}
-                  style={({ pressed }) => ({
-                    opacity: !canTrackShow || isStatusMenuBusy ? 0.45 : pressed ? 0.85 : 1,
-                  })}
-                >
-                  <Ionicons
-                    name="ellipsis-horizontal-circle-outline"
-                    size={15}
-                    color="#a1a1aa"
-                  />
-                  <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                    Edit Status
-                  </Text>
-                </Pressable>
-              </View>
-
+            <>
               {show.mediaType === "anime" ? (
-                <View className="mt-3 gap-2 rounded-lg border border-border-default/80 bg-bg-base px-3 py-3">
+                <View className="mb-6 gap-2 rounded-lg border border-border-default/80 bg-bg-surface px-3 py-3">
                   <View className="flex-row items-start justify-between gap-3">
                     <View className="flex-1">
                       <Text className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">
@@ -3868,89 +3820,14 @@ export function ShowDetailScreen() {
               ) : null}
 
               {isSettingStatus ? (
-                <View className="mt-3 flex-row items-center gap-2">
+                <View className="mb-6 flex-row items-center gap-2">
                   <ActivityIndicator size="small" color="#52525b" />
                   <Text className="text-xs text-text-secondary">
                     Updating status...
                   </Text>
                 </View>
               ) : null}
-            </View>
-          )}
-
-          {/* Action Buttons - Radio button style */}
-          {canTrackShow && (
-            <View className="mb-6 flex-row flex-wrap items-center gap-6">
-              {/* Show-level action for TV/anime */}
-              {show.mediaType !== "movie" && seasons.length > 0 && (
-                <View className="flex-row items-center gap-3">
-                  <Pressable
-                    onPress={handleMarkShowWatched}
-                    disabled={!canTrackShow || isMarkingShow}
-                    accessibilityRole="button"
-                    className="relative h-7 w-7 items-center justify-center"
-                    style={({ pressed }) => ({
-                      opacity: !canTrackShow || isMarkingShow ? 0.5 : 1,
-                      transform: [{ scale: pressed ? 0.9 : 1 }],
-                    })}
-                  >
-                    <View
-                      className={`absolute h-7 w-7 rounded-full border-2 ${
-                        isShowFullyWatched ? "border-success" : "border-text-secondary"
-                      }`}
-                    />
-                    {isShowFullyWatched && (
-                      <>
-                        <View className="h-4 w-4 rounded-full bg-success" />
-                        <View className="absolute inset-0 items-center justify-center">
-                          <Text className="text-xs font-bold text-white">✓</Text>
-                        </View>
-                      </>
-                    )}
-                  </Pressable>
-                  <Pressable
-                    onPress={handleMarkShowWatched}
-                    disabled={!canTrackShow || isMarkingShow}
-                    accessibilityRole="button"
-                    className="active:opacity-70"
-                  >
-                    <Text
-                      className={`text-sm ${
-                        isShowFullyWatched ? "text-success font-medium" : "text-text-secondary"
-                      }`}
-                    >
-                      {isMarkingShow
-                        ? "Saving..."
-                        : isShowFullyWatched
-                          ? "Watched"
-                          : "Mark All Watched"}
-                    </Text>
-                  </Pressable>
-                </View>
-              )}
-
-              {/* Add to List Button */}
-              <View className="flex-row items-center gap-3">
-                <Pressable
-                  onPress={() => setIsAddToListModalVisible(true)}
-                  accessibilityRole="button"
-                  className="relative h-7 w-7 items-center justify-center"
-                  style={({ pressed }) => ({
-                    opacity: pressed ? 0.7 : 1,
-                    transform: [{ scale: pressed ? 0.9 : 1 }],
-                  })}
-                >
-                  <View className="absolute h-7 w-7 rounded-full border-2 border-text-secondary" />
-                  <Ionicons name="bookmark-outline" size={14} color="#a1a1aa" />
-                </Pressable>
-                <Pressable
-                  onPress={() => setIsAddToListModalVisible(true)}
-                  className="active:opacity-70"
-                >
-                  <Text className="text-sm text-text-secondary">Add to List</Text>
-                </Pressable>
-              </View>
-            </View>
+            </>
           )}
 
           {trackingError && (
@@ -4115,12 +3992,35 @@ export function ShowDetailScreen() {
           {/* Seasons Section */}
           {seasons.length > 0 && (
             <View>
-              <Text
-                className="mb-4 text-xl text-text-primary"
-                style={{ fontFamily: "Courier New", fontWeight: "900" }}
-              >
-                Seasons & Episodes
-              </Text>
+              <View className="mb-4 flex-row flex-wrap items-center justify-between gap-3">
+                <Text
+                  className="text-xl text-text-primary"
+                  style={{ fontFamily: "Courier New", fontWeight: "900" }}
+                >
+                  Seasons & Episodes
+                </Text>
+                {canMarkShowWatchedFromActionBar ? (
+                  <Pressable
+                    onPress={handleMarkShowWatched}
+                    disabled={!canTrackShow || isMarkingShow}
+                    accessibilityRole="button"
+                    accessibilityLabel="Mark all episodes watched"
+                    className="min-h-[36px] flex-row items-center gap-1.5 rounded-lg border border-border-default bg-bg-surface px-3 py-2"
+                    style={({ pressed }) => ({
+                      opacity: !canTrackShow || isMarkingShow ? 0.45 : pressed ? 0.84 : 1,
+                    })}
+                  >
+                    {isMarkingShow ? (
+                      <ActivityIndicator size="small" color="#a1a1aa" />
+                    ) : (
+                      <Ionicons name="checkmark-done-outline" size={15} color="#a1a1aa" />
+                    )}
+                    <Text className="text-[11px] font-bold uppercase text-text-secondary">
+                      {isMarkingShow ? "Saving" : "Mark All Watched"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
               <View className="gap-3">
                 {seasons.map((season) => {
                   const episodes = season.episodes ?? [];
@@ -4150,6 +4050,9 @@ export function ShowDetailScreen() {
                       onToggle={() => toggleSeason(season.seasonNumber)}
                       onMarkSeason={() => handleMarkSeasonWatched(season)}
                       onToggleEpisode={handleToggleEpisodeWatched}
+                      onEpisodeSwipeAction={(episode, action) => {
+                        void handleEpisodeSwipeAction(episode, action);
+                      }}
                     />
                   );
                 })}
@@ -4770,7 +4673,7 @@ export function ShowDetailScreen() {
                     opacity: isStatusMenuBusy ? 0.45 : pressed ? 0.85 : 1,
                   })}
                 >
-                  <Text className="font-semibold text-primary">Remove from Watchlist</Text>
+                  <Text className="font-semibold text-primary">Remove from Library</Text>
                 </Pressable>
               ) : null}
 
