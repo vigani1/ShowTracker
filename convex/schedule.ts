@@ -166,6 +166,64 @@ function getTitleLookupKey(mediaType: "tv" | "anime", normalizedTitle: string) {
   return `${mediaType}:${normalizedTitle}`;
 }
 
+function isAnimeSeasonTitleVariant(
+  scheduleNormalizedTitle: string,
+  trackedNormalizedTitle: string
+) {
+  if (
+    !scheduleNormalizedTitle ||
+    !trackedNormalizedTitle ||
+    scheduleNormalizedTitle === trackedNormalizedTitle ||
+    !scheduleNormalizedTitle.startsWith(trackedNormalizedTitle)
+  ) {
+    return false;
+  }
+
+  const suffix = scheduleNormalizedTitle.slice(trackedNormalizedTitle.length);
+
+  return /^(?:s\d+|season\d*|\d+(?:st|nd|rd|th)?season|part\d*|cour\d*|finalseason)/.test(
+    suffix
+  );
+}
+
+function findTrackedScheduleMatch<T extends {
+  mediaType: "tv" | "anime";
+  normalizedTitle: string;
+  anilistId?: number;
+  tvmazeId?: number;
+}>(
+  entry: CompactScheduleEntry,
+  mediaType: "tv" | "anime",
+  trackedShows: T[],
+  byExternalKey: Map<string, T>,
+  byTitle: Map<string, T>
+) {
+  const exactMatch =
+    byExternalKey.get(entry.showId) ??
+    byTitle.get(getTitleLookupKey(mediaType, entry.normalizedTitle));
+
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (mediaType !== "anime") {
+    return null;
+  }
+
+  const titleCandidates = trackedShows.filter(
+    (tracked) =>
+      (tracked.mediaType === "anime" || tracked.mediaType === "tv") &&
+      isAnimeSeasonTitleVariant(entry.normalizedTitle, tracked.normalizedTitle)
+  );
+
+  if (titleCandidates.length === 0) {
+    return null;
+  }
+
+  titleCandidates.sort((a, b) => b.normalizedTitle.length - a.normalizedTitle.length);
+  return titleCandidates[0] ?? null;
+}
+
 function compactScheduleEntries(entries: NormalizedScheduleEntry[]): CompactScheduleEntry[] {
   const dedupe = new Set<string>();
   const compacted: CompactScheduleEntry[] = [];
@@ -662,7 +720,7 @@ export const getUpcomingSchedule = query({
     // Query only TV/Anime projections to avoid scanning movie rows.
     const mediaFilter = args.mediaFilter;
 
-    const nonMovieProjections = mediaFilter
+    const nonMovieProjections = mediaFilter === "tv"
       ? await ctx.db
           .query("feedProjections")
           .withIndex("by_user_media", (q) =>
@@ -769,17 +827,20 @@ export const getUpcomingSchedule = query({
 
     for (const row of rows) {
       const entries = parseCachedScheduleEntries(row.episodes);
+      const rowMediaType = row.mediaType as "tv" | "anime";
 
       for (const entry of entries) {
-        const tracked =
-          byExternalKey.get(entry.showId) ??
-          byTitle.get(
-            getTitleLookupKey(row.mediaType as "tv" | "anime", entry.normalizedTitle)
-          );
+        const tracked = findTrackedScheduleMatch(
+          entry,
+          rowMediaType,
+          trackedShows,
+          byExternalKey,
+          byTitle
+        );
 
         if (!tracked) continue;
         if (tracked.mediaType !== "tv" && tracked.mediaType !== "anime") continue;
-        if (args.mediaFilter && tracked.mediaType !== args.mediaFilter) continue;
+        if (args.mediaFilter && rowMediaType !== args.mediaFilter) continue;
 
         const dayKey = row.date;
         const bucketDate = parseScheduleDateKey(dayKey);
@@ -800,7 +861,7 @@ export const getUpcomingSchedule = query({
         grouped.get(dayKey)!.push({
           routeId: tracked.routeId,
           showTitle: tracked.title,
-          mediaType: tracked.mediaType,
+          mediaType: rowMediaType,
           posterUrl: tracked.posterUrl,
           daysUntil,
           episode: {
@@ -852,7 +913,7 @@ export const getFutureUpcomingCountsForWatchlist = query({
     const today = startOfDay(new Date());
     const mediaFilter = args.mediaFilter;
 
-    const nonMovieProjections = mediaFilter
+    const nonMovieProjections = mediaFilter === "tv"
       ? await ctx.db
           .query("feedProjections")
           .withIndex("by_user_media", (q) =>
@@ -926,17 +987,20 @@ export const getFutureUpcomingCountsForWatchlist = query({
 
     for (const row of rows) {
       const entries = parseCachedScheduleEntries(row.episodes);
+      const rowMediaType = row.mediaType as "tv" | "anime";
 
       for (const entry of entries) {
-        const tracked =
-          byExternalKey.get(entry.showId) ??
-          byTitle.get(
-            getTitleLookupKey(row.mediaType as "tv" | "anime", entry.normalizedTitle)
-          );
+        const tracked = findTrackedScheduleMatch(
+          entry,
+          rowMediaType,
+          trackedShows,
+          byExternalKey,
+          byTitle
+        );
 
         if (!tracked || !tracked.watchlistId) continue;
         if (tracked.mediaType !== "tv" && tracked.mediaType !== "anime") continue;
-        if (args.mediaFilter && tracked.mediaType !== args.mediaFilter) continue;
+        if (args.mediaFilter && rowMediaType !== args.mediaFilter) continue;
 
         const dayKey = row.date;
         const bucketDate = parseScheduleDateKey(dayKey);

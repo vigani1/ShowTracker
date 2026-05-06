@@ -231,3 +231,11 @@ Phase 12: Notifications
 - [ ] Production tracking audit: investigate why some recently watched shows are already marked paused by the next episode window (example: One Piece)
 
 ### Known Issues (To Fix)
+
+- [ ] Schedule coverage audit: investigate why some tracked shows do not appear in Upcoming/Schedule views
+  - [ ] Reproduce with a small matrix of tracked TV + anime examples across `watching` and `planned` statuses
+  - [ ] Verify end-to-end data flow for missing entries: source API schedule -> `scheduleCache` hydration -> `feedProjections`/tracked-show matching -> `getUpcomingSchedule` output -> UI rendering
+  - [ ] Check date-window and timezone edge cases around today boundaries, future-only episodes, and stale hydrated ranges
+  - [ ] Confirm identifier matching is stable across providers (TMDB / TVMaze / AniList / MAL aliases) so tracked shows resolve to scheduled episodes correctly
+  - [ ] Add targeted regression coverage for `convex/schedule.ts` behavior and browser QA for Upcoming controls, filtering, and show linking
+  - [ ] Fix confirmed root causes and re-run schedule QA on web plus at least one mobile form factor
