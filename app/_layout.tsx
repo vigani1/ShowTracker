@@ -45,7 +45,16 @@ function RootLayoutContent() {
               fullScreenGestureEnabled: false,
               animationMatchesGesture: Platform.OS === "ios",
             }}
-          />
+          >
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen
+              name="show/[id]"
+              options={{
+                presentation: "transparentModal",
+                contentStyle: { backgroundColor: "transparent" },
+              }}
+            />
+          </Stack>
         </AppErrorBoundary>
       </View>
     </View>

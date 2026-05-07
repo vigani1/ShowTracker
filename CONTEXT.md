@@ -40,6 +40,10 @@ _Avoid_: Count
 An authenticated app page inside the main ShowTracker shell.
 _Avoid_: Public page, auth page
 
+**Overlay Detail Route**:
+A URL-addressable detail page opened above a preserved Shell Page state during in-app navigation.
+_Avoid_: Drawer, modal page
+
 ## Relationships
 
 - A **Library** contains all of the user's saved or tracked titles.
@@ -51,6 +55,7 @@ _Avoid_: Public page, auth page
 - A **Home Mode** selects which Home surface is shown before **Media Type Filter** narrows it.
 - A **Display Pair** should update atomically when the label changes meaning.
 - A non-tab **Shell Page** should provide an explicit back affordance.
+- An **Overlay Detail Route** preserves the originating **Shell Page** when opened from inside the app, but direct/shared visits still render as a normal page.
 
 ## Example dialogue
 
@@ -67,3 +72,4 @@ _Avoid_: Public page, auth page
 - `Watchlist / Schedule` is a **Home Mode** switch, not a filter and not a canonical tab.
 - If a same-place **Display Pair** changes meaning, keep the previous label and value visible until the new pair is ready.
 - Back buttons belong on authenticated non-tab **Shell Pages**, not on tab roots or auth/landing pages.
+- "Drawer" and "modal" describe presentation details; use **Overlay Detail Route** for the navigation behavior that preserves source-page position while keeping a shareable URL.

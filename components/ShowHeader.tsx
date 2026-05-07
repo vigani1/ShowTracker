@@ -16,6 +16,7 @@ interface ShowHeaderProps {
   isDesktop: boolean;
   showBackButton?: boolean;
   backFallbackHref?: Href;
+  backButtonVariant?: "back" | "close";
   actionSlot?: ReactNode;
 }
 
@@ -40,6 +41,7 @@ export function ShowHeader({
   isDesktop,
   showBackButton = false,
   backFallbackHref = "/home",
+  backButtonVariant = "back",
   actionSlot,
 }: ShowHeaderProps) {
   const heroHeight = isDesktop ? 420 : 300;
@@ -89,7 +91,7 @@ export function ShowHeader({
 
       {showBackButton ? (
         <View className={`absolute left-4 ${isDesktop ? "top-5" : "top-4"} z-10`}>
-          <AppBackButton fallbackHref={backFallbackHref} />
+          <AppBackButton fallbackHref={backFallbackHref} variant={backButtonVariant} />
         </View>
       ) : null}
 

@@ -426,7 +426,12 @@ export function SearchScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, paddingBottom: 8 }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            gap: 8,
+            justifyContent: "center",
+            paddingBottom: 8,
+          }}
           className="mb-2"
         >
           {genreOptions.length > 0 && (

@@ -118,6 +118,7 @@ Login/Register
 - Mobile uses a bottom tab bar with 5 visible tabs: Home, Discover, Search, Watchlist, Profile.
 - `Schedule` is still routed and available from desktop nav, but hidden from mobile tabs for now.
 - `Extra` route is retained as hidden placeholder during navigation cleanup.
+- `/show/[id]` is an Overlay Detail Route when opened from inside the app: it presents over the current Shell Page so source scroll/filter state stays mounted, while direct/shared visits still render as a normal full page.
 
 ## Caching Strategy (3 Layers)
 
@@ -178,7 +179,7 @@ app/
   │   Extra.tsx            # Hidden placeholder route
   │
   ├── show/
-  │   [id].tsx             # Show detail (dynamic route)
+  │   [id].tsx             # Show detail; Overlay Detail Route when opened in-app
   │
   └── list/
       [id].tsx             # Custom list detail

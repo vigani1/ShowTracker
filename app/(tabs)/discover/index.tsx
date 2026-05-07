@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Feather } from "@expo/vector-icons";
 import {
   ActivityIndicator,
@@ -43,6 +43,12 @@ type TabState = {
   hasMore: boolean;
 };
 
+type TrackedDisplayState = {
+  status: string;
+  watchedEpisodesCount: number;
+  totalEpisodes: number | null;
+};
+
 const INITIAL_ITEMS_PER_PAGE = 20;
 const LOAD_MORE_THRESHOLD = 0.5;
 const GRID_GAP = 12;
@@ -77,16 +83,79 @@ function toTrackedTmdbKey(mediaType: "tv" | "movie", tmdbId: number) {
   return `${mediaType}:${tmdbId}`;
 }
 
-function filterTrackedTmdbItems(items: NormalizedShow[], trackedTmdbKeys: Set<string>) {
+function getTrackedItemKey(item: {
+  mediaType: "tv" | "anime" | "movie";
+  tmdbId: number | null;
+  anilistId: number | null;
+}) {
+  if ((item.mediaType === "tv" || item.mediaType === "movie") && item.tmdbId !== null) {
+    return toTrackedTmdbKey(item.mediaType, item.tmdbId);
+  }
+  if (item.mediaType === "anime" && item.anilistId !== null) {
+    return `anime:${item.anilistId}`;
+  }
+  return null;
+}
+
+function getTrackedShowKey(item: NormalizedShow) {
+  if ((item.mediaType === "tv" || item.mediaType === "movie") && typeof item.tmdbId === "number") {
+    return toTrackedTmdbKey(item.mediaType, item.tmdbId);
+  }
+  if (item.mediaType === "anime" && typeof item.anilistId === "number") {
+    return `anime:${item.anilistId}`;
+  }
+  return null;
+}
+
+function filterTrackedItems(
+  items: NormalizedShow[],
+  trackedStateByKey: Map<string, TrackedDisplayState>
+) {
   return items.filter((item) => {
-    if (
-      (item.mediaType === "tv" || item.mediaType === "movie") &&
-      typeof item.tmdbId === "number"
-    ) {
-      return !trackedTmdbKeys.has(toTrackedTmdbKey(item.mediaType, item.tmdbId));
+    const key = getTrackedShowKey(item);
+    return !key || !trackedStateByKey.has(key);
+  });
+}
+
+function getTrackedLabel(state: TrackedDisplayState) {
+  if (state.status === "completed") {
+    return "Watched";
+  }
+
+  if (state.watchedEpisodesCount > 0) {
+    if (state.totalEpisodes === null || state.watchedEpisodesCount >= state.totalEpisodes) {
+      return "Watched";
     }
+  }
+
+  return "Added";
+}
+
+function getMediaItemKey(item: NormalizedShow) {
+  if ((item.mediaType === "tv" || item.mediaType === "movie") && item.tmdbId) {
+    return `tmdb:${item.mediaType}:${item.tmdbId}`;
+  }
+  if (item.mediaType === "anime" && item.anilistId) {
+    return `anilist:anime:${item.anilistId}`;
+  }
+  if (item.mediaType === "anime" && item.malId) {
+    return `jikan:anime:${item.malId}`;
+  }
+  return `${item.mediaType}:${item.id}`;
+}
+
+function appendUniqueItems(existingItems: NormalizedShow[], newItems: NormalizedShow[]) {
+  const seenKeys = new Set(existingItems.map(getMediaItemKey));
+  const uniqueNewItems = newItems.filter((item) => {
+    const key = getMediaItemKey(item);
+    if (seenKeys.has(key)) {
+      return false;
+    }
+    seenKeys.add(key);
     return true;
   });
+
+  return [...existingItems, ...uniqueNewItems];
 }
 
 function interleaveDiscoverItems(
@@ -130,6 +199,7 @@ export function DiscoverScreen() {
   const isWeb = Platform.OS === "web";
   const isDesktop = isWeb && width >= DESKTOP_SIDEBAR_BREAKPOINT;
   const [gridWidth, setGridWidth] = useState(0);
+  const loadMoreRequestRef = useRef(0);
 
   // Filter states
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
@@ -161,26 +231,31 @@ export function DiscoverScreen() {
     currentPage: 0,
     hasMore: true,
   });
+  const [allItems, setAllItems] = useState<NormalizedShow[]>([]);
 
   const trackedIds = useQuery(api.shows.getTrackedIds, {});
-  const trackedTmdbKeys = useMemo(() => {
-    const keys = new Set<string>();
+  const isTrackedLibraryReady = trackedIds !== undefined;
+  const trackedStateByKey = useMemo(() => {
+    const entries = new Map<string, TrackedDisplayState>();
     for (const item of trackedIds ?? []) {
-      if (
-        (item.mediaType === "tv" || item.mediaType === "movie") &&
-        item.tmdbId !== null
-      ) {
-        keys.add(toTrackedTmdbKey(item.mediaType, item.tmdbId as number));
+      const key = getTrackedItemKey(item);
+      if (key) {
+        entries.set(key, {
+          status: item.status,
+          watchedEpisodesCount: item.watchedEpisodesCount,
+          totalEpisodes: item.totalEpisodes,
+        });
       }
     }
-    return keys;
+    return entries;
   }, [trackedIds]);
-  const isTrackedLibraryLoading = trackedIds === undefined;
+  const trackedStateByKeyRef = useRef(trackedStateByKey);
 
-  const allTabItems = useMemo(
-    () => interleaveDiscoverItems(tvState.items, animeState.items, movieState.items),
-    [animeState.items, movieState.items, tvState.items]
-  );
+  useEffect(() => {
+    if (isTrackedLibraryReady) {
+      trackedStateByKeyRef.current = trackedStateByKey;
+    }
+  }, [isTrackedLibraryReady, trackedStateByKey]);
 
   const activeState = useMemo(() => {
     if (activeTab === "all") {
@@ -188,7 +263,7 @@ export function DiscoverScreen() {
       const isLoadingMore = tvState.isLoadingMore || animeState.isLoadingMore || movieState.isLoadingMore;
       const error = tvState.error || animeState.error || movieState.error;
       return {
-        items: allTabItems,
+        items: allItems,
         isLoading,
         isLoadingMore,
         error,
@@ -199,7 +274,7 @@ export function DiscoverScreen() {
     if (activeTab === "anime") return animeState;
     if (activeTab === "movie") return movieState;
     return tvState;
-  }, [activeTab, allTabItems, animeState, movieState, tvState]);
+  }, [activeTab, allItems, animeState, movieState, tvState]);
 
   const setActiveState = useCallback(
     (updater: (prev: TabState) => TabState) => {
@@ -268,13 +343,22 @@ export function DiscoverScreen() {
   };
 
   useEffect(() => {
-    if (isTrackedLibraryLoading) {
+    if (!isTrackedLibraryReady) {
       return;
     }
 
     let isCancelled = false;
 
     const loadInitialData = async () => {
+      const hiddenTrackedItems = trackedStateByKeyRef.current;
+      setTvState((prev) => ({ ...prev, items: [], isLoading: true, isLoadingMore: false, error: null }));
+      setAnimeState((prev) => ({ ...prev, items: [], isLoading: true, isLoadingMore: false, error: null }));
+      setMovieState((prev) => ({ ...prev, items: [], isLoading: true, isLoadingMore: false, error: null }));
+      setAllItems([]);
+      let loadedTvItems: NormalizedShow[] = [];
+      let loadedAnimeItems: NormalizedShow[] = [];
+      let loadedMovieItems: NormalizedShow[] = [];
+
       // TV Shows
       try {
         let tvItems: NormalizedShow[] = [];
@@ -288,15 +372,16 @@ export function DiscoverScreen() {
             vote_average_gte: selectedRating ? Number(selectedRating) : undefined,
           };
           const result = await discoverTmdb("tv", 1, filters);
-          tvItems = filterTrackedTmdbItems(result.items, trackedTmdbKeys);
+          tvItems = filterTrackedItems(result.items, hiddenTrackedItems);
           tvHasMore = result.page < result.totalPages;
         } else {
           const result = await getTrendingTmdb("tv", "week", 1);
-          tvItems = filterTrackedTmdbItems(result.items, trackedTmdbKeys);
+          tvItems = filterTrackedItems(result.items, hiddenTrackedItems);
           tvHasMore = result.page < result.totalPages;
         }
 
         if (!isCancelled) {
+          loadedTvItems = tvItems;
           setTvState({
             items: tvItems,
             isLoading: false,
@@ -332,15 +417,16 @@ export function DiscoverScreen() {
             minScore: selectedRating ? Number(selectedRating) * 10 : undefined,
           };
           const result = await searchAniList("", 1, INITIAL_ITEMS_PER_PAGE, filters);
-          animeItems = result.items;
+          animeItems = filterTrackedItems(result.items, hiddenTrackedItems);
           animeHasMore = result.pageInfo.currentPage < result.pageInfo.lastPage;
         } else {
           const result = await getTrendingAniList(1, INITIAL_ITEMS_PER_PAGE);
-          animeItems = result.items;
+          animeItems = filterTrackedItems(result.items, hiddenTrackedItems);
           animeHasMore = result.pageInfo.currentPage < result.pageInfo.lastPage;
         }
 
         if (!isCancelled) {
+          loadedAnimeItems = animeItems;
           setAnimeState({
             items: animeItems,
             isLoading: false,
@@ -376,15 +462,16 @@ export function DiscoverScreen() {
             vote_average_gte: selectedRating ? Number(selectedRating) : undefined,
           };
           const result = await discoverTmdb("movie", 1, filters);
-          movieItems = filterTrackedTmdbItems(result.items, trackedTmdbKeys);
+          movieItems = filterTrackedItems(result.items, hiddenTrackedItems);
           movieHasMore = result.page < result.totalPages;
         } else {
           const result = await getTrendingTmdb("movie", "week", 1);
-          movieItems = filterTrackedTmdbItems(result.items, trackedTmdbKeys);
+          movieItems = filterTrackedItems(result.items, hiddenTrackedItems);
           movieHasMore = result.page < result.totalPages;
         }
 
         if (!isCancelled) {
+          loadedMovieItems = movieItems;
           setMovieState({
             items: movieItems,
             isLoading: false,
@@ -406,6 +493,10 @@ export function DiscoverScreen() {
           });
         }
       }
+
+      if (!isCancelled) {
+        setAllItems(interleaveDiscoverItems(loadedTvItems, loadedAnimeItems, loadedMovieItems));
+      }
     };
 
     void loadInitialData();
@@ -414,12 +505,18 @@ export function DiscoverScreen() {
     };
   }, [
     hasActiveFilters,
-    isTrackedLibraryLoading,
+    isTrackedLibraryReady,
     selectedGenres,
     selectedRating,
     selectedYear,
-    trackedTmdbKeys,
   ]);
+
+  useEffect(() => {
+    loadMoreRequestRef.current += 1;
+    setTvState((prev) => ({ ...prev, isLoadingMore: false }));
+    setAnimeState((prev) => ({ ...prev, isLoadingMore: false }));
+    setMovieState((prev) => ({ ...prev, isLoadingMore: false }));
+  }, [activeTab, selectedGenres, selectedRating, selectedYear]);
 
   const loadMoreItems = useCallback(async () => {
     if (activeState.isLoading || activeState.isLoadingMore || !activeState.hasMore) {
@@ -427,6 +524,7 @@ export function DiscoverScreen() {
     }
 
     setActiveState((prev) => ({ ...prev, isLoadingMore: true }));
+    const requestId = ++loadMoreRequestRef.current;
 
     const tvNextPage = tvState.currentPage + 1;
     const animeNextPage = animeState.currentPage + 1;
@@ -435,9 +533,9 @@ export function DiscoverScreen() {
     try {
       if (activeTab === "all") {
         // Fetch each category independently with error handling for partial success
-        let tvResult: { items: any[]; page: number; totalPages: number } | null = null;
-        let animeResult: { items: any[]; pageInfo: { currentPage: number; lastPage: number } } | null = null;
-        let movieResult: { items: any[]; page: number; totalPages: number } | null = null;
+        let tvResult: { items: NormalizedShow[]; page: number; totalPages: number } | null = null;
+        let animeResult: { items: NormalizedShow[]; pageInfo: { currentPage: number; lastPage: number } } | null = null;
+        let movieResult: { items: NormalizedShow[]; page: number; totalPages: number } | null = null;
 
         // Only fetch TV if hasMore is true
         if (tvState.hasMore) {
@@ -484,36 +582,49 @@ export function DiscoverScreen() {
           }
         }
 
+        if (requestId !== loadMoreRequestRef.current) {
+          return;
+        }
+
+        const hiddenTrackedItems = trackedStateByKeyRef.current;
+        const newTvItems = filterTrackedItems(tvResult?.items ?? [], hiddenTrackedItems);
+        const newAnimeItems = filterTrackedItems(animeResult?.items ?? [], hiddenTrackedItems);
+        const newMovieItems = filterTrackedItems(movieResult?.items ?? [], hiddenTrackedItems);
+
         // Update state for each category that returned results
         if (tvResult) {
-          const newTvItems = filterTrackedTmdbItems(tvResult.items, trackedTmdbKeys);
           setTvState((prev) => ({
             ...prev,
-            items: [...prev.items, ...newTvItems],
+            items: appendUniqueItems(prev.items, newTvItems),
             currentPage: tvResult.page,
             hasMore: tvResult!.page < tvResult!.totalPages,
           }));
         }
 
         if (animeResult) {
-          const newAnimeItems = animeResult.items;
           setAnimeState((prev) => ({
             ...prev,
-            items: [...prev.items, ...newAnimeItems],
+            items: appendUniqueItems(prev.items, newAnimeItems),
             currentPage: animeResult.pageInfo.currentPage,
             hasMore: animeResult!.pageInfo.currentPage < animeResult!.pageInfo.lastPage,
           }));
         }
 
         if (movieResult) {
-          const newMovieItems = filterTrackedTmdbItems(movieResult.items, trackedTmdbKeys);
           setMovieState((prev) => ({
             ...prev,
-            items: [...prev.items, ...newMovieItems],
+            items: appendUniqueItems(prev.items, newMovieItems),
             currentPage: movieResult.page,
             hasMore: movieResult!.page < movieResult!.totalPages,
           }));
         }
+
+        setAllItems((prev) =>
+          appendUniqueItems(
+            prev,
+            interleaveDiscoverItems(newTvItems, newAnimeItems, newMovieItems)
+          )
+        );
 
         setActiveState((prev) => ({
           ...prev,
@@ -531,14 +642,18 @@ export function DiscoverScreen() {
         } else {
           result = await getTrendingAniList(animeNextPage, INITIAL_ITEMS_PER_PAGE);
         }
-        const newItems = result.items;
+        if (requestId !== loadMoreRequestRef.current) {
+          return;
+        }
+        const newItems = filterTrackedItems(result.items, trackedStateByKeyRef.current);
         setAnimeState((prev) => ({
           ...prev,
-          items: [...prev.items, ...newItems],
+          items: appendUniqueItems(prev.items, newItems),
           isLoadingMore: false,
           currentPage: result.pageInfo.currentPage,
           hasMore: result.pageInfo.currentPage < result.pageInfo.lastPage,
         }));
+        setAllItems((prev) => appendUniqueItems(prev, newItems));
       } else if (activeTab === "movie") {
         let result;
         if (hasActiveFilters) {
@@ -551,14 +666,18 @@ export function DiscoverScreen() {
         } else {
           result = await getTrendingTmdb("movie", "week", movieNextPage);
         }
-        const newItems = filterTrackedTmdbItems(result.items, trackedTmdbKeys);
+        if (requestId !== loadMoreRequestRef.current) {
+          return;
+        }
+        const newItems = filterTrackedItems(result.items, trackedStateByKeyRef.current);
         setMovieState((prev) => ({
           ...prev,
-          items: [...prev.items, ...newItems],
+          items: appendUniqueItems(prev.items, newItems),
           isLoadingMore: false,
           currentPage: result.page,
           hasMore: result.page < result.totalPages,
         }));
+        setAllItems((prev) => appendUniqueItems(prev, newItems));
       } else {
         let result;
         if (hasActiveFilters) {
@@ -571,14 +690,18 @@ export function DiscoverScreen() {
         } else {
           result = await getTrendingTmdb("tv", "week", tvNextPage);
         }
-        const newItems = filterTrackedTmdbItems(result.items, trackedTmdbKeys);
+        if (requestId !== loadMoreRequestRef.current) {
+          return;
+        }
+        const newItems = filterTrackedItems(result.items, trackedStateByKeyRef.current);
         setTvState((prev) => ({
           ...prev,
-          items: [...prev.items, ...newItems],
+          items: appendUniqueItems(prev.items, newItems),
           isLoadingMore: false,
           currentPage: result.page,
           hasMore: result.page < result.totalPages,
         }));
+        setAllItems((prev) => appendUniqueItems(prev, newItems));
       }
     } catch (error) {
       setActiveState((prev) => ({
@@ -611,7 +734,6 @@ export function DiscoverScreen() {
     setTvState,
     setAnimeState,
     setMovieState,
-    trackedTmdbKeys,
     tvState.currentPage,
     tvState.hasMore,
     animeState.currentPage,
@@ -632,6 +754,23 @@ export function DiscoverScreen() {
     activeState.isLoading
   );
 
+  const getTrackedStateLabel = useCallback(
+    (item: NormalizedShow) => {
+      const trackedKey = getTrackedShowKey(item);
+      if (!trackedKey) {
+        return null;
+      }
+
+      const trackedState = trackedStateByKey.get(trackedKey);
+      if (!trackedState) {
+        return null;
+      }
+
+      return getTrackedLabel(trackedState);
+    },
+    [trackedStateByKey]
+  );
+
   const renderItem = useCallback(
     ({ item, index }: { item: NormalizedShow; index: number }) => (
       <View
@@ -645,12 +784,13 @@ export function DiscoverScreen() {
           show={item}
           href={{ pathname: "/show/[id]", params: { id: createShowRouteId(item) } }}
           rank={index < 3 ? index + 1 : undefined}
+          stateLabel={getTrackedStateLabel(item)}
           className="w-full"
           posterClassName={isCompactLayout ? "h-48" : isWeb ? "h-56" : "h-64"}
         />
       </View>
     ),
-    [gridItemWidth, columns, isCompactLayout, isWeb]
+    [gridItemWidth, columns, getTrackedStateLabel, isCompactLayout, isWeb]
   );
 
   const renderFooter = useCallback(() => {
@@ -750,7 +890,7 @@ export function DiscoverScreen() {
             clearFilters();
           }}
           className="mb-3"
-          leadingLabel="Media"
+          align="center"
           compact={isCompactLayout}
         />
 
@@ -951,7 +1091,7 @@ export function DiscoverScreen() {
         <FlashList
           data={activeState.items}
           renderItem={renderItem}
-          keyExtractor={(item, index) => `${item.id}-${activeTab}-${index}`}
+          keyExtractor={getMediaItemKey}
           key={`discover-grid-${columns}`}
           numColumns={columns}
           showsVerticalScrollIndicator={false}

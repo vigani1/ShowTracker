@@ -619,7 +619,7 @@ export default function LibraryScreen() {
                   value={activeTab}
                   onValueChange={setActiveTab}
                   className="mb-3"
-                  leadingLabel="Media"
+                  align="center"
                   compact={isCompactLayout}
                 />
 
@@ -635,6 +635,7 @@ export default function LibraryScreen() {
                   options={statusOptionsWithCounts}
                   value={statusFilter}
                   onValueChange={(value) => setStatusFilter(value)}
+                  align="center"
                 />
 
                 {/* Filter Buttons */}

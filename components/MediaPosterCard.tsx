@@ -24,6 +24,7 @@ interface MediaPosterCardProps {
   showOverview?: boolean;
   progress?: number;
   unwatchedCount?: number;
+  stateLabel?: string | null;
 }
 
 const mediaTypeLabel: Record<NormalizedShow["mediaType"], string> = {
@@ -42,6 +43,7 @@ export function MediaPosterCard({
   showOverview,
   progress,
   unwatchedCount,
+  stateLabel,
 }: MediaPosterCardProps) {
   const { width } = useWindowDimensions();
   const isCompact = Platform.OS !== "web" || width < 640;
@@ -121,6 +123,16 @@ export function MediaPosterCard({
           {typeof rank === "number" ? (
             <View className="absolute left-2 top-2 rounded-md border-2 border-primary bg-bg-base/95 px-2 py-1">
               <Text className="text-[11px] font-black text-primary">#{rank}</Text>
+            </View>
+          ) : null}
+
+          {stateLabel ? (
+            <View pointerEvents="none" className="absolute inset-0 items-center justify-center bg-black/45 px-3">
+              <View className="rounded-full border border-white/60 bg-bg-base/95 px-3 py-1.5">
+                <Text className="text-[11px] font-black uppercase tracking-wide text-text-primary">
+                  {stateLabel}
+                </Text>
+              </View>
             </View>
           ) : null}
         </View>

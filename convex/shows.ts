@@ -3990,9 +3990,8 @@ export const backfillUserShowsMediaType = internalMutation({
 });
 
 /**
- * Lightweight query returning only the external IDs needed by Discover and
- * Recommendations screens to build exclusion sets. Reads feed projections
- * only (no userShows -> shows joins) and projects a minimal shape.
+ * Lightweight query returning only the external IDs and tracking state needed
+ * by Discover and Recommendations screens to build tracked-status maps.
  */
 export const getTrackedIds = query({
   args: {
@@ -4004,39 +4003,72 @@ export const getTrackedIds = query({
     const typedUserId = userId as Id<"users">;
 
     const safeLimit = Math.max(1, Math.min(args.limit ?? 1000, 2000));
-    const projections = await ctx.db
-      .query("feedProjections")
+    const userShows = await ctx.db
+      .query("userShows")
       .withIndex("by_user", (q) => q.eq("userId", typedUserId))
       .take(safeLimit);
 
-    const deduped = new Map<
-      string,
-      {
-        mediaType: "tv" | "movie" | "anime";
-        tmdbId: number | null;
-        anilistId: number | null;
-      }
-    >();
+    type TrackedProjection = {
+      mediaType: "tv" | "movie" | "anime";
+      tmdbId: number | null;
+      anilistId: number | null;
+      status: UserShowStatus;
+      watchedEpisodesCount: number;
+      totalEpisodes: number | null;
+      updatedAt: number;
+    };
 
-    for (const projection of projections) {
-      const mediaType = projection.mediaType;
+    const isWatchedProjection = (projection: TrackedProjection) => {
+      if (projection.status === "completed") return true;
+      if (projection.watchedEpisodesCount <= 0) return false;
+      return (
+        projection.totalEpisodes === null ||
+        projection.watchedEpisodesCount >= projection.totalEpisodes
+      );
+    };
+
+    const shouldPreferProjection = (
+      next: TrackedProjection,
+      current: TrackedProjection
+    ) => {
+      const nextWatched = isWatchedProjection(next);
+      const currentWatched = isWatchedProjection(current);
+      if (nextWatched !== currentWatched) return nextWatched;
+      if (next.watchedEpisodesCount !== current.watchedEpisodesCount) {
+        return next.watchedEpisodesCount > current.watchedEpisodesCount;
+      }
+      return next.updatedAt > current.updatedAt;
+    };
+
+    const deduped = new Map<string, TrackedProjection>();
+
+    for (const userShow of userShows) {
+      const show = await ctx.db.get(userShow.showId);
+      if (!show) continue;
+
+      const mediaType = show.mediaType;
       const key =
         mediaType === "anime"
-          ? `anime:${projection.anilistId ?? projection.malId ?? projection.showId}`
-          : `${mediaType}:${projection.tmdbId ?? projection.showId}`;
+          ? `anime:${show.anilistId ?? show.malId ?? show._id}`
+          : `${mediaType}:${show.tmdbId ?? show._id}`;
 
-      if (deduped.has(key)) {
-        continue;
-      }
-
-      deduped.set(key, {
+      const candidate = {
         mediaType,
-        tmdbId: projection.tmdbId ?? null,
-        anilistId: projection.anilistId ?? null,
-      });
+        tmdbId: show.tmdbId ?? null,
+        anilistId: show.anilistId ?? null,
+        status: userShow.status,
+        watchedEpisodesCount: Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0)),
+        totalEpisodes: show.totalEpisodes ?? null,
+        updatedAt: userShow.lastWatchedAt ?? userShow.statusChangedAt ?? userShow.addedAt,
+      };
+      const existing = deduped.get(key);
+
+      if (!existing || shouldPreferProjection(candidate, existing)) {
+        deduped.set(key, candidate);
+      }
     }
 
-    return Array.from(deduped.values());
+    return Array.from(deduped.values()).map(({ updatedAt: _updatedAt, ...item }) => item);
   },
 });
 
