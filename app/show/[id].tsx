@@ -700,7 +700,7 @@ function parseEpisodeAirDate(airDate?: string | null) {
 
 function isEpisodeReleased(airDate?: string | null, now = new Date()) {
   const parsedAirDate = parseEpisodeAirDate(airDate);
-  if (!parsedAirDate) return true;
+  if (!parsedAirDate) return false;
   return startOfLocalDay(parsedAirDate).getTime() <= startOfLocalDay(now).getTime();
 }
 
@@ -708,7 +708,7 @@ function getEpisodeAvailabilityLabel(airDate?: string | null, now = new Date()) 
   const parsedAirDate = parseEpisodeAirDate(airDate);
   if (!parsedAirDate) {
     return {
-      isReleased: true,
+      isReleased: false,
       dateLabel: "Air date TBA",
       stateLabel: "Release unknown",
       stateClassName: "text-text-muted",

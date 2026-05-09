@@ -56,6 +56,34 @@ function normalizeDateString(value?: string | null) {
   return parsed.toISOString().slice(0, 10);
 }
 
+function getTmdbReleasedTvEpisodeCount(details: TmdbShowDetails) {
+  const lastEpisode = details.last_episode_to_air;
+  if (
+    typeof lastEpisode?.season_number !== "number" ||
+    typeof lastEpisode.episode_number !== "number" ||
+    lastEpisode.season_number < 1 ||
+    lastEpisode.episode_number < 1
+  ) {
+    return undefined;
+  }
+
+  const lastSeasonNumber = lastEpisode.season_number;
+  const lastEpisodeNumber = lastEpisode.episode_number;
+
+  const previousSeasonEpisodes =
+    details.seasons
+      ?.filter(
+        (season) =>
+          season.season_number > 0 &&
+          season.season_number < lastSeasonNumber &&
+          typeof season.episode_count === "number" &&
+          season.episode_count > 0
+      )
+      .reduce((sum, season) => sum + (season.episode_count ?? 0), 0) ?? 0;
+
+  return previousSeasonEpisodes + lastEpisodeNumber;
+}
+
 export function parseJikanDurationToMinutes(duration?: string | null) {
   if (!duration) {
     return undefined;
@@ -136,11 +164,16 @@ export function normalizeTmdbShowDetails(
   const normalizedStatus = normalizeStatus(details.status);
   
   // Ensure totalEpisodes has a value (TV shows with unknown episode count default to 0)
-  const totalEpisodes = details.number_of_episodes && details.number_of_episodes > 0
-    ? details.number_of_episodes
-    : mediaType === "tv" 
-      ? undefined  // Will be calculated from seasons if available
-      : 1; // Movies count as 1 episode
+  const reportedTotalEpisodes =
+    details.number_of_episodes && details.number_of_episodes > 0
+      ? details.number_of_episodes
+      : undefined;
+  const releasedTvEpisodeCount =
+    mediaType === "tv" ? getTmdbReleasedTvEpisodeCount(details) : undefined;
+  const totalEpisodes =
+    mediaType === "tv"
+      ? (releasedTvEpisodeCount ?? reportedTotalEpisodes)
+      : (reportedTotalEpisodes ?? 1); // Movies count as 1 episode
 
   const totalSeasons = details.number_of_seasons && details.number_of_seasons > 0
     ? details.number_of_seasons
