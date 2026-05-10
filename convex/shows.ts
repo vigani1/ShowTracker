@@ -2976,23 +2976,17 @@ async function refreshShowMetadataAndRepairTracking(
   });
 
   const repairedUsers = new Set<string>();
-  if (options?.repairUserId !== undefined) {
-    await ctx.runAction(internal.shows.rebuildUserShowTrackingAggregatesForUser, {
-      userId: options.repairUserId,
-    });
-    repairedUsers.add(String(options.repairUserId));
-  } else {
+  if (options?.repairUserId === undefined) {
     for (const userShow of targetUserShows) {
       await ctx.runAction(internal.shows.rebuildUserShowTrackingAggregatesForUser, {
         userId: userShow.userId,
       });
       repairedUsers.add(String(userShow.userId));
     }
-
-    await ctx.runAction(internal.shows.runRefreshProjectionsForShow, {
-      showId: refreshedShowId,
-    });
   }
+  await ctx.runAction(internal.shows.runRefreshProjectionsForShow, {
+    showId: refreshedShowId,
+  });
 
   return {
     refreshed: true,
