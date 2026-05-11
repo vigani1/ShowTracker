@@ -842,6 +842,7 @@ export function ShowDetailScreen() {
     useState<SeasonWatchedKeyErrorState>({});
   const [isRemovingFromWatchlist, setIsRemovingFromWatchlist] = useState(false);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
+  const [isRepairingTracking, setIsRepairingTracking] = useState(false);
   const [isSettingStatus, setIsSettingStatus] = useState(false);
   const [isStatusMenuVisible, setIsStatusMenuVisible] = useState(false);
   const [isMarkingShow, setIsMarkingShow] = useState(false);
@@ -909,6 +910,7 @@ export function ShowDetailScreen() {
   const removeFromWatchlist = useMutation(api.shows.removeFromWatchlist);
   const setWatchlistStatus = useMutation(api.shows.setWatchlistStatus);
   const setFavoriteStatus = useMutation(api.shows.setFavoriteStatus);
+  const repairTrackingForShow = useMutation(api.shows.repairTrackingForShow);
   const refreshTrackedShowMetadata = useAction(api.shows.refreshTrackedShowMetadata);
   const addAnimeToWatchlistWithRelations = useAction(
     api.shows.addAnimeToWatchlistWithRelations
@@ -1998,6 +2000,48 @@ export function ShowDetailScreen() {
       setTrackingError("Could not update favorite status.");
     } finally {
       setIsTogglingFavorite(false);
+    }
+  };
+
+  const handleRepairTracking = async () => {
+    if (!show) return;
+    if (!canTrackShow || showLookupArgs === "skip") {
+      setTrackingError("This title cannot be tracked yet.");
+      return;
+    }
+    if (!trackingLoaded) {
+      setTrackingError("Tracking is still loading. Please try again.");
+      return;
+    }
+    if (!isInWatchlist) {
+      setTrackingError("Track this title before refreshing tracking.");
+      return;
+    }
+    if (isRepairingTracking) {
+      return;
+    }
+
+    setIsRepairingTracking(true);
+    setTrackingError(null);
+    setTrackingNotice(null);
+
+    try {
+      const result = await repairTrackingForShow(showLookupArgs);
+      if (result.reason === "not_tracked") {
+        setTrackingError("Track this title before refreshing tracking.");
+        return;
+      }
+      if (result.reason !== "ok") {
+        setTrackingError("Could not refresh tracking for this title.");
+        return;
+      }
+
+      setTrackingNotice("Tracking refreshed.");
+    } catch (mutationError) {
+      console.error("Failed to repair tracking for show", mutationError);
+      setTrackingError("Could not refresh tracking for this title.");
+    } finally {
+      setIsRepairingTracking(false);
     }
   };
 
@@ -3286,6 +3330,10 @@ export function ShowDetailScreen() {
   const watchProgressRatio = totalEpisodesCount
     ? Math.min(1, clampedWatchedEpisodesCount / totalEpisodesCount)
     : 0;
+  const watchProgressPercent =
+    totalEpisodesCount && clampedWatchedEpisodesCount >= totalEpisodesCount
+      ? 100
+      : Math.floor(watchProgressRatio * 100);
 
   const releasedEpisodeCountForShowAction = useMemo(() => {
     let count = 0;
@@ -3312,7 +3360,11 @@ export function ShowDetailScreen() {
   const isWatchlistActionPending =
     isSettingStatus || (isRemovingFromWatchlist && (trackingLoaded ? isInWatchlist : true));
   const isStatusMenuBusy =
-    !trackingLoaded || isSettingStatus || isWatchlistActionPending || isTogglingFavorite;
+    !trackingLoaded ||
+    isSettingStatus ||
+    isWatchlistActionPending ||
+    isTogglingFavorite ||
+    isRepairingTracking;
   const showMediaType = show?.mediaType;
   const isFirstSavePrompt =
     trackingLoaded && !isInWatchlist && showMediaType != null && showMediaType !== "movie";
@@ -3708,6 +3760,7 @@ export function ShowDetailScreen() {
                 isBusy={!canTrackShow || isStatusMenuBusy}
                 isCompact={!isDesktop}
                 isTogglingFavorite={isTogglingFavorite}
+                isRepairingTracking={isRepairingTracking}
                 onToggleWatchlist={() => {
                   void handleToggleLibrary();
                 }}
@@ -3716,6 +3769,9 @@ export function ShowDetailScreen() {
                 }}
                 onEditStatus={() => setIsStatusMenuVisible(true)}
                 onAddToList={() => setIsAddToListModalVisible(true)}
+                onRepairTracking={() => {
+                  void handleRepairTracking();
+                }}
               />
             ) : null
           }
@@ -3799,7 +3855,7 @@ export function ShowDetailScreen() {
                       : "Loading tracking..."}
                 </Text>
                 <Text className="text-xs font-semibold text-text-secondary">
-                  {Math.round(watchProgressRatio * 100)}%
+                  {watchProgressPercent}%
                 </Text>
               </View>
             </View>
@@ -3863,6 +3919,15 @@ export function ShowDetailScreen() {
                   <ActivityIndicator size="small" color="#52525b" />
                   <Text className="text-xs text-text-secondary">
                     Updating status...
+                  </Text>
+                </View>
+              ) : null}
+
+              {isRepairingTracking ? (
+                <View className="mb-6 flex-row items-center gap-2">
+                  <ActivityIndicator size="small" color="#52525b" />
+                  <Text className="text-xs text-text-secondary">
+                    Refreshing tracking...
                   </Text>
                 </View>
               ) : null}

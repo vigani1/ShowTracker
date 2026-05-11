@@ -11,10 +11,12 @@ type ShowActionBarProps = {
   isBusy: boolean;
   isCompact?: boolean;
   isTogglingFavorite?: boolean;
+  isRepairingTracking?: boolean;
   onToggleWatchlist: () => void;
   onToggleFavorite: () => void;
   onEditStatus: () => void;
   onAddToList: () => void;
+  onRepairTracking?: () => void;
 };
 
 type ActionButtonProps = {
@@ -72,10 +74,12 @@ export function ShowActionBar({
   isBusy,
   isCompact = false,
   isTogglingFavorite = false,
+  isRepairingTracking = false,
   onToggleWatchlist,
   onToggleFavorite,
   onEditStatus,
   onAddToList,
+  onRepairTracking,
 }: ShowActionBarProps) {
   const [isMoreVisible, setIsMoreVisible] = useState(false);
   const [moreButtonFrame, setMoreButtonFrame] = useState({ x: 0, y: 0, width: 42, height: 42 });
@@ -178,6 +182,21 @@ export function ShowActionBar({
                 loading={isTogglingFavorite}
               />
             </View>
+
+            {isTracked && onRepairTracking ? (
+              <View className="border-b border-border-default">
+                <MenuAction
+                  label="Refresh Tracking"
+                  icon="refresh-outline"
+                  onPress={() => {
+                    closeMore();
+                    onRepairTracking();
+                  }}
+                  disabled={isBusy || isRepairingTracking}
+                  loading={isRepairingTracking}
+                />
+              </View>
+            ) : null}
 
             {canAddToList ? (
               <MenuAction

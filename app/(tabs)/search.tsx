@@ -409,6 +409,7 @@ export function SearchScreen() {
           value={query}
           onChangeText={setQuery}
           className="mb-3"
+          autoFocus
         />
 
         <SegmentedControl

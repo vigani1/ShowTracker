@@ -95,6 +95,7 @@ type AnimeCompletionBehavior =
 type HomePausedSectionMode = "auto_paused_only" | "all_paused";
 
 const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
+const TRACKING_REPAIR_MAX_BATCHES = 200;
 
 function formatCount(value: number) {
   return value.toLocaleString("en-US");
@@ -644,6 +645,15 @@ export default function ProfileScreen() {
   const [isAnimeSettingsVisible, setIsAnimeSettingsVisible] = useState(false);
   const [isSavingAnimeSettings, setIsSavingAnimeSettings] = useState(false);
   const [animeSettingsError, setAnimeSettingsError] = useState<string | null>(null);
+  const [isRepairingTracking, setIsRepairingTracking] = useState(false);
+  const [trackingRepairError, setTrackingRepairError] = useState<string | null>(null);
+  const [trackingRepairNotice, setTrackingRepairNotice] = useState<string | null>(null);
+  const [trackingRepairProgress, setTrackingRepairProgress] = useState({
+    scanned: 0,
+    patched: 0,
+    batches: 0,
+  });
+  const [trackingRepairCursor, setTrackingRepairCursor] = useState<string | null>(null);
   const [statsVersion, setStatsVersion] = useState<"A" | "B">("A");
   const [shouldLoadHeavySections, setShouldLoadHeavySections] = useState(false);
   const [visibleRailCount, setVisibleRailCount] = useState(8);
@@ -665,6 +675,7 @@ export default function ProfileScreen() {
   const animeHomeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
   const upsertUserProfile = useMutation(api.stats.upsertUserProfile);
   const setUserAnimeHomeSettings = useMutation(api.shows.setUserAnimeHomeSettings);
+  const repairMyShowsTrackingBatch = useMutation(api.shows.repairMyShowsTrackingBatch);
   const syncTrackedAnimeRelations = useAction(api.shows.syncTrackedAnimeRelations);
   const pruneAnimeFranchiseToCoreRelations = useAction(
     api.shows.pruneAnimeFranchiseToCoreRelations
@@ -1123,6 +1134,75 @@ export default function ProfileScreen() {
     [updateAnimeSettings]
   );
 
+  const handleRepairTracking = useCallback(async () => {
+    if (!isAuthenticated || isRepairingTracking) {
+      return;
+    }
+
+    setIsRepairingTracking(true);
+    setTrackingRepairError(null);
+    setTrackingRepairNotice(null);
+    setTrackingRepairProgress({ scanned: 0, patched: 0, batches: 0 });
+
+    try {
+      let cursor: string | null = trackingRepairCursor;
+      let scanned = 0;
+      let patched = 0;
+      let batches = 0;
+      let isDone = false;
+      let hitBatchLimit = false;
+
+      while (!isDone) {
+        const requestCursor = cursor;
+        const batch: {
+          scanned: number;
+          patched: number;
+          continueCursor: string | null;
+          isDone: boolean;
+        } = await repairMyShowsTrackingBatch(
+          cursor ? { continueCursor: cursor } : {}
+        );
+
+        if (!batch.isDone && batch.continueCursor === requestCursor) {
+          throw new Error("Repair cursor did not advance.");
+        }
+
+        scanned += batch.scanned;
+        patched += batch.patched;
+        batches += 1;
+        cursor = batch.continueCursor;
+        isDone = batch.isDone;
+        setTrackingRepairCursor(isDone ? null : cursor);
+
+        setTrackingRepairProgress({ scanned, patched, batches });
+
+        if (!isDone && batches >= TRACKING_REPAIR_MAX_BATCHES) {
+          hitBatchLimit = true;
+          setTrackingRepairError(
+            `Stopped after ${batches} batches (${scanned} scanned, ${patched} patched) before completion${cursor ? ". Tap again to continue." : " at the start of pagination."}`
+          );
+          break;
+        }
+      }
+
+      if (hitBatchLimit) {
+        return;
+      }
+
+      setTrackingRepairCursor(null);
+      setTrackingRepairNotice(
+        scanned === 0
+          ? "No tracked shows to refresh."
+          : `Tracking refreshed for ${patched}/${scanned} tracked ${scanned === 1 ? "show" : "shows"}.`
+      );
+    } catch (error) {
+      console.error("Failed to refresh tracking library", error);
+      setTrackingRepairError("Could not refresh your tracked shows. Please try again.");
+    } finally {
+      setIsRepairingTracking(false);
+    }
+  }, [isAuthenticated, isRepairingTracking, repairMyShowsTrackingBatch, trackingRepairCursor]);
+
   const openProfileEditor = () => {
     setDraftUsername(profileIdentity?.username ?? "");
     setDraftBio(profileIdentity?.bio ?? "");
@@ -1513,6 +1593,59 @@ export default function ProfileScreen() {
 
         <View className="mt-8">
           <SectionHeader title="Data" icon="download-outline" />
+          <View className="mb-3 overflow-hidden rounded-xl border border-border-default bg-bg-surface">
+            <LinearGradient
+              colors={["rgba(56,189,248,0.12)", "rgba(239,68,68,0.03)"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{ paddingHorizontal: 14, paddingVertical: 12 }}
+            >
+              <View className="flex-row items-center gap-3">
+                <View className="h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10">
+                  <Ionicons name="refresh-outline" size={16} color="#38bdf8" />
+                </View>
+                <View className="min-w-0 flex-1">
+                  <Text className="text-sm font-bold text-text-primary">
+                    Refresh my shows
+                  </Text>
+                  <Text className="mt-0.5 text-[11px] text-text-muted">
+                    Fix stale watched counts, statuses, and Home projections.
+                  </Text>
+                  {isRepairingTracking ? (
+                    <Text className="mt-1 text-[11px] text-text-secondary">
+                      Scanned {trackingRepairProgress.scanned} across {trackingRepairProgress.batches} batch{trackingRepairProgress.batches === 1 ? "" : "es"}...
+                    </Text>
+                  ) : null}
+                  {trackingRepairNotice ? (
+                    <Text className="mt-1 text-[11px] text-success">
+                      {trackingRepairNotice}
+                    </Text>
+                  ) : null}
+                  {trackingRepairError ? (
+                    <Text className="mt-1 text-[11px] text-primary">
+                      {trackingRepairError}
+                    </Text>
+                  ) : null}
+                </View>
+                <Pressable
+                  disabled={!isAuthenticated || isRepairingTracking}
+                  onPress={() => {
+                    void handleRepairTracking();
+                  }}
+                  className="min-w-24 items-center justify-center rounded-lg border border-sky-400/40 bg-sky-500/10 px-3 py-2"
+                  style={{ opacity: !isAuthenticated || isRepairingTracking ? 0.55 : 1 }}
+                >
+                  {isRepairingTracking ? (
+                    <ActivityIndicator size="small" color="#38bdf8" />
+                  ) : (
+                    <Text className="text-xs font-bold uppercase tracking-wide text-sky-300">
+                      Refresh
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
+            </LinearGradient>
+          </View>
           <Link href="/import" asChild>
             <Pressable className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
               <LinearGradient

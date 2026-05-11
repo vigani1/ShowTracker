@@ -84,6 +84,26 @@ function getTmdbReleasedTvEpisodeCount(details: TmdbShowDetails) {
   return previousSeasonEpisodes + lastEpisodeNumber;
 }
 
+function getAniListReleasedEpisodeCount(
+  status: string | undefined,
+  totalEpisodes: number | undefined,
+  nextAiringEpisodeNumber: number | undefined | null
+) {
+  if (typeof nextAiringEpisodeNumber === "number" && nextAiringEpisodeNumber > 1) {
+    return nextAiringEpisodeNumber - 1;
+  }
+
+  if (
+    (status === "finished" || status === "canceled") &&
+    typeof totalEpisodes === "number" &&
+    totalEpisodes > 0
+  ) {
+    return totalEpisodes;
+  }
+
+  return undefined;
+}
+
 export function parseJikanDurationToMinutes(duration?: string | null) {
   if (!duration) {
     return undefined;
@@ -163,7 +183,7 @@ export function normalizeTmdbShowDetails(
 
   const normalizedStatus = normalizeStatus(details.status);
   
-  // Ensure totalEpisodes has a value (TV shows with unknown episode count default to 0)
+  // Keep planned totals separate from released episode counts for TV.
   const reportedTotalEpisodes =
     details.number_of_episodes && details.number_of_episodes > 0
       ? details.number_of_episodes
@@ -172,7 +192,7 @@ export function normalizeTmdbShowDetails(
     mediaType === "tv" ? getTmdbReleasedTvEpisodeCount(details) : undefined;
   const totalEpisodes =
     mediaType === "tv"
-      ? (releasedTvEpisodeCount ?? reportedTotalEpisodes)
+      ? reportedTotalEpisodes
       : (reportedTotalEpisodes ?? 1); // Movies count as 1 episode
 
   const totalSeasons = details.number_of_seasons && details.number_of_seasons > 0
@@ -193,6 +213,7 @@ export function normalizeTmdbShowDetails(
     genres: details.genres?.map((genre) => genre.name),
     status: normalizedStatus,
     totalEpisodes,
+    releasedEpisodes: mediaType === "tv" ? releasedTvEpisodeCount : totalEpisodes,
     totalSeasons,
     episodeRuntime: normalizedRuntime,
     rating: details.vote_average,
@@ -250,6 +271,11 @@ export function normalizeAniListMedia(media: AniListMedia): NormalizedShow {
   const totalEpisodes = media.episodes && media.episodes > 0
     ? media.episodes
     : undefined; // Will be populated from Jikan fallback if available
+  const releasedEpisodes = getAniListReleasedEpisodeCount(
+    normalizedStatus,
+    totalEpisodes,
+    media.nextAiringEpisode?.episode
+  );
 
   return {
     id: `anilist:${media.id}`,
@@ -261,6 +287,7 @@ export function normalizeAniListMedia(media: AniListMedia): NormalizedShow {
     genres: media.genres,
     status: normalizedStatus,
     totalEpisodes,
+    releasedEpisodes,
     episodeRuntime,
     rating: media.averageScore ? media.averageScore / 10 : undefined,
     firstAired: formatAniListDate(media.startDate),
@@ -338,6 +365,11 @@ export function normalizeJikanAnime(anime: JikanAnime): NormalizedShow {
   const totalEpisodes = anime.episodes && anime.episodes > 0
     ? anime.episodes
     : undefined;
+  const releasedEpisodes = getAniListReleasedEpisodeCount(
+    normalizedStatus,
+    totalEpisodes,
+    undefined
+  );
 
   return {
     id: `jikan:${anime.mal_id}`,
@@ -351,6 +383,7 @@ export function normalizeJikanAnime(anime: JikanAnime): NormalizedShow {
     genres: anime.genres?.map((genre) => genre.name),
     status: normalizedStatus,
     totalEpisodes,
+    releasedEpisodes,
     episodeRuntime,
     rating: anime.score ?? undefined,
     firstAired: normalizeDateString(anime.aired?.from),
