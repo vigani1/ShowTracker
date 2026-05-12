@@ -3,6 +3,7 @@ import { Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { LogBox, Platform, View, useWindowDimensions } from "react-native";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import { AuthGate } from "@/components/AuthGate";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -44,7 +45,16 @@ function RootLayoutContent() {
               fullScreenGestureEnabled: false,
               animationMatchesGesture: Platform.OS === "ios",
             }}
-          />
+          >
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen
+              name="show/[id]"
+              options={{
+                presentation: "transparentModal",
+                contentStyle: { backgroundColor: "transparent" },
+              }}
+            />
+          </Stack>
         </AppErrorBoundary>
       </View>
     </View>
@@ -53,21 +63,23 @@ function RootLayoutContent() {
 
 export function RootLayout() {
   return (
-    <ConvexAuthProvider
-      client={convex}
-      storage={tokenStorage}
-      // App currently uses password + anonymous auth only.
-      // Disable auth code handling to avoid verifyCode runtime failures
-      // when stale `code` params are present.
-      shouldHandleCode={false}
-    >
-      <ThemeProvider>
-        <AuthGate>
-          <StatusBar style="light" />
-          <RootLayoutContent />
-        </AuthGate>
-      </ThemeProvider>
-    </ConvexAuthProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ConvexAuthProvider
+        client={convex}
+        storage={tokenStorage}
+        // App currently uses password + anonymous auth only.
+        // Disable auth code handling to avoid verifyCode runtime failures
+        // when stale `code` params are present.
+        shouldHandleCode={false}
+      >
+        <ThemeProvider>
+          <AuthGate>
+            <StatusBar style="light" />
+            <RootLayoutContent />
+          </AuthGate>
+        </ThemeProvider>
+      </ConvexAuthProvider>
+    </GestureHandlerRootView>
   );
 }
 

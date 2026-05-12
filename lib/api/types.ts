@@ -10,6 +10,7 @@ export type NormalizedShow = {
   genres?: string[];
   status?: string;
   totalEpisodes?: number;
+  releasedEpisodes?: number;
   totalSeasons?: number;
   episodeRuntime?: number;
   rating?: number;

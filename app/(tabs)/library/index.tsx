@@ -17,12 +17,19 @@ import { Link, useLocalSearchParams } from "expo-router";
 import { useQuery } from "convex/react";
 import { FlashList } from "@shopify/flash-list";
 import { api } from "@/convex/_generated/api";
-import { FilterChipGroup } from "@/components/FilterChipGroup";
+import {
+  ClearFilterChip,
+  DropdownFilterChip,
+  FilterBar,
+} from "@/components/FilterBar";
 import { PageIntro } from "@/components/PageIntro";
 import { SearchInput } from "@/components/SearchInput";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { SegmentedControl } from "@/components/SegmentedControl";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import {
+  useStableCount,
+  useStableDisplayValue,
+} from "@/hooks/use-stable-display-value";
 import {
   applyTrackingFilters,
   matchesStatusFilter,
@@ -146,14 +153,36 @@ function getHomeColumnCount(width: number, isWeb: boolean) {
   return width >= 500 ? 3 : 2;
 }
 
-function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boolean }) {
+function LibraryCard({
+  item,
+  isCompact,
+  isSmallPhone,
+}: {
+  item: LibraryDashboardItem;
+  isCompact: boolean;
+  isSmallPhone: boolean;
+}) {
+  const isFabricEnabled =
+    "NativeFabricUIManager" in globalThis || "__turboModuleProxy" in globalThis;
+  const missingPosterTitleFitProps = isFabricEnabled
+    ? {}
+    : {
+        adjustsFontSizeToFit: true,
+        minimumFontScale: 0.72,
+      };
+  const titleFitProps = isFabricEnabled
+    ? {}
+    : {
+        adjustsFontSizeToFit: true,
+        minimumFontScale: 0.62,
+      };
   const routeId = getRouteId(item);
   const isMovie = item.mediaType === "movie";
   const rawPercent =
     typeof item.progressPercent === "number" ? item.progressPercent : 0;
   const progress = Math.max(0, Math.min(100, rawPercent)) / 100;
 
-  const posterHeight = isWeb ? 280 : 240;
+  const posterHeight = isCompact ? 206 : 280;
 
   const card = (
     <View className="overflow-hidden rounded-xl border-2 border-zinc-800 bg-zinc-900">
@@ -166,7 +195,13 @@ function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boole
           />
         ) : (
           <View className="flex-1 items-center justify-center bg-zinc-800 px-3">
-            <Text className="text-center text-sm font-semibold text-zinc-400">
+            <Text
+              className="text-center text-sm font-semibold text-zinc-400"
+              numberOfLines={3}
+              ellipsizeMode="tail"
+              style={isFabricEnabled ? { fontSize: 14, lineHeight: 18 } : undefined}
+              {...missingPosterTitleFitProps}
+            >
               {item.title}
             </Text>
           </View>
@@ -186,7 +221,13 @@ function LibraryCard({ item, isWeb }: { item: LibraryDashboardItem; isWeb: boole
           </View>
         ) : null}
         <View className="absolute bottom-0 left-0 right-0 px-2.5 pb-2.5">
-          <Text className="mb-0.5 text-sm font-bold text-white" numberOfLines={1}>
+          <Text
+            className={`${isSmallPhone ? "text-[11px]" : "text-sm"} mb-0.5 font-bold leading-4 text-white`}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={isFabricEnabled ? { fontSize: isSmallPhone ? 11 : 14, lineHeight: 16 } : undefined}
+            {...titleFitProps}
+          >
             {item.title}
           </Text>
           <Text className="text-xs text-zinc-400" numberOfLines={1}>
@@ -347,8 +388,9 @@ export default function LibraryScreen() {
     selectedGenres.length > 0 ||
     selectedYear !== "" ||
     selectedRating !== "";
+  const isLoading = libraryItems === undefined;
 
-  const statusOptionsWithCounts = useMemo(() => {
+  const rawStatusOptionsWithCounts = useMemo(() => {
     // Use backend counts when available to avoid iterating all items client-side.
     if (libraryCounts) {
       const relevantTypes: string[] =
@@ -399,6 +441,18 @@ export default function LibraryScreen() {
       count: mediaItems.filter((item) => matchesStatusFilter(item, option.value)).length,
     }));
   }, [activeTab, libraryCounts, mediaItems, statusOptions]);
+  const statusOptionsContextKey = `library-status:${activeTab}`;
+  const stableStatusOptionsWithCounts = useStableDisplayValue(
+    rawStatusOptionsWithCounts,
+    {
+      contextKey: statusOptionsContextKey,
+      isLoading: isLoading || libraryCounts === undefined,
+      shouldHold: (options) => options.some((option) => option.count === 0),
+    }
+  );
+  const statusOptionsWithCounts =
+    stableStatusOptionsWithCounts ??
+    (isLoading || libraryCounts === undefined ? statusOptions : rawStatusOptionsWithCounts);
 
   useEffect(() => {
     if (!statusOptionsWithCounts.some((option) => option.value === statusFilter)) {
@@ -406,9 +460,22 @@ export default function LibraryScreen() {
     }
   }, [statusFilter, statusOptionsWithCounts]);
 
-  const isLoading = libraryItems === undefined;
+  const activeItemsCountContextKey = [
+    "library-active",
+    activeTab,
+    statusFilter,
+    debouncedSearchQuery.trim().toLowerCase(),
+    selectedGenres.join(","),
+    selectedYear,
+    selectedRating,
+  ].join(":");
+  const stableActiveItemsCount =
+    useStableCount(activeItems.length, activeItemsCountContextKey, isLoading) ??
+    activeItems.length;
   const effectiveWidth = gridWidth || width;
   const columns = getHomeColumnCount(effectiveWidth, isWeb);
+  const isCompactLayout = effectiveWidth < 640;
+  const isSmallPhone = width < 390;
   const pageSize = Math.max(columns * 3, 6);
   const hasMore = visibleCount < activeItems.length;
 
@@ -486,11 +553,15 @@ export default function LibraryScreen() {
             paddingRight: columnIndex === columns - 1 ? 0 : halfGap,
           }}
         >
-          <LibraryCard item={item} isWeb={isWeb} />
+          <LibraryCard
+            item={item}
+            isCompact={isCompactLayout}
+            isSmallPhone={isSmallPhone}
+          />
         </View>
       );
     },
-    [columns, isWeb]
+    [columns, isCompactLayout, isSmallPhone]
   );
 
   const headerText =
@@ -538,15 +609,18 @@ export default function LibraryScreen() {
                         ? "planet-outline"
                         : "tv-outline"
                   }
-                  rightLabel={`${activeItems.length} matched`}
+                  rightLabel={`${stableActiveItemsCount} matched`}
                   className="mb-4"
+                  compact={isCompactLayout}
                 />
 
-                <SegmentedControl
+                <FilterBar
                   options={tabOptions}
                   value={activeTab}
                   onValueChange={setActiveTab}
                   className="mb-3"
+                  align="center"
+                  compact={isCompactLayout}
                 />
 
                 <SearchInput
@@ -556,73 +630,46 @@ export default function LibraryScreen() {
                   className="mb-3"
                 />
 
-                <FilterChipGroup
+                <FilterBar
                   className="mb-3"
                   options={statusOptionsWithCounts}
                   value={statusFilter}
                   onValueChange={(value) => setStatusFilter(value)}
+                  align="center"
                 />
 
                 {/* Filter Buttons */}
                 <View className="mb-3">
-                  <View className="flex-row flex-wrap gap-2">
+                  <View className="flex-row flex-wrap justify-center gap-2">
                     {/* Genre Button */}
                     {availableGenres.length > 0 && (
-                      <Pressable
+                      <DropdownFilterChip
                         onPress={() => setOpenDropdown(openDropdown === "genres" ? null : "genres")}
-                        className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-                          selectedGenres.length > 0
-                            ? "border-primary bg-primary"
-                            : "border-border-default bg-bg-surface"
-                        }`}
-                      >
-                        <Text className={`text-sm font-semibold ${selectedGenres.length > 0 ? "text-white" : "text-text-secondary"}`}>
-                          {selectedGenres.length > 0 ? `${selectedGenres.length} Genre${selectedGenres.length > 1 ? "s" : ""}` : "Genre"}
-                        </Text>
-                        <Text className={selectedGenres.length > 0 ? "text-white" : "text-text-secondary"}>
-                          {openDropdown === "genres" ? "▲" : "▼"}
-                        </Text>
-                      </Pressable>
+                        active={selectedGenres.length > 0}
+                        open={openDropdown === "genres"}
+                        label={selectedGenres.length > 0 ? `${selectedGenres.length} Genre${selectedGenres.length > 1 ? "s" : ""}` : "Genre"}
+                      />
                     )}
 
                     {/* Year Button */}
-                    <Pressable
+                    <DropdownFilterChip
                       onPress={() => setOpenDropdown(openDropdown === "year" ? null : "year")}
-                      className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-                        selectedYear ? "border-primary bg-primary" : "border-border-default bg-bg-surface"
-                      }`}
-                    >
-                      <Text className={`text-sm font-semibold ${selectedYear ? "text-white" : "text-text-secondary"}`}>
-                        {selectedYear || "Year"}
-                      </Text>
-                      <Text className={selectedYear ? "text-white" : "text-text-secondary"}>
-                        {openDropdown === "year" ? "▲" : "▼"}
-                      </Text>
-                    </Pressable>
+                      active={Boolean(selectedYear)}
+                      open={openDropdown === "year"}
+                      label={selectedYear || "Year"}
+                    />
 
                     {/* Rating Button */}
-                    <Pressable
+                    <DropdownFilterChip
                       onPress={() => setOpenDropdown(openDropdown === "rating" ? null : "rating")}
-                      className={`flex-row items-center gap-2 rounded-full border px-4 py-2 ${
-                        selectedRating ? "border-primary bg-primary" : "border-border-default bg-bg-surface"
-                      }`}
-                    >
-                      <Text className={`text-sm font-semibold ${selectedRating ? "text-white" : "text-text-secondary"}`}>
-                        {selectedRating ? `${selectedRating}+ ⭐` : "Rating"}
-                      </Text>
-                      <Text className={selectedRating ? "text-white" : "text-text-secondary"}>
-                        {openDropdown === "rating" ? "▲" : "▼"}
-                      </Text>
-                    </Pressable>
+                      active={Boolean(selectedRating)}
+                      open={openDropdown === "rating"}
+                      label={selectedRating ? `${selectedRating}+` : "Rating"}
+                    />
 
                     {/* Clear Button */}
                     {hasActiveFilters && (
-                      <Pressable
-                        onPress={clearFilters}
-                        className="rounded-full border border-border-default bg-bg-surface px-4 py-2"
-                      >
-                        <Text className="text-sm font-semibold text-text-secondary">Clear</Text>
-                      </Pressable>
+                      <ClearFilterChip onPress={clearFilters} />
                     )}
                   </View>
 

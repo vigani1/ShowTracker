@@ -6,6 +6,7 @@ interface SearchInputProps {
   onChangeText: (text: string) => void;
   placeholder?: string;
   className?: string;
+  autoFocus?: boolean;
 }
 
 export function SearchInput({
@@ -13,6 +14,7 @@ export function SearchInput({
   onChangeText,
   placeholder = "Search shows, anime, movies...",
   className,
+  autoFocus,
 }: SearchInputProps) {
   const hasValue = value.trim().length > 0;
 
@@ -34,6 +36,7 @@ export function SearchInput({
         placeholderTextColor="#52525b"
         className="flex-1 text-base text-text-primary"
         returnKeyType="search"
+        autoFocus={autoFocus}
       />
       {hasValue ? (
         <Pressable

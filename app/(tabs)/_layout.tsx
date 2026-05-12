@@ -8,14 +8,18 @@ export default function TabsLayout() {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const isDesktop = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
-  const iosBottomInset = Math.max(insets.bottom, 14);
+  const isMobileWeb = Platform.OS === "web" && !isDesktop;
+  const mobileWebBottomInset = isMobileWeb ? 16 : 0;
+  const iosBottomInset = Math.max(insets.bottom, 16);
   const mobileTabBarPaddingBottom =
-    Platform.OS === "ios" ? iosBottomInset + 5 : 6;
-  const mobileTabBarPaddingTop = Platform.OS === "ios" ? 2 : 6;
+    Platform.OS === "ios" ? iosBottomInset + 10 : isMobileWeb ? mobileWebBottomInset : 8;
+  const mobileTabBarPaddingTop = Platform.OS === "ios" ? 2 : isMobileWeb ? 0 : 6;
   const mobileTabBarHeight =
     Platform.OS === "ios"
-      ? Math.max(78, 50 + mobileTabBarPaddingTop + mobileTabBarPaddingBottom)
-      : 62;
+      ? Math.max(90, 50 + mobileTabBarPaddingTop + mobileTabBarPaddingBottom)
+      : isMobileWeb
+        ? 58 + mobileWebBottomInset
+        : 64;
 
   return (
     <View className="flex-1" style={{ backgroundColor: "#09090b" }}>
@@ -26,22 +30,16 @@ export default function TabsLayout() {
             tabBarStyle: isDesktop
               ? { display: "none" }
               : {
-                  backgroundColor: "rgba(9,9,11,0.92)",
+                  backgroundColor: "#09090b",
                   borderTopWidth: 2,
                   borderTopColor: "#27272a",
                   height: mobileTabBarHeight,
                   paddingBottom: mobileTabBarPaddingBottom,
                   paddingTop: mobileTabBarPaddingTop,
                 },
+            tabBarItemStyle: isMobileWeb ? { height: 58 } : undefined,
             tabBarActiveTintColor: "#ef4444",
             tabBarInactiveTintColor: "#a1a1aa",
-            tabBarItemStyle:
-              Platform.OS === "ios"
-                ? {
-                    paddingTop: 0,
-                    paddingBottom: 2,
-                  }
-                : undefined,
             tabBarIconStyle: Platform.OS === "ios" ? { marginTop: -2 } : undefined,
             tabBarLabelStyle: {
               fontSize: 10,

@@ -1,7 +1,10 @@
+import type { ReactNode } from "react";
 import { LinearGradient } from "expo-linear-gradient";
 import { Image, View, Text } from "react-native";
+import type { Href } from "expo-router";
 import { Badge } from "./Badge";
 import { toHttpsImageUrl } from "@/lib/image-url";
+import { AppBackButton } from "@/components/AppBackButton";
 
 interface ShowHeaderProps {
   backdropUrl?: string | null;
@@ -11,6 +14,10 @@ interface ShowHeaderProps {
   firstAired?: string | null;
   rating?: number | null;
   isDesktop: boolean;
+  showBackButton?: boolean;
+  backFallbackHref?: Href;
+  backButtonVariant?: "back" | "close";
+  actionSlot?: ReactNode;
 }
 
 function mediaTypeLabel(type: "tv" | "movie" | "anime"): string {
@@ -32,6 +39,10 @@ export function ShowHeader({
   firstAired,
   rating,
   isDesktop,
+  showBackButton = false,
+  backFallbackHref = "/home",
+  backButtonVariant = "back",
+  actionSlot,
 }: ShowHeaderProps) {
   const heroHeight = isDesktop ? 420 : 300;
 
@@ -77,6 +88,18 @@ export function ShowHeader({
       <View className="absolute -left-10 bottom-0 h-36 w-36 rounded-full bg-accent/10" />
 
 
+
+      {showBackButton ? (
+        <View className={`absolute left-4 ${isDesktop ? "top-5" : "top-4"} z-10`}>
+          <AppBackButton fallbackHref={backFallbackHref} variant={backButtonVariant} />
+        </View>
+      ) : null}
+
+      {actionSlot ? (
+        <View className={`absolute right-4 ${isDesktop ? "top-5" : "top-4"} z-20`}>
+          {actionSlot}
+        </View>
+      ) : null}
 
       {/* Content */}
       <View

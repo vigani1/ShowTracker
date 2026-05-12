@@ -48,6 +48,7 @@ const anilistMediaSelection = `
   format
   season
   seasonYear
+  nextAiringEpisode { episode }
 `;
 
 type AniListMediaType = "ANIME" | "MANGA";
@@ -78,6 +79,7 @@ export type AniListMedia = {
   format?: string | null;
   season?: string | null;
   seasonYear?: number | null;
+  nextAiringEpisode?: { episode?: number | null } | null;
   relations?: {
     edges?: AniListRelationEdge[] | null;
   } | null;
@@ -175,6 +177,7 @@ async function patchAniListWithJikanFallback(
       totalEpisodes: show.totalEpisodes ?? jikanShow.totalEpisodes,
       episodeRuntime: show.episodeRuntime ?? jikanShow.episodeRuntime,
       status: show.status ?? jikanShow.status,
+      releasedEpisodes: show.releasedEpisodes ?? jikanShow.releasedEpisodes,
     };
   } catch {
     return show;

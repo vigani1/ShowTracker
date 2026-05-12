@@ -21,6 +21,7 @@ import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@/convex/_generated/api";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { useStableCount } from "@/hooks/use-stable-display-value";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
 type TimeBreakdown = {
@@ -94,6 +95,7 @@ type AnimeCompletionBehavior =
 type HomePausedSectionMode = "auto_paused_only" | "all_paused";
 
 const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
+const TRACKING_REPAIR_MAX_BATCHES = 200;
 
 function formatCount(value: number) {
   return value.toLocaleString("en-US");
@@ -259,7 +261,7 @@ function SectionHeader({
         <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
           <Ionicons name={icon} size={14} color="#ef4444" />
         </View>
-        <Text className="text-lg font-extrabold tracking-tight text-text-primary">
+        <Text className="text-lg font-extrabold tracking-tight text-text-primary" numberOfLines={1}>
           {title}
         </Text>
       </View>
@@ -315,21 +317,26 @@ function StatsPanelUnified({
         style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
       />
 
-      <View className="relative flex-row items-center justify-between px-5 pb-4 pt-5">
-        <View>
+      <View className="relative flex-row items-center justify-between gap-3 px-5 pb-4 pt-5">
+        <View className="min-w-0 flex-1">
           <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
             Total Watch Time
           </Text>
-          <Text className="mt-1 text-4xl font-black text-text-primary">
+          <Text
+            className="mt-1 text-4xl font-black text-text-primary"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
             {stats.totalWatchTimeFormatted ?? "0min"}
           </Text>
         </View>
-        <View className="items-end">
+        <View className="w-24 shrink-0 items-end">
           <View className="flex-row items-center gap-1.5">
             <Ionicons name="checkmark-circle" size={14} color="#ef4444" />
-            <Text className="text-sm font-bold text-text-primary">
-              {completed}/{total}
-            </Text>
+              <Text className="text-sm font-bold text-text-primary" numberOfLines={1}>
+                {completed}/{total}
+              </Text>
           </View>
           <View className="mt-1.5 h-1.5 w-24 overflow-hidden rounded-full bg-bg-elevated">
             <View
@@ -470,8 +477,12 @@ function StatsPanelCards({
               <Ionicons name={m.icon} size={14} color="#ef4444" />
             </View>
             <View>
-              <Text className="text-base font-black text-text-primary">{m.value}</Text>
-              <Text className="text-[9px] font-semibold uppercase tracking-widest text-text-muted">{m.label}</Text>
+              <Text className="text-base font-black text-text-primary" numberOfLines={1}>
+                {m.value}
+              </Text>
+              <Text className="text-[9px] font-semibold uppercase tracking-widest text-text-muted" numberOfLines={1}>
+                {m.label}
+              </Text>
             </View>
           </View>
         ))}
@@ -493,12 +504,16 @@ function StatsPanelCards({
                   <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
                     <Ionicons name={card.icon} size={14} color="#ef4444" />
                   </View>
-                  <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+                  <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted" numberOfLines={1}>
                     {card.label}
                   </Text>
                 </View>
-                <Text className="text-2xl font-black text-text-primary">{card.value}</Text>
-                <Text className="mt-0.5 text-[11px] text-text-secondary">{card.subtitle}</Text>
+                <Text className="text-2xl font-black text-text-primary" numberOfLines={1}>
+                  {card.value}
+                </Text>
+                <Text className="mt-0.5 text-[11px] text-text-secondary" numberOfLines={1}>
+                  {card.subtitle}
+                </Text>
                 {segments.length > 0 ? (
                   <View className="mt-2 flex-row flex-wrap gap-1.5">
                     {segments.map((s) => (
@@ -630,6 +645,15 @@ export default function ProfileScreen() {
   const [isAnimeSettingsVisible, setIsAnimeSettingsVisible] = useState(false);
   const [isSavingAnimeSettings, setIsSavingAnimeSettings] = useState(false);
   const [animeSettingsError, setAnimeSettingsError] = useState<string | null>(null);
+  const [isRepairingTracking, setIsRepairingTracking] = useState(false);
+  const [trackingRepairError, setTrackingRepairError] = useState<string | null>(null);
+  const [trackingRepairNotice, setTrackingRepairNotice] = useState<string | null>(null);
+  const [trackingRepairProgress, setTrackingRepairProgress] = useState({
+    scanned: 0,
+    patched: 0,
+    batches: 0,
+  });
+  const [trackingRepairCursor, setTrackingRepairCursor] = useState<string | null>(null);
   const [statsVersion, setStatsVersion] = useState<"A" | "B">("A");
   const [shouldLoadHeavySections, setShouldLoadHeavySections] = useState(false);
   const [visibleRailCount, setVisibleRailCount] = useState(8);
@@ -651,6 +675,7 @@ export default function ProfileScreen() {
   const animeHomeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
   const upsertUserProfile = useMutation(api.stats.upsertUserProfile);
   const setUserAnimeHomeSettings = useMutation(api.shows.setUserAnimeHomeSettings);
+  const repairMyShowsTrackingBatch = useMutation(api.shows.repairMyShowsTrackingBatch);
   const syncTrackedAnimeRelations = useAction(api.shows.syncTrackedAnimeRelations);
   const pruneAnimeFranchiseToCoreRelations = useAction(
     api.shows.pruneAnimeFranchiseToCoreRelations
@@ -833,6 +858,41 @@ export default function ProfileScreen() {
         badge: "Movie",
       })),
     [libraryEntries]
+  );
+  const stableListCount = useStableCount(
+    lists?.length,
+    "profile-lists",
+    isHeavySectionsLoading
+  );
+  const stableFavoriteTvCount = useStableCount(
+    favoriteTvRailItems.length,
+    "profile-favorite-tv",
+    isHeavySectionsLoading
+  );
+  const stableFavoriteAnimeCount = useStableCount(
+    favoriteAnimeRailItems.length,
+    "profile-favorite-anime",
+    isHeavySectionsLoading
+  );
+  const stableFavoriteMovieCount = useStableCount(
+    favoriteMovieRailItems.length,
+    "profile-favorite-movie",
+    isHeavySectionsLoading
+  );
+  const stableActiveTvCount = useStableCount(
+    activeTvRailItems.length,
+    "profile-active-tv",
+    isHeavySectionsLoading
+  );
+  const stableActiveAnimeCount = useStableCount(
+    activeAnimeRailItems.length,
+    "profile-active-anime",
+    isHeavySectionsLoading
+  );
+  const stableActiveMovieCount = useStableCount(
+    activeMovieRailItems.length,
+    "profile-active-movie",
+    isHeavySectionsLoading
   );
 
   const railPageSize = isDesktop ? 14 : 8;
@@ -1073,6 +1133,75 @@ export default function ProfileScreen() {
     },
     [updateAnimeSettings]
   );
+
+  const handleRepairTracking = useCallback(async () => {
+    if (!isAuthenticated || isRepairingTracking) {
+      return;
+    }
+
+    setIsRepairingTracking(true);
+    setTrackingRepairError(null);
+    setTrackingRepairNotice(null);
+    setTrackingRepairProgress({ scanned: 0, patched: 0, batches: 0 });
+
+    try {
+      let cursor: string | null = trackingRepairCursor;
+      let scanned = 0;
+      let patched = 0;
+      let batches = 0;
+      let isDone = false;
+      let hitBatchLimit = false;
+
+      while (!isDone) {
+        const requestCursor = cursor;
+        const batch: {
+          scanned: number;
+          patched: number;
+          continueCursor: string | null;
+          isDone: boolean;
+        } = await repairMyShowsTrackingBatch(
+          cursor ? { continueCursor: cursor } : {}
+        );
+
+        if (!batch.isDone && batch.continueCursor === requestCursor) {
+          throw new Error("Repair cursor did not advance.");
+        }
+
+        scanned += batch.scanned;
+        patched += batch.patched;
+        batches += 1;
+        cursor = batch.continueCursor;
+        isDone = batch.isDone;
+        setTrackingRepairCursor(isDone ? null : cursor);
+
+        setTrackingRepairProgress({ scanned, patched, batches });
+
+        if (!isDone && batches >= TRACKING_REPAIR_MAX_BATCHES) {
+          hitBatchLimit = true;
+          setTrackingRepairError(
+            `Stopped after ${batches} batches (${scanned} scanned, ${patched} patched) before completion${cursor ? ". Tap again to continue." : " at the start of pagination."}`
+          );
+          break;
+        }
+      }
+
+      if (hitBatchLimit) {
+        return;
+      }
+
+      setTrackingRepairCursor(null);
+      setTrackingRepairNotice(
+        scanned === 0
+          ? "No tracked shows to refresh."
+          : `Tracking refreshed for ${patched}/${scanned} tracked ${scanned === 1 ? "show" : "shows"}.`
+      );
+    } catch (error) {
+      console.error("Failed to refresh tracking library", error);
+      setTrackingRepairError("Could not refresh your tracked shows. Please try again.");
+    } finally {
+      setIsRepairingTracking(false);
+    }
+  }, [isAuthenticated, isRepairingTracking, repairMyShowsTrackingBatch, trackingRepairCursor]);
 
   const openProfileEditor = () => {
     setDraftUsername(profileIdentity?.username ?? "");
@@ -1317,7 +1446,13 @@ export default function ProfileScreen() {
         ) : null}
 
         <View className="mt-8">
-          <SectionHeader title="Lists" icon="list-outline" rightLabel={`${lists?.length ?? 0} TOTAL`} />
+          <SectionHeader
+            title="Lists"
+            icon="list-outline"
+            rightLabel={
+              typeof stableListCount === "number" ? `${stableListCount} TOTAL` : undefined
+            }
+          />
 
           <Link href="/list/create" asChild>
             <Pressable className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
@@ -1371,7 +1506,7 @@ export default function ProfileScreen() {
             <SectionHeader
               title="Favorite TV"
               icon="heart"
-              rightLabel={`${favoriteTvRailItems.length} FAVORITES`}
+              rightLabel={`${stableFavoriteTvCount ?? favoriteTvRailItems.length} FAVORITES`}
             />
             <PosterRail
               items={visibleFavoriteTvRailItems}
@@ -1386,7 +1521,7 @@ export default function ProfileScreen() {
             <SectionHeader
               title="Favorite Anime"
               icon="heart"
-              rightLabel={`${favoriteAnimeRailItems.length} FAVORITES`}
+              rightLabel={`${stableFavoriteAnimeCount ?? favoriteAnimeRailItems.length} FAVORITES`}
             />
             <PosterRail
               items={visibleFavoriteAnimeRailItems}
@@ -1401,7 +1536,7 @@ export default function ProfileScreen() {
             <SectionHeader
               title="Favorite Movies"
               icon="heart"
-              rightLabel={`${favoriteMovieRailItems.length} FAVORITES`}
+              rightLabel={`${stableFavoriteMovieCount ?? favoriteMovieRailItems.length} FAVORITES`}
             />
             <PosterRail
               items={visibleFavoriteMovieRailItems}
@@ -1415,7 +1550,7 @@ export default function ProfileScreen() {
           <SectionHeader
             title="TV Shows"
             icon="tv-outline"
-            rightLabel={`${activeTvRailItems.length} TRACKED`}
+            rightLabel={`${stableActiveTvCount ?? activeTvRailItems.length} TRACKED`}
             actionLabel="Show all"
             actionHref="/library?media=tv"
           />
@@ -1430,7 +1565,7 @@ export default function ProfileScreen() {
           <SectionHeader
             title="Anime"
             icon="planet-outline"
-            rightLabel={`${activeAnimeRailItems.length} TRACKED`}
+            rightLabel={`${stableActiveAnimeCount ?? activeAnimeRailItems.length} TRACKED`}
             actionLabel="Show all"
             actionHref="/library?media=anime"
           />
@@ -1445,7 +1580,7 @@ export default function ProfileScreen() {
           <SectionHeader
             title="Movies"
             icon="film-outline"
-            rightLabel={`${activeMovieRailItems.length} TRACKED`}
+            rightLabel={`${stableActiveMovieCount ?? activeMovieRailItems.length} TRACKED`}
             actionLabel="Show all"
             actionHref="/library?media=movie"
           />
@@ -1458,6 +1593,59 @@ export default function ProfileScreen() {
 
         <View className="mt-8">
           <SectionHeader title="Data" icon="download-outline" />
+          <View className="mb-3 overflow-hidden rounded-xl border border-border-default bg-bg-surface">
+            <LinearGradient
+              colors={["rgba(56,189,248,0.12)", "rgba(239,68,68,0.03)"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{ paddingHorizontal: 14, paddingVertical: 12 }}
+            >
+              <View className="flex-row items-center gap-3">
+                <View className="h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10">
+                  <Ionicons name="refresh-outline" size={16} color="#38bdf8" />
+                </View>
+                <View className="min-w-0 flex-1">
+                  <Text className="text-sm font-bold text-text-primary">
+                    Refresh my shows
+                  </Text>
+                  <Text className="mt-0.5 text-[11px] text-text-muted">
+                    Fix stale watched counts, statuses, and Home projections.
+                  </Text>
+                  {isRepairingTracking ? (
+                    <Text className="mt-1 text-[11px] text-text-secondary">
+                      Scanned {trackingRepairProgress.scanned} across {trackingRepairProgress.batches} batch{trackingRepairProgress.batches === 1 ? "" : "es"}...
+                    </Text>
+                  ) : null}
+                  {trackingRepairNotice ? (
+                    <Text className="mt-1 text-[11px] text-success">
+                      {trackingRepairNotice}
+                    </Text>
+                  ) : null}
+                  {trackingRepairError ? (
+                    <Text className="mt-1 text-[11px] text-primary">
+                      {trackingRepairError}
+                    </Text>
+                  ) : null}
+                </View>
+                <Pressable
+                  disabled={!isAuthenticated || isRepairingTracking}
+                  onPress={() => {
+                    void handleRepairTracking();
+                  }}
+                  className="min-w-24 items-center justify-center rounded-lg border border-sky-400/40 bg-sky-500/10 px-3 py-2"
+                  style={{ opacity: !isAuthenticated || isRepairingTracking ? 0.55 : 1 }}
+                >
+                  {isRepairingTracking ? (
+                    <ActivityIndicator size="small" color="#38bdf8" />
+                  ) : (
+                    <Text className="text-xs font-bold uppercase tracking-wide text-sky-300">
+                      Refresh
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
+            </LinearGradient>
+          </View>
           <Link href="/import" asChild>
             <Pressable className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
               <LinearGradient

@@ -67,6 +67,7 @@ export default defineSchema({
     genres: v.optional(v.array(v.string())),
     status: v.optional(v.string()),
     totalEpisodes: v.optional(v.number()),
+    releasedEpisodes: v.optional(v.number()),
     totalSeasons: v.optional(v.number()),
     episodeRuntime: v.optional(v.number()),
     rating: v.optional(v.number()),
@@ -203,6 +204,11 @@ export default defineSchema({
     key: v.string(),
     lastAttemptTime: v.number(),
     nextRetryTime: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+  maintenanceState: defineTable({
+    key: v.string(),
+    cursor: v.optional(v.string()),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 });

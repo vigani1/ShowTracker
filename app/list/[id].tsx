@@ -15,6 +15,7 @@ import { useLocalSearchParams, router } from "expo-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Ionicons } from "@expo/vector-icons";
+import { AppBackButton } from "@/components/AppBackButton";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { SearchShowsModal } from "@/components/SearchShowsModal";
@@ -263,7 +264,7 @@ export function ListDetailScreen() {
       router.back();
       return;
     }
-    router.replace("/home");
+    router.replace("/profile");
   }, []);
 
   // Grid calculations
@@ -425,6 +426,7 @@ export function ListDetailScreen() {
               eyebrow="Custom list"
               icon="bookmark-outline"
               rightLabel={`${list.shows.length} ${list.shows.length === 1 ? "show" : "shows"}`}
+              leftSlot={<AppBackButton fallbackHref="/profile" />}
             />
             <View className="-mt-1 mb-1 flex-row justify-end gap-2">
               <Pressable

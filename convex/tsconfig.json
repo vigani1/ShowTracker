@@ -19,7 +19,6 @@
     "module": "ESNext",
     "isolatedModules": true,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["../*"]
     }

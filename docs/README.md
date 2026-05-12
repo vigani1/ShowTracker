@@ -14,6 +14,12 @@ Agent-first documentation for ShowTracker.
 | **[WATCHING.md](WATCHING.md)** | Watch actions, status automation, testing checklist |
 | **[CONVEX_BANDWIDTH_OWNERSHIP_PLAN.md](CONVEX_BANDWIDTH_OWNERSHIP_PLAN.md)** | End-to-end plan to reduce Convex reads while preserving Home/Upcoming behavior |
 
+## Architecture Decisions
+
+| ADR | Decision |
+|-----|----------|
+| **[ADR-0001-overlay-detail-routes.md](ADR-0001-overlay-detail-routes.md)** | Show details use Overlay Detail Routes for in-app navigation while keeping direct URLs full-page |
+
 ## Testing
 
 | Doc | Purpose |

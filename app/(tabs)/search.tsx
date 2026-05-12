@@ -125,6 +125,7 @@ function rankSearchResults(shows: NormalizedShow[], query: string) {
 
 function getGridColumnCount(width: number, isWeb: boolean) {
   if (!isWeb) return 2;
+  if (width < 640) return 2;
   if (width >= 1800) return 8;
   if (width >= 1500) return 7;
   if (width >= 1260) return 6;
@@ -378,6 +379,7 @@ export function SearchScreen() {
   }, [debouncedQuery, isLoading, results.length, hasActiveFilters]);
 
   const columns = getGridColumnCount(contentWidth, isWeb);
+  const isCompactLayout = contentWidth < 640;
 
   const toggleGenre = (genre: string) => {
     setSelectedGenres((prev) =>
@@ -400,12 +402,14 @@ export function SearchScreen() {
               : undefined
           }
           className="mb-4"
+          compact={isCompactLayout}
         />
 
         <SearchInput
           value={query}
           onChangeText={setQuery}
           className="mb-3"
+          autoFocus
         />
 
         <SegmentedControl
@@ -416,13 +420,19 @@ export function SearchScreen() {
             clearFilters();
           }}
           className="mb-3"
+          compact={isCompactLayout}
         />
 
         {/* Filter Buttons */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, paddingBottom: 8 }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            gap: 8,
+            justifyContent: "center",
+            paddingBottom: 8,
+          }}
           className="mb-2"
         >
           {genreOptions.length > 0 && (
@@ -681,7 +691,7 @@ export function SearchScreen() {
                 params: { id: createShowRouteId(item) },
               }}
               className="w-full"
-              posterClassName={isWeb ? "h-56" : "h-64"}
+              posterClassName={isCompactLayout ? "h-48" : isWeb ? "h-56" : "h-64"}
             />
           </View>
         )}

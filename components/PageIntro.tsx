@@ -1,14 +1,17 @@
+import type { ReactNode } from "react";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
 import { Text, View } from "react-native";
 
 interface PageIntroProps {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   eyebrow?: string;
   rightLabel?: string;
+  leftSlot?: ReactNode;
+  rightSlot?: ReactNode;
   icon?: keyof typeof Ionicons.glyphMap;
   className?: string;
+  compact?: boolean;
 }
 
 export function PageIntro({
@@ -16,49 +19,62 @@ export function PageIntro({
   subtitle,
   eyebrow,
   rightLabel,
+  leftSlot,
+  rightSlot,
   icon,
   className,
+  compact = false,
 }: PageIntroProps) {
+  const isFabricEnabled =
+    "NativeFabricUIManager" in globalThis || "__turboModuleProxy" in globalThis;
+  const titleFitProps = isFabricEnabled
+    ? {}
+    : {
+        adjustsFontSizeToFit: true,
+        minimumFontScale: 0.82,
+      };
+
   return (
     <View
-      className={`relative overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface ${className ?? ""}`.trim()}
+      className={`relative overflow-hidden rounded-xl border border-border-default bg-bg-surface ${className ?? ""}`.trim()}
     >
-      <LinearGradient
-        colors={["rgba(239,68,68,0.16)", "rgba(56,189,248,0.08)", "rgba(24,24,27,0.7)"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
-      />
-
-      <View className="absolute -right-10 -top-8 h-28 w-28 rounded-full bg-primary/15" />
-      <View className="absolute -bottom-12 -left-10 h-28 w-28 rounded-full bg-accent/10" />
-
-      <View className="relative px-4 py-4">
+      <View className={`relative px-4 ${compact ? "py-2.5" : "py-4"}`}>
         <View className="flex-row items-start justify-between gap-3">
+          {leftSlot ? <View className="shrink-0 pt-0.5">{leftSlot}</View> : null}
           <View className="flex-1">
             {eyebrow || icon ? (
-              <View className="mb-2 flex-row items-center gap-2">
+              <View className={`${compact ? "mb-1" : "mb-2"} flex-row items-center gap-2`}>
                 {icon ? (
-                  <View className="h-7 w-7 items-center justify-center rounded-lg bg-bg-base/40">
-                    <Ionicons name={icon} size={14} color="#ef4444" />
+                  <View className={`${compact ? "h-5 w-5" : "h-7 w-7"} items-center justify-center rounded-md bg-bg-base/45`}>
+                    <Ionicons name={icon} size={compact ? 12 : 14} color="#ef4444" />
                   </View>
                 ) : null}
                 {eyebrow ? (
-                  <Text className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                  <Text className="text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
                     {eyebrow}
                   </Text>
                 ) : null}
               </View>
             ) : null}
 
-            <Text className="font-mono text-[30px] font-black text-text-primary">
+            <Text
+              className={`font-mono ${compact ? "text-[23px]" : "text-[30px]"} font-black text-text-primary`}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+              style={isFabricEnabled ? { fontSize: compact ? 23 : 30, lineHeight: compact ? 28 : 36 } : undefined}
+              {...titleFitProps}
+            >
               {title}
             </Text>
-            <Text className="mt-1 text-sm text-text-secondary">{subtitle}</Text>
+            {!compact && subtitle ? (
+              <Text className="mt-1 text-sm text-text-secondary">{subtitle}</Text>
+            ) : null}
           </View>
 
-          {rightLabel ? (
-            <View className="rounded-md border border-border-default bg-bg-base/50 px-2 py-1">
+          {rightSlot && !compact ? (
+            <View className="shrink-0">{rightSlot}</View>
+          ) : rightLabel && !compact ? (
+            <View className="shrink-0 rounded-md border border-border-default bg-bg-base/45 px-2 py-1">
               <Text className="text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
                 {rightLabel}
               </Text>

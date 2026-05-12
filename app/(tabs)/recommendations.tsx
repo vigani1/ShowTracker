@@ -5,14 +5,15 @@ import {
   Text,
   View,
   useWindowDimensions,
+  type LayoutChangeEvent,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { FilterBar } from "@/components/FilterBar";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { SegmentedControl } from "@/components/SegmentedControl";
 import {
   getMovieRecommendations,
   getTvRecommendations,
@@ -24,6 +25,12 @@ import type { NormalizedShow } from "@/lib/api/types";
 import { createShowRouteId } from "@/lib/show-route";
 
 type RecTab = "all" | "tv" | "anime" | "movie";
+
+type TrackedDisplayState = {
+  status: string;
+  watchedEpisodesCount: number;
+  totalEpisodes: number | null;
+};
 
 const tabOptions = [
   { value: "all" as const, label: "All" },
@@ -109,6 +116,7 @@ function isAbortError(error: unknown) {
 
 function getGridColumnCount(width: number, isWeb: boolean) {
   if (!isWeb) return 2;
+  if (width < 640) return 2;
   if (width >= 1800) return 8;
   if (width >= 1500) return 7;
   if (width >= 1260) return 6;
@@ -121,12 +129,92 @@ function toTrackedTmdbKey(mediaType: "tv" | "movie", tmdbId: number) {
   return `${mediaType}:${tmdbId}`;
 }
 
+function getTrackedItemKey(item: {
+  mediaType: "tv" | "anime" | "movie";
+  tmdbId: number | null;
+  anilistId: number | null;
+}) {
+  if ((item.mediaType === "tv" || item.mediaType === "movie") && item.tmdbId !== null) {
+    return toTrackedTmdbKey(item.mediaType, item.tmdbId);
+  }
+  if (item.mediaType === "anime" && item.anilistId !== null) {
+    return `anime:${item.anilistId}`;
+  }
+  return null;
+}
+
+function getTrackedShowKey(item: NormalizedShow) {
+  if ((item.mediaType === "tv" || item.mediaType === "movie") && typeof item.tmdbId === "number") {
+    return toTrackedTmdbKey(item.mediaType, item.tmdbId);
+  }
+  if (item.mediaType === "anime" && typeof item.anilistId === "number") {
+    return `anime:${item.anilistId}`;
+  }
+  return null;
+}
+
+function filterTrackedRecommendations(
+  items: NormalizedShow[],
+  trackedStateByKey: Map<string, TrackedDisplayState>
+) {
+  return items.filter((item) => {
+    const key = getTrackedShowKey(item);
+    return !key || !trackedStateByKey.has(key);
+  });
+}
+
+function getTrackedLabel(state: TrackedDisplayState) {
+  if (state.status === "completed") {
+    return "Watched";
+  }
+
+  if (state.watchedEpisodesCount > 0) {
+    if (state.totalEpisodes === null || state.watchedEpisodesCount >= state.totalEpisodes) {
+      return "Watched";
+    }
+  }
+
+  return "Added";
+}
+
 function toRecommendationKey(item: NormalizedShow) {
-  return `${item.id}:${item.mediaType}`;
+  if ((item.mediaType === "tv" || item.mediaType === "movie") && item.tmdbId) {
+    return `tmdb:${item.mediaType}:${item.tmdbId}`;
+  }
+  return `${item.mediaType}:${item.id}`;
 }
 
 function toAnimeRecommendationKey(item: NormalizedShow) {
-  return `${item.anilistId ?? ""}:${item.id}`;
+  if (item.anilistId) {
+    return `anilist:anime:${item.anilistId}`;
+  }
+  if (item.malId) {
+    return `jikan:anime:${item.malId}`;
+  }
+  return `${item.mediaType}:${item.id}`;
+}
+
+function getRecommendationItemKey(item: NormalizedShow) {
+  return item.mediaType === "anime"
+    ? toAnimeRecommendationKey(item)
+    : toRecommendationKey(item);
+}
+
+function appendUniqueRecommendations(
+  existingItems: NormalizedShow[],
+  newItems: NormalizedShow[]
+) {
+  const seenKeys = new Set(existingItems.map(getRecommendationItemKey));
+  const uniqueNewItems = newItems.filter((item) => {
+    const key = getRecommendationItemKey(item);
+    if (seenKeys.has(key)) {
+      return false;
+    }
+    seenKeys.add(key);
+    return true;
+  });
+
+  return [...existingItems, ...uniqueNewItems];
 }
 
 function interleaveItems(
@@ -237,8 +325,6 @@ function selectSeeds(
 function categorizeAndDedupe(
   seedResults: SeedResultItem[][],
   options: {
-    trackedTmdbKeys: Set<string>;
-    trackedAnimeIds: Set<number>;
     initialSeenTv: Set<string>;
     initialSeenAnime: Set<string>;
     initialSeenMovie: Set<string>;
@@ -254,22 +340,6 @@ function categorizeAndDedupe(
 
   for (const resultSet of seedResults) {
     for (const { item, seedMediaType } of resultSet) {
-      if (
-        (item.mediaType === "tv" || item.mediaType === "movie") &&
-        typeof item.tmdbId === "number" &&
-        options.trackedTmdbKeys.has(toTrackedTmdbKey(item.mediaType, item.tmdbId))
-      ) {
-        continue;
-      }
-
-      if (
-        item.mediaType === "anime" &&
-        typeof item.anilistId === "number" &&
-        options.trackedAnimeIds.has(item.anilistId)
-      ) {
-        continue;
-      }
-
       const recommendationBucket = getRecommendationBucket(item);
       if (__DEV__ && recommendationBucket !== seedMediaType) {
         logRecommendationsDebug("cross-media-recommendation", {
@@ -321,9 +391,17 @@ export function RecommendationsScreen() {
   const [activeTab, setActiveTab] = useState<RecTab>("all");
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
-  const columns = getGridColumnCount(width, isWeb);
+  const [gridWidth, setGridWidth] = useState(0);
+  const effectiveWidth = gridWidth || Math.max(width - 40, 0);
+  const isCompactLayout = effectiveWidth < 640;
+  const columns = getGridColumnCount(effectiveWidth, isWeb);
+
+  const onGridLayout = useCallback((event: LayoutChangeEvent) => {
+    setGridWidth(event.nativeEvent.layout.width);
+  }, []);
 
   const [recommendations, setRecommendations] = useState<NormalizedShow[]>([]);
+  const [allRecommendations, setAllRecommendations] = useState<NormalizedShow[]>([]);
   const [tvRecommendations, setTvRecommendations] = useState<NormalizedShow[]>([]);
   const [animeRecommendations, setAnimeRecommendations] = useState<NormalizedShow[]>([]);
   const [movieRecommendations, setMovieRecommendations] = useState<NormalizedShow[]>([]);
@@ -406,30 +484,28 @@ export function RecommendationsScreen() {
   }, [activeTab, effectiveHasMoreAnime, hasMoreTv, hasMoreMovie]);
 
   const trackedIds = useQuery(api.shows.getTrackedIds, {});
-  const trackedTmdbKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const item of trackedIds ?? []) {
-      if (
-        (item.mediaType === "tv" || item.mediaType === "movie") &&
-        item.tmdbId !== null
-      ) {
-        keys.add(toTrackedTmdbKey(item.mediaType, item.tmdbId));
-      }
-    }
-    return keys;
-  }, [trackedIds]);
   const isTrackedLibraryLoading = trackedIds === undefined;
-
-  // Track anime IDs separately
-  const trackedAnimeIds = useMemo(() => {
-    const ids = new Set<number>();
+  const trackedStateByKey = useMemo(() => {
+    const entries = new Map<string, TrackedDisplayState>();
     for (const item of trackedIds ?? []) {
-      if (item.mediaType === "anime" && item.anilistId !== null) {
-        ids.add(item.anilistId);
+      const key = getTrackedItemKey(item);
+      if (key) {
+        entries.set(key, {
+          status: item.status,
+          watchedEpisodesCount: item.watchedEpisodesCount,
+          totalEpisodes: item.totalEpisodes,
+        });
       }
     }
-    return ids;
+    return entries;
   }, [trackedIds]);
+  const trackedStateByKeyRef = useRef(trackedStateByKey);
+
+  useEffect(() => {
+    if (!isTrackedLibraryLoading) {
+      trackedStateByKeyRef.current = trackedStateByKey;
+    }
+  }, [isTrackedLibraryLoading, trackedStateByKey]);
 
   // Get all recommendation seeds in one backend call and split by media type.
   const recommendationSeeds = useQuery(api.shows.getRecommendationSeedsByMedia, {
@@ -454,6 +530,13 @@ export function RecommendationsScreen() {
 
     return [...tvSeedShows, ...animeSeedShows, ...movieSeedShows];
   }, [activeTab, animeSeedShows, movieSeedShows, tvSeedShows]);
+  const seedShowsRef = useRef<typeof seedShows>(undefined);
+  const seedShowsReady = seedShows !== undefined;
+  const seedShowsEmpty = seedShows?.length === 0;
+
+  useEffect(() => {
+    seedShowsRef.current = seedShows;
+  }, [seedShows]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -468,16 +551,19 @@ export function RecommendationsScreen() {
         return;
       }
 
-      if (seedShows === undefined) {
+      const currentSeedShows = seedShowsRef.current;
+
+      if (currentSeedShows === undefined) {
         if (!signal.aborted) {
           setIsLoading(true);
         }
         return;
       }
 
-      if (seedShows.length === 0) {
+      if (currentSeedShows.length === 0) {
         if (!signal.aborted) {
           setRecommendations([]);
+          setAllRecommendations([]);
           setTvRecommendations([]);
           setAnimeRecommendations([]);
           setMovieRecommendations([]);
@@ -499,6 +585,7 @@ export function RecommendationsScreen() {
       } else {
         setIsLoading(true);
         // Reset state for fresh load
+        setAllRecommendations([]);
         setTvRecommendations([]);
         setAnimeRecommendations([]);
         setMovieRecommendations([]);
@@ -525,7 +612,7 @@ export function RecommendationsScreen() {
         const animeCooldownActive = isAnimeRateLimitedRef.current;
         const seedSelection = selectSeeds(
           activeTab,
-          seedShows as RecommendationSeed[],
+          currentSeedShows as RecommendationSeed[],
           animeCooldownActive
         );
 
@@ -643,12 +730,14 @@ export function RecommendationsScreen() {
         }
 
         const { tvRecs, animeRecs, movieRecs } = categorizeAndDedupe(seedResults, {
-          trackedTmdbKeys,
-          trackedAnimeIds,
           initialSeenTv,
           initialSeenAnime,
           initialSeenMovie,
         });
+        const hiddenTrackedItems = trackedStateByKeyRef.current;
+        const visibleTvRecs = filterTrackedRecommendations(tvRecs, hiddenTrackedItems);
+        const visibleAnimeRecs = filterTrackedRecommendations(animeRecs, hiddenTrackedItems);
+        const visibleMovieRecs = filterTrackedRecommendations(movieRecs, hiddenTrackedItems);
 
         if (!signal.aborted) {
           logRecommendationsDebug("recommendation-results", {
@@ -659,13 +748,16 @@ export function RecommendationsScreen() {
               tv: tvRecs.length,
               anime: animeRecs.length,
               movie: movieRecs.length,
+              visibleTv: visibleTvRecs.length,
+              visibleAnime: visibleAnimeRecs.length,
+              visibleMovie: visibleMovieRecs.length,
             },
           });
 
           if (
             activeTab === "all" &&
             seedSelection.selectedMovieSeeds.length > 0 &&
-            movieRecs.length === 0
+            visibleMovieRecs.length === 0
           ) {
             logRecommendationsDebug("movie-seeds-without-results", {
               page,
@@ -676,30 +768,33 @@ export function RecommendationsScreen() {
           }
 
           if (isLoadMore) {
+            const newAllRecs = interleaveItems(visibleTvRecs, visibleAnimeRecs, visibleMovieRecs);
+            setAllRecommendations((prev) => appendUniqueRecommendations(prev, newAllRecs));
             // Append new items
             setTvRecommendations((prev) => {
-              const next = [...prev, ...tvRecs];
+              const next = appendUniqueRecommendations(prev, visibleTvRecs);
               tvRecommendationsRef.current = next;
               return next;
             });
             setAnimeRecommendations((prev) => {
-              const next = [...prev, ...animeRecs];
+              const next = appendUniqueRecommendations(prev, visibleAnimeRecs);
               animeRecommendationsRef.current = next;
               return next;
             });
             setMovieRecommendations((prev) => {
-              const next = [...prev, ...movieRecs];
+              const next = appendUniqueRecommendations(prev, visibleMovieRecs);
               movieRecommendationsRef.current = next;
               return next;
             });
           } else {
+            setAllRecommendations(interleaveItems(visibleTvRecs, visibleAnimeRecs, visibleMovieRecs));
             // Replace with new items
-            tvRecommendationsRef.current = tvRecs;
-            animeRecommendationsRef.current = animeRecs;
-            movieRecommendationsRef.current = movieRecs;
-            setTvRecommendations(tvRecs);
-            setAnimeRecommendations(animeRecs);
-            setMovieRecommendations(movieRecs);
+            tvRecommendationsRef.current = visibleTvRecs;
+            animeRecommendationsRef.current = visibleAnimeRecs;
+            movieRecommendationsRef.current = visibleMovieRecs;
+            setTvRecommendations(visibleTvRecs);
+            setAnimeRecommendations(visibleAnimeRecs);
+            setMovieRecommendations(visibleMovieRecs);
           }
           
           // Update current page
@@ -709,15 +804,15 @@ export function RecommendationsScreen() {
           // Update empty streak counters only for categories we actually queried.
           if (seedSelection.selectedCounts.tv > 0) {
             tvEmptyStreakRef.current =
-              tvRecs.length === 0 ? tvEmptyStreakRef.current + 1 : 0;
+              visibleTvRecs.length === 0 ? tvEmptyStreakRef.current + 1 : 0;
           }
           if (seedSelection.selectedCounts.anime > 0) {
             animeEmptyStreakRef.current =
-              animeRecs.length === 0 ? animeEmptyStreakRef.current + 1 : 0;
+              visibleAnimeRecs.length === 0 ? animeEmptyStreakRef.current + 1 : 0;
           }
           if (seedSelection.selectedCounts.movie > 0) {
             movieEmptyStreakRef.current =
-              movieRecs.length === 0 ? movieEmptyStreakRef.current + 1 : 0;
+              visibleMovieRecs.length === 0 ? movieEmptyStreakRef.current + 1 : 0;
           }
           
           const hasMoreTvRecs = tvEmptyStreakRef.current < EMPTY_STREAK_THRESHOLD;
@@ -752,17 +847,14 @@ export function RecommendationsScreen() {
   }, [
     activeTab,
     isTrackedLibraryLoading,
-    seedShows,
-    trackedTmdbKeys,
-    trackedAnimeIds,
+    seedShowsEmpty,
+    seedShowsReady,
   ]);
 
   // Update displayed recommendations when TV, anime, or movie lists change
   useEffect(() => {
     if (activeTab === "all") {
-      // Interleave TV, anime, and movie recommendations
-      const interleaved = interleaveItems(tvRecommendations, animeRecommendations, movieRecommendations);
-      setRecommendations(interleaved);
+      setRecommendations(allRecommendations);
     } else if (activeTab === "tv") {
       setRecommendations(tvRecommendations);
     } else if (activeTab === "anime") {
@@ -770,7 +862,7 @@ export function RecommendationsScreen() {
     } else if (activeTab === "movie") {
       setRecommendations(movieRecommendations);
     }
-  }, [activeTab, tvRecommendations, animeRecommendations, movieRecommendations]);
+  }, [activeTab, allRecommendations, tvRecommendations, animeRecommendations, movieRecommendations]);
 
   const loadMore = useCallback(() => {
     if (isLoading || isLoadingMore) return;
@@ -833,14 +925,31 @@ export function RecommendationsScreen() {
     return `Based on your watch history`;
   }, [seedShows]);
 
+  const getTrackedStateLabel = useCallback(
+    (item: NormalizedShow) => {
+      const trackedKey = getTrackedShowKey(item);
+      if (!trackedKey) {
+        return null;
+      }
+
+      const trackedState = trackedStateByKey.get(trackedKey);
+      if (!trackedState) {
+        return null;
+      }
+
+      return getTrackedLabel(trackedState);
+    },
+    [trackedStateByKey]
+  );
+
   return (
     <ScreenWrapper>
-      <View className="flex-1">
+      <View className="flex-1" onLayout={onGridLayout}>
         <FlashList
           data={recommendations}
           key={`rec-grid-${columns}`}
           numColumns={columns}
-          keyExtractor={(item) => `${item.id}-${item.mediaType}`}
+          keyExtractor={getRecommendationItemKey}
           showsVerticalScrollIndicator={false}
           ItemSeparatorComponent={() => <View className="h-3" />}
           ListHeaderComponent={
@@ -856,13 +965,16 @@ export function RecommendationsScreen() {
                     : undefined
                 }
                 className="mb-4"
+                compact={isCompactLayout}
               />
 
-              <SegmentedControl
+              <FilterBar
                 options={tabOptions}
                 value={activeTab}
                 onValueChange={setActiveTab}
                 className="mb-4"
+                align="center"
+                compact={isCompactLayout}
               />
 
               {isLoading && (
@@ -922,8 +1034,9 @@ export function RecommendationsScreen() {
                   pathname: "/show/[id]",
                   params: { id: createShowRouteId(item) },
                 }}
+                stateLabel={getTrackedStateLabel(item)}
                 className="w-full"
-                posterClassName={isWeb ? "h-56" : "h-64"}
+                posterClassName={isCompactLayout ? "h-48" : isWeb ? "h-56" : "h-64"}
               />
             </View>
           )}

@@ -2,9 +2,11 @@ import type { Href } from "expo-router";
 import { Link } from "expo-router";
 import {
   Image,
+  Platform,
   Pressable,
   Text,
   View,
+  useWindowDimensions,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
@@ -22,6 +24,7 @@ interface MediaPosterCardProps {
   showOverview?: boolean;
   progress?: number;
   unwatchedCount?: number;
+  stateLabel?: string | null;
 }
 
 const mediaTypeLabel: Record<NormalizedShow["mediaType"], string> = {
@@ -40,7 +43,26 @@ export function MediaPosterCard({
   showOverview,
   progress,
   unwatchedCount,
+  stateLabel,
 }: MediaPosterCardProps) {
+  const { width } = useWindowDimensions();
+  const isCompact = Platform.OS !== "web" || width < 640;
+  const isSmallPhone = width < 390;
+  const isFabricEnabled =
+    "NativeFabricUIManager" in globalThis || "__turboModuleProxy" in globalThis;
+  const missingPosterTitleFitProps = isFabricEnabled
+    ? {}
+    : {
+        adjustsFontSizeToFit: true,
+        minimumFontScale: 0.72,
+      };
+  const titleFitProps = isFabricEnabled
+    ? {}
+    : {
+        adjustsFontSizeToFit: true,
+        minimumFontScale: 0.64,
+      };
+
   return (
     <Link href={href} asChild>
       <Pressable
@@ -64,7 +86,13 @@ export function MediaPosterCard({
             />
           ) : (
             <View className="h-full w-full items-center justify-center bg-bg-surface px-3">
-              <Text className="text-center text-sm font-semibold text-text-primary">
+              <Text
+                className="text-center text-sm font-semibold text-text-primary"
+                numberOfLines={3}
+                ellipsizeMode="tail"
+                style={isFabricEnabled ? { fontSize: 14, lineHeight: 18 } : undefined}
+                {...missingPosterTitleFitProps}
+              >
                 {show.title}
               </Text>
             </View>
@@ -97,17 +125,35 @@ export function MediaPosterCard({
               <Text className="text-[11px] font-black text-primary">#{rank}</Text>
             </View>
           ) : null}
+
+          {stateLabel ? (
+            <View pointerEvents="none" className="absolute inset-0 items-center justify-center bg-black/45 px-3">
+              <View className="rounded-full border border-white/60 bg-bg-base/95 px-3 py-1.5">
+                <Text className="text-[11px] font-black uppercase tracking-wide text-text-primary">
+                  {stateLabel}
+                </Text>
+              </View>
+            </View>
+          ) : null}
         </View>
 
-        <View className="mt-2 gap-0.5 px-0.5">
-          <Text className="text-sm font-semibold text-text-primary" numberOfLines={1}>
+        <View
+          className={`${showOverview ? "h-[86px]" : isCompact ? "h-[40px]" : "h-[42px]"} mt-2 gap-0.5 px-0.5`}
+        >
+          <Text
+            className={`${isSmallPhone ? "text-[12px]" : "text-sm"} font-semibold leading-4 text-text-primary`}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={isFabricEnabled ? { fontSize: isSmallPhone ? 12 : 14, lineHeight: 16 } : undefined}
+            {...titleFitProps}
+          >
             {show.title}
           </Text>
-          <Text className="text-xs text-text-secondary">
+          <Text className="text-xs leading-4 text-text-secondary" numberOfLines={1}>
             {show.firstAired?.slice(0, 4) ?? "TBA"}
           </Text>
           {showOverview && show.overview ? (
-            <Text className="text-xs leading-relaxed text-text-secondary" numberOfLines={3}>
+            <Text className="text-xs leading-relaxed text-text-secondary" numberOfLines={2}>
               {show.overview}
             </Text>
           ) : null}
