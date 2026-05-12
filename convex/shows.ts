@@ -3478,13 +3478,6 @@ async function refreshShowMetadataAndRepairTracking(
     };
   }
 
-  const refreshedShowId = await ctx.runMutation(internal.shows.upsertShowByInternalId, {
-    showId,
-    show: buildShowPayloadFromNormalized(latest, {
-      tvdbId: latest.tvdbId ?? show.tvdbId,
-    }),
-  });
-
   const releasedEpisodeCount = getReleasedEpisodeCountForResume(latest);
   const previousReleasedEpisodeCount =
     typeof show.releasedEpisodes === "number"
@@ -3494,8 +3487,20 @@ async function refreshShowMetadataAndRepairTracking(
     releasedEpisodeCount !== null &&
     (previousReleasedEpisodeCount === null || releasedEpisodeCount > previousReleasedEpisodeCount);
 
+  const refreshedShowId = await ctx.runMutation(internal.shows.upsertShowByInternalId, {
+    showId,
+    show: buildShowPayloadFromNormalized(latest, {
+      tvdbId: latest.tvdbId ?? show.tvdbId,
+    }),
+  });
+
   const repairedUsers = new Set<string>();
-  if (options?.repairUserId === undefined && options?.skipBroadAggregateRepair !== true) {
+  if (options?.repairUserId !== undefined) {
+    await ctx.runAction(internal.shows.rebuildUserShowTrackingAggregatesForUser, {
+      userId: options.repairUserId,
+    });
+    repairedUsers.add(String(options.repairUserId));
+  } else if (options?.skipBroadAggregateRepair !== true) {
     for (const userShow of targetUserShows) {
       await ctx.runAction(internal.shows.rebuildUserShowTrackingAggregatesForUser, {
         userId: userShow.userId,
