@@ -30,6 +30,30 @@ export default defineSchema({
     followersCount: v.optional(v.number()),
     commentsCount: v.optional(v.number()),
   }).index("by_user", ["userId"]),
+  userStats: defineTable({
+    userId: v.id("users"),
+    uniqueEpisodesWatched: v.number(),
+    totalRewatches: v.number(),
+    totalEpisodesWatched: v.number(),
+    tvEpisodes: v.number(),
+    animeEpisodes: v.number(),
+    movieCount: v.number(),
+    totalWatchTimeMinutes: v.number(),
+    tvWatchTimeMinutes: v.number(),
+    animeWatchTimeMinutes: v.number(),
+    movieWatchTimeMinutes: v.number(),
+    currentStreak: v.number(),
+    longestStreak: v.number(),
+    completedShows: v.number(),
+    totalTrackedShows: v.number(),
+    topRewatchedShows: v.array(
+      v.object({
+        title: v.string(),
+        watchCount: v.number(),
+      })
+    ),
+    rebuiltAt: v.number(),
+  }).index("by_user", ["userId"]),
   userAnimeHomeSettings: defineTable({
     userId: v.id("users"),
     relationMode: v.union(v.literal("core_only"), v.literal("all_relations")),
@@ -40,6 +64,9 @@ export default defineSchema({
     ),
     pausedSectionMode: v.optional(
       v.union(v.literal("auto_paused_only"), v.literal("all_paused"))
+    ),
+    watchlistAirtimeMode: v.optional(
+      v.union(v.literal("same_day"), v.literal("after_airtime"))
     ),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
@@ -191,12 +218,15 @@ export default defineSchema({
     watchedEpisodesCount: v.number(),
     remainingEpisodes: v.optional(v.number()),
     lastWatchedAt: v.number(),
+    autoPausedAt: v.optional(v.number()),
 
     // Timestamps
     updatedAt: v.number(),
   })
     .index("by_user", ["userId"])
     .index("by_user_media", ["userId", "mediaType"])
+    .index("by_user_media_status_lastWatched", ["userId", "mediaType", "status", "lastWatchedAt"])
+    .index("by_user_media_status_autoPausedAt", ["userId", "mediaType", "status", "autoPausedAt"])
     .index("by_user_show", ["userId", "showId"])
     .index("by_userShow", ["userShowId"]),
 

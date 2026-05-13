@@ -5,9 +5,14 @@ import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
 
 type OverlayDetailFrameProps = PropsWithChildren<{
   onClose: () => void;
+  closeAccessibilityLabel?: string;
 }>;
 
-export function OverlayDetailFrame({ children, onClose }: OverlayDetailFrameProps) {
+export function OverlayDetailFrame({
+  children,
+  onClose,
+  closeAccessibilityLabel = "Close show details",
+}: OverlayDetailFrameProps) {
   const { width } = useWindowDimensions();
   const isDesktop = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
 
@@ -16,7 +21,7 @@ export function OverlayDetailFrame({ children, onClose }: OverlayDetailFrameProp
       {isDesktop ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Close show details"
+          accessibilityLabel={closeAccessibilityLabel}
           className="absolute inset-0"
           onPress={onClose}
         />
@@ -41,7 +46,7 @@ export function OverlayDetailFrame({ children, onClose }: OverlayDetailFrameProp
             <View className="z-30 h-14 justify-center border-b border-border-default bg-bg-base/95 px-3">
               <HeaderIconButton
                 icon="close"
-                accessibilityLabel="Close show details"
+                accessibilityLabel={closeAccessibilityLabel}
                 onPress={onClose}
               />
             </View>

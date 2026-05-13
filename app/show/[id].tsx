@@ -96,6 +96,10 @@ type PreviousEpisodesPrompt = {
   shouldPromptNextSeason: boolean;
 };
 
+type RemoveLibraryPrompt = {
+  message: string;
+};
+
 type AnimeHomeRelationMode = "core_only" | "all_relations";
 type AnimeCompletionBehavior =
   | "ask_every_time"
@@ -114,6 +118,7 @@ const TERMINAL_SHOW_LIFECYCLE_STATUSES = new Set([
 ]);
 const FULL_JIKAN_EPISODE_PAGE_BUDGET = 100;
 const FIRST_EPISODE_PAGE = 1;
+const FRANCHISE_AUTO_SYNC_FRESH_MS = 1000 * 60 * 60 * 24 * 30;
 const CAUGHT_UP_LINES = [
   { text: "And now my watch is ended.", credit: "Game of Thrones" },
   { text: "That's all. The rest is confetti.", credit: "Nell Crain" },
@@ -862,11 +867,14 @@ export function ShowDetailScreen() {
   const [nextSeasonPrompt, setNextSeasonPrompt] = useState<NextSeasonPrompt | null>(null);
   const [previousEpisodesPrompt, setPreviousEpisodesPrompt] =
     useState<PreviousEpisodesPrompt | null>(null);
+  const [removeLibraryPrompt, setRemoveLibraryPrompt] =
+    useState<RemoveLibraryPrompt | null>(null);
   const [isPreviousEpisodesPromptRunning, setIsPreviousEpisodesPromptRunning] =
     useState(false);
   const [isNavigatingToNextSeason, setIsNavigatingToNextSeason] = useState(false);
   const [isPausingRelatedEntries, setIsPausingRelatedEntries] = useState(false);
   const [isUpdatingAnimeSettings, setIsUpdatingAnimeSettings] = useState(false);
+  const [isSyncingRelatedAnime, setIsSyncingRelatedAnime] = useState(false);
   const [isFranchiseSettingsModalVisible, setIsFranchiseSettingsModalVisible] =
     useState(false);
   const animeSettingsUpdateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -881,6 +889,10 @@ export function ShowDetailScreen() {
   const seasonLoadGenerationRef = useRef(0);
   const prevInWatchlistRef = useRef<boolean | null>(null);
   const metadataRefreshKeyRef = useRef<string | null>(null);
+  const relationAutoSyncKeyRef = useRef<string | null>(null);
+  const removeLibraryPromptResolveRef = useRef<((didConfirm: boolean) => void) | null>(
+    null
+  );
   const [apiRelatedAnime, setApiRelatedAnime] = useState<AniListRelatedShow[]>([]);
   const [isLoadingRelatedAnime, setIsLoadingRelatedAnime] = useState(false);
 
@@ -1085,6 +1097,10 @@ export function ShowDetailScreen() {
   )
     ? animeFranchiseSettings.completionBehavior
     : "ask_every_time";
+  const animeFranchiseLastRelationSyncAt =
+    typeof animeFranchiseSettings?.lastRelationSyncAt === "number"
+      ? animeFranchiseSettings.lastRelationSyncAt
+      : null;
 
   const relatedAnimeTrackingArgs = useMemo(() => {
     if (!show || show.mediaType !== "anime") {
@@ -1371,6 +1387,42 @@ export function ShowDetailScreen() {
       isCancelled = true;
     };
   }, [relatedAnimeLookupId]);
+
+  useEffect(() => {
+    if (
+      !show ||
+      show.mediaType !== "anime" ||
+      typeof relationRootAnilistId !== "number" ||
+      animeFranchiseSettings === undefined
+    ) {
+      return;
+    }
+
+    const syncKey = `${relationRootAnilistId}:${animeFranchiseLastRelationSyncAt ?? "never"}`;
+    if (relationAutoSyncKeyRef.current === syncKey) {
+      return;
+    }
+
+    if (
+      animeFranchiseLastRelationSyncAt !== null &&
+      Date.now() - animeFranchiseLastRelationSyncAt < FRANCHISE_AUTO_SYNC_FRESH_MS
+    ) {
+      relationAutoSyncKeyRef.current = syncKey;
+      return;
+    }
+
+    relationAutoSyncKeyRef.current = syncKey;
+    void syncAnimeRelationsForRoot({ relationRootAnilistId, force: false }).catch((syncError) => {
+      console.warn("Background franchise relation sync failed", syncError);
+      relationAutoSyncKeyRef.current = null;
+    });
+  }, [
+    animeFranchiseLastRelationSyncAt,
+    animeFranchiseSettings,
+    relationRootAnilistId,
+    show,
+    syncAnimeRelationsForRoot,
+  ]);
 
   const relatedAnime = useMemo(() => {
     if (!show || show.mediaType !== "anime") {
@@ -2120,7 +2172,10 @@ export function ShowDetailScreen() {
         : "This removes the title from your tracked library. Favorites and custom lists are unchanged.";
 
     if (Platform.OS === "web") {
-      return window.confirm(`Remove from Library?\n\n${message}`);
+      return new Promise<boolean>((resolve) => {
+        removeLibraryPromptResolveRef.current = resolve;
+        setRemoveLibraryPrompt({ message });
+      });
     }
 
     return new Promise<boolean>((resolve) => {
@@ -2133,6 +2188,12 @@ export function ShowDetailScreen() {
         },
       ]);
     });
+  };
+
+  const handleResolveRemoveLibraryPrompt = (didConfirm: boolean) => {
+    removeLibraryPromptResolveRef.current?.(didConfirm);
+    removeLibraryPromptResolveRef.current = null;
+    setRemoveLibraryPrompt(null);
   };
 
   const handleToggleLibrary = async () => {
@@ -3285,7 +3346,7 @@ export function ShowDetailScreen() {
 
       void (async () => {
         try {
-          await syncAnimeRelationsForRoot({ relationRootAnilistId });
+          await syncAnimeRelationsForRoot({ relationRootAnilistId, force: true });
           if (localOpId !== animeSettingsOpIdRef.current) {
             return;
           }
@@ -3309,6 +3370,32 @@ export function ShowDetailScreen() {
       if (localOpId === animeSettingsOpIdRef.current) {
         setIsUpdatingAnimeSettings(false);
       }
+    }
+  };
+
+  const handleRefreshRelatedAnime = async () => {
+    if (
+      !show ||
+      show.mediaType !== "anime" ||
+      typeof relationRootAnilistId !== "number" ||
+      isSyncingRelatedAnime
+    ) {
+      return;
+    }
+
+    setIsSyncingRelatedAnime(true);
+    setTrackingError(null);
+    setTrackingNotice(null);
+
+    try {
+      await syncAnimeRelationsForRoot({ relationRootAnilistId, force: true });
+      relationAutoSyncKeyRef.current = null;
+      setTrackingNotice("Related anime refreshed.");
+    } catch (error) {
+      console.error("Failed to refresh related anime", error);
+      setTrackingError("Could not refresh related anime.");
+    } finally {
+      setIsSyncingRelatedAnime(false);
     }
   };
 
@@ -3956,14 +4043,36 @@ export function ShowDetailScreen() {
                 >
                   Related Anime
                 </Text>
-                <View className="items-end">
-                  <Text className="text-xs text-text-secondary">
-                    {relatedAnime.length} linked
-                  </Text>
-                  {Platform.OS === "web" ? (
-                    <Text className="mt-1 text-[10px] uppercase tracking-[1px] text-text-tertiary">
-                      Drag or shift-scroll
+                <View className="flex-row items-center gap-2">
+                  <View className="items-end gap-1.5">
+                    <Text className="text-xs text-text-secondary">
+                      {relatedAnime.length} linked
                     </Text>
+                    {Platform.OS === "web" ? (
+                      <View className="flex-row items-center gap-1.5 rounded-full border border-border-default bg-bg-elevated px-2.5 py-1">
+                        <Ionicons name="swap-horizontal" size={12} color="#ef4444" />
+                        <Text className="text-[10px] font-bold uppercase tracking-[1px] text-text-secondary">
+                          Drag or shift-scroll
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  {typeof relationRootAnilistId === "number" ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Refresh related anime"
+                      disabled={isSyncingRelatedAnime}
+                      onPress={handleRefreshRelatedAnime}
+                      className={`h-9 w-9 items-center justify-center rounded-lg border border-border-default bg-bg-elevated ${
+                        isSyncingRelatedAnime ? "opacity-60" : "active:bg-bg-muted"
+                      }`}
+                    >
+                      {isSyncingRelatedAnime ? (
+                        <ActivityIndicator size="small" color="#ef4444" />
+                      ) : (
+                        <Ionicons name="refresh" size={17} color="#ef4444" />
+                      )}
+                    </Pressable>
                   ) : null}
                 </View>
               </View>
@@ -4654,6 +4763,57 @@ export function ShowDetailScreen() {
                 })}
               >
                 <Text className="text-sm font-semibold text-text-primary">Done</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={!!removeLibraryPrompt}
+        transparent
+        animationType="fade"
+        onRequestClose={() => handleResolveRemoveLibraryPrompt(false)}
+      >
+        <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
+          <Pressable
+            className="absolute inset-0"
+            focusable={false}
+            style={{ outlineWidth: 0, outlineStyle: "solid", outlineColor: "transparent" }}
+            onPress={() => handleResolveRemoveLibraryPrompt(false)}
+          />
+
+          <View className="w-full max-w-sm overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface">
+            <View className="border-b border-border-default px-4 pb-3 pt-4">
+              <View className="flex-row items-center gap-2">
+                <View className="size-8 items-center justify-center rounded-full border border-primary/35 bg-primary/10">
+                  <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                </View>
+                <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                  Remove from Library
+                </Text>
+              </View>
+              <Text className="mt-3 text-lg font-black text-text-primary">
+                Remove this title?
+              </Text>
+              <Text className="mt-2 text-sm leading-relaxed text-text-secondary">
+                {removeLibraryPrompt?.message}
+              </Text>
+            </View>
+
+            <View className="gap-2 p-4">
+              <Pressable
+                onPress={() => handleResolveRemoveLibraryPrompt(true)}
+                className="items-center justify-center rounded-xl border border-primary/40 bg-primary/15 py-3.5 active:bg-primary/20"
+              >
+                <Text className="font-semibold text-primary">Remove from Library</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => handleResolveRemoveLibraryPrompt(false)}
+                className="items-center justify-center rounded-xl border border-border-default bg-bg-base py-3.5 active:bg-bg-elevated"
+              >
+                <Text className="font-semibold text-text-secondary">Cancel</Text>
               </Pressable>
             </View>
           </View>

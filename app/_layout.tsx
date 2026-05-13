@@ -27,6 +27,7 @@ function RootLayoutContent() {
     pathname === "/search" ||
     pathname === "/library" ||
     pathname === "/profile" ||
+    pathname === "/profile/settings" ||
     pathname === "/import" ||
     pathname.startsWith("/list/") ||
     pathname.startsWith("/show/");
@@ -49,6 +50,13 @@ function RootLayoutContent() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen
               name="show/[id]"
+              options={{
+                presentation: "transparentModal",
+                contentStyle: { backgroundColor: "transparent" },
+              }}
+            />
+            <Stack.Screen
+              name="profile/settings"
               options={{
                 presentation: "transparentModal",
                 contentStyle: { backgroundColor: "transparent" },

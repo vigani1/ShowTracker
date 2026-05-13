@@ -21,10 +21,11 @@ import {
 } from "@/lib/api/anilist";
 import { getJikanAnime } from "@/lib/api/jikan";
 import { normalizeTmdbShowDetails } from "@/lib/api/normalize";
-import { getTmdbShowDetails } from "@/lib/api/tmdb";
+import { getTmdbSeasonDetails, getTmdbShowDetails } from "@/lib/api/tmdb";
 import type { NormalizedShow } from "@/lib/api/types";
 
-const RELATION_SYNC_THROTTLE_MS = 1000 * 60 * 60 * 6;
+const RELATION_SYNC_THROTTLE_MS = 1000 * 60 * 60 * 24 * 30;
+const FRANCHISE_AUTO_SYNC_FRESH_MS = 1000 * 60 * 60 * 24 * 30;
 const REFRESH_THROTTLE_MS = 1000 * 60 * 60;
 const AUDIT_PAGE_SIZE_DEFAULT = 5;
 const AUDIT_PAGE_SIZE_MAX = 10;
@@ -37,6 +38,61 @@ const TARGETED_TRACKING_REPAIR_PAGE_SIZE = 20;
 const TARGETED_TRACKING_REPAIR_PAGE_SIZE_MAX = 30;
 const COMPLETED_SHOW_METADATA_REFRESH_PAGE_SIZE = 100;
 const COMPLETED_SHOW_METADATA_REFRESH_MAX_SCANNED = 500;
+
+function startOfUtcDayMs(value: Date) {
+  return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+}
+
+function parseTmdbAirDateMs(airDate?: string | null) {
+  if (!airDate?.trim()) {
+    return null;
+  }
+
+  const match = airDate.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    const parsed = new Date(airDate);
+    return Number.isNaN(parsed.getTime()) ? null : startOfUtcDayMs(parsed);
+  }
+
+  return Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3])
+  );
+}
+
+function formatUtcDateKey(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+async function getTmdbReleasedEpisodeCountFromSeasonDetails(
+  tmdbId: number,
+  seasons?: { season_number: number }[]
+) {
+  const seasonNumbers = (seasons ?? [])
+    .map((season) => season.season_number)
+    .filter((seasonNumber) => Number.isFinite(seasonNumber) && seasonNumber > 0)
+    .sort((a, b) => a - b);
+
+  if (!seasonNumbers.length || seasonNumbers.length > 40) {
+    return null;
+  }
+
+  const todayMs = startOfUtcDayMs(new Date());
+  let releasedEpisodes = 0;
+
+  for (const seasonNumber of seasonNumbers) {
+    const season = await getTmdbSeasonDetails(tmdbId, seasonNumber);
+    for (const episode of season.episodes ?? []) {
+      const airDateMs = parseTmdbAirDateMs(episode.air_date);
+      if (airDateMs !== null && airDateMs <= todayMs) {
+        releasedEpisodes++;
+      }
+    }
+  }
+
+  return releasedEpisodes;
+}
 const COMPLETED_SHOW_METADATA_REFRESH_MAX_CANDIDATES = 25;
 const COMPLETED_SHOW_METADATA_REFRESH_CURSOR_KEY = "completed-show-refresh";
 const COMPLETED_SHOW_RESUME_MAX_ROUNDS = 10;
@@ -110,6 +166,13 @@ const homePausedSectionModeValidator = v.union(
   v.literal("auto_paused_only"),
   v.literal("all_paused")
 );
+const watchlistAirtimeModeValidator = v.union(
+  v.literal("same_day"),
+  v.literal("after_airtime")
+);
+const homeFeedMediaFilterValidator = v.optional(
+  v.union(v.literal("tv"), v.literal("anime"))
+);
 
 type AnimeHomeRelationMode = "core_only" | "all_relations";
 type AnimeCompletionBehavior =
@@ -117,10 +180,14 @@ type AnimeCompletionBehavior =
   | "auto_open_next"
   | "auto_pause_others_keep_next";
 type HomePausedSectionMode = "auto_paused_only" | "all_paused";
+type WatchlistAirtimeMode = "same_day" | "after_airtime";
+type HomeFeedMediaFilter = "tv" | "anime" | undefined;
+type HomeFeedSection = "active" | "paused" | "not_started";
 
 const DEFAULT_ANIME_HOME_RELATION_MODE: AnimeHomeRelationMode = "core_only";
 const DEFAULT_ANIME_COMPLETION_BEHAVIOR: AnimeCompletionBehavior = "ask_every_time";
 const DEFAULT_HOME_PAUSED_SECTION_MODE: HomePausedSectionMode = "auto_paused_only";
+const DEFAULT_WATCHLIST_AIRTIME_MODE: WatchlistAirtimeMode = "same_day";
 
 function isAniListRateLimitError(error: unknown): error is { status: number } {
   return !!error && typeof error === "object" && "status" in error && error.status === 429;
@@ -167,6 +234,7 @@ function buildFeedProjectionFields(
     watchedEpisodesCount: watchedCount,
     remainingEpisodes,
     lastWatchedAt: userShow.lastWatchedAt ?? userShow.addedAt,
+    autoPausedAt: userShow.autoPausedAt,
 
     updatedAt: Date.now(),
   };
@@ -200,6 +268,7 @@ const FEED_PROJECTION_COMPARE_KEYS: Array<
   "watchedEpisodesCount",
   "remainingEpisodes",
   "lastWatchedAt",
+  "autoPausedAt",
 ];
 
 function hasFeedProjectionChanges(
@@ -890,6 +959,8 @@ function isHomeFeedNotStartedSectionEntry(
 ) {
   return (
     !isCompletedWatchlistEntry(entry) &&
+    typeof entry.remainingEpisodes === "number" &&
+    entry.remainingEpisodes > 0 &&
     !hasWatchlistProgress(entry) &&
     entry.status !== "watching" &&
     entry.status !== "paused" &&
@@ -1173,6 +1244,291 @@ function getExternalShowIdFromProjection(p: {
   return null;
 }
 
+type HomeFeedProjectionItem = {
+  id: string;
+  title: string;
+  mediaType: "tv" | "anime" | "movie";
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  overview: string | null;
+  firstAired: string | null;
+  tmdbId: number | null;
+  anilistId: number | null;
+  malId: number | null;
+  tvmazeId: number | null;
+  imdbId: string | null;
+  status: UserShowStatus;
+  isAutoTracked: boolean;
+  trackingState: "not_started" | "in_progress" | "upcoming" | "tba";
+  relationRootAnilistId: number | null;
+  anilistFormat: string | null;
+  animeSeason: string | null;
+  animeSeasonYear: number | null;
+  watchedEpisodes: number;
+  totalEpisodes: number | null;
+  remainingEpisodes: number | null;
+  progressPercent: number | null;
+  lastWatchedAt: number;
+  autoPausedAt: number | null;
+};
+
+function hydrateHomeFeedProjection(
+  projection: Doc<"feedProjections">
+): HomeFeedProjectionItem | null {
+  const externalId = getExternalShowIdFromProjection(projection);
+  if (!externalId) {
+    return null;
+  }
+
+  const watchedCount = projection.watchedEpisodesCount;
+  const totalEpisodes = projection.totalEpisodes ?? null;
+  const remainingEpisodes = projection.remainingEpisodes ?? null;
+
+  const progressPercent =
+    totalEpisodes && totalEpisodes > 0
+      ? Math.min(100, Math.round((watchedCount / totalEpisodes) * 100))
+      : null;
+
+  const trackingState =
+    totalEpisodes === null
+      ? watchedCount > 0
+        ? "in_progress"
+        : "tba"
+      : watchedCount === 0
+        ? "not_started"
+        : "in_progress";
+
+  return {
+    id: externalId,
+    title: projection.title,
+    mediaType: projection.mediaType,
+    posterUrl: projection.posterUrl ?? null,
+    backdropUrl: projection.backdropUrl ?? null,
+    overview: null,
+    firstAired: projection.firstAired ?? null,
+    tmdbId: projection.tmdbId ?? null,
+    anilistId: projection.anilistId ?? null,
+    malId: projection.malId ?? null,
+    tvmazeId: projection.tvmazeId ?? null,
+    imdbId: projection.imdbId ?? null,
+    status: projection.status,
+    isAutoTracked: projection.isAutoTracked ?? false,
+    trackingState,
+    relationRootAnilistId: projection.relationRootAnilistId ?? null,
+    anilistFormat: projection.anilistFormat ?? null,
+    animeSeason: projection.animeSeason ?? null,
+    animeSeasonYear: projection.animeSeasonYear ?? null,
+    watchedEpisodes: watchedCount,
+    totalEpisodes,
+    remainingEpisodes,
+    progressPercent,
+    lastWatchedAt: projection.lastWatchedAt,
+    autoPausedAt: projection.autoPausedAt ?? null,
+  };
+}
+
+function serializeHomeFeedItems(items: HomeFeedProjectionItem[]) {
+  return items.map(
+    ({
+      relationRootAnilistId: _relationRootAnilistId,
+      anilistFormat: _anilistFormat,
+      animeSeason: _animeSeason,
+      animeSeasonYear: _animeSeasonYear,
+      ...rest
+    }) => rest
+  );
+}
+
+function selectHomeFeedItemsFromProjections(args: {
+  projections: Doc<"feedProjections">[];
+  globalRelationMode: AnimeHomeRelationMode;
+  pausedSectionMode: HomePausedSectionMode;
+  relationModeByRoot: Map<number, AnimeHomeRelationMode>;
+  section?: HomeFeedSection;
+  limit: number;
+}) {
+  const hydrated: HomeFeedProjectionItem[] = [];
+  for (const projection of args.projections) {
+    const item = hydrateHomeFeedProjection(projection);
+    if (item) {
+      hydrated.push(item);
+    }
+  }
+
+  const matchesSection = (entry: HomeFeedProjectionItem) => {
+    if (args.section === "active") {
+      return shouldShowHomeFeedWatchlistEntry(entry);
+    }
+    if (args.section === "paused") {
+      return isHomeFeedPausedSectionEntry(entry, args.pausedSectionMode);
+    }
+    if (args.section === "not_started") {
+      return isHomeFeedNotStartedSectionEntry(entry);
+    }
+    return true;
+  };
+
+  const groupedAnime = new Map<string, HomeFeedProjectionItem[]>();
+  const selectedEntries: HomeFeedProjectionItem[] = [];
+
+  for (const item of hydrated) {
+    if (item.mediaType !== "anime") {
+      if (
+        shouldShowHomeFeedWatchlistEntry(item) ||
+        isHomeFeedPausedSectionEntry(item, args.pausedSectionMode) ||
+        isHomeFeedNotStartedSectionEntry(item)
+      ) {
+        selectedEntries.push(item);
+      }
+      continue;
+    }
+
+    const groupKey =
+      typeof item.relationRootAnilistId === "number"
+        ? `root:${item.relationRootAnilistId}`
+        : typeof item.anilistId === "number"
+          ? `anilist:${item.anilistId}`
+          : typeof item.malId === "number"
+            ? `mal:${item.malId}`
+            : `show:${item.id}`;
+
+    const group = groupedAnime.get(groupKey) ?? [];
+    group.push(item);
+    groupedAnime.set(groupKey, group);
+  }
+
+  for (const entries of groupedAnime.values()) {
+    const relationRootAnilistId =
+      typeof entries[0]?.relationRootAnilistId === "number"
+        ? entries[0].relationRootAnilistId
+        : null;
+    const effectiveRelationMode =
+      relationRootAnilistId !== null
+        ? args.relationModeByRoot.get(relationRootAnilistId) ?? args.globalRelationMode
+        : args.globalRelationMode;
+    const sectionEntries = entries.filter(matchesSection);
+
+    const selected = selectHomeAnimeFranchiseRepresentative(sectionEntries, {
+      isMainlineEntry: isProjectionMainlineAnime,
+      pausedSectionMode: args.pausedSectionMode,
+      preferMainlineOnly: effectiveRelationMode === "core_only",
+      sortEntries: sortProjectionAnimeCandidates,
+    });
+
+    if (!selected) {
+      continue;
+    }
+
+    selectedEntries.push({
+      ...selected.entry,
+      lastWatchedAt: selected.lastActivityAt,
+    });
+  }
+
+  const sortSection = (a: HomeFeedProjectionItem, b: HomeFeedProjectionItem) => {
+    if (args.section === "paused") {
+      const autoPausedDelta =
+        Number(typeof b.autoPausedAt === "number") - Number(typeof a.autoPausedAt === "number");
+      if (autoPausedDelta !== 0) {
+        return autoPausedDelta;
+      }
+
+      const pausedAtDelta = (b.autoPausedAt ?? 0) - (a.autoPausedAt ?? 0);
+      if (pausedAtDelta !== 0) {
+        return pausedAtDelta;
+      }
+    }
+
+    return b.lastWatchedAt - a.lastWatchedAt;
+  };
+
+  return selectedEntries
+    .filter(matchesSection)
+    .sort(sortSection)
+    .slice(0, args.limit);
+}
+
+async function getHomeFeedSettings(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  options: { includeFranchiseSettings?: boolean } = {}
+) {
+  const includeFranchiseSettings = options.includeFranchiseSettings ?? true;
+  const [homeSettings, franchiseSettings] = await Promise.all([
+    ctx.db
+      .query("userAnimeHomeSettings")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique(),
+    includeFranchiseSettings
+      ? ctx.db
+          .query("userAnimeFranchiseSettings")
+          .withIndex("by_user", (q) => q.eq("userId", userId))
+          .take(200)
+      : Promise.resolve([]),
+  ]);
+
+  const globalRelationMode =
+    (homeSettings?.relationMode as AnimeHomeRelationMode | undefined) ??
+    DEFAULT_ANIME_HOME_RELATION_MODE;
+  const pausedSectionMode =
+    (homeSettings?.pausedSectionMode as HomePausedSectionMode | undefined) ??
+    DEFAULT_HOME_PAUSED_SECTION_MODE;
+  const relationModeByRoot = new Map<number, AnimeHomeRelationMode>();
+  for (const row of franchiseSettings) {
+    relationModeByRoot.set(
+      row.relationRootAnilistId,
+      row.relationMode as AnimeHomeRelationMode
+    );
+  }
+
+  return { globalRelationMode, pausedSectionMode, relationModeByRoot };
+}
+
+async function getHomeFeedProjectionCandidates(ctx: QueryCtx, args: {
+  userId: Id<"users">;
+  mediaFilter: HomeFeedMediaFilter;
+  statuses: UserShowStatus[];
+  perStatusLimit: number;
+  orderByAutoPausedAt?: boolean;
+}) {
+  const mediaTypes = args.mediaFilter ? [args.mediaFilter] : ["tv", "anime"] as const;
+  const pages = await Promise.all(
+    mediaTypes.flatMap((mediaType) =>
+      args.statuses.map((status) => {
+        if (args.orderByAutoPausedAt) {
+          return ctx.db
+            .query("feedProjections")
+            .withIndex("by_user_media_status_autoPausedAt", (q) =>
+              q
+                .eq("userId", args.userId)
+                .eq("mediaType", mediaType)
+                .eq("status", status)
+            )
+            .order("desc")
+            .take(args.perStatusLimit);
+        }
+
+        return ctx.db
+          .query("feedProjections")
+          .withIndex("by_user_media_status_lastWatched", (q) =>
+            q
+              .eq("userId", args.userId)
+              .eq("mediaType", mediaType)
+              .eq("status", status)
+          )
+          .order("desc")
+          .take(args.perStatusLimit);
+      })
+    )
+  );
+
+  const deduped = new Map<string, Doc<"feedProjections">>();
+  for (const projection of pages.flat()) {
+    deduped.set(projection._id, projection);
+  }
+  return Array.from(deduped.values());
+}
+
 function getShowRouteId(show: {
   mediaType: "tv" | "anime" | "movie";
   tmdbId?: number | null;
@@ -1210,238 +1566,146 @@ export const getHomeFeed = query({
 
     const typedUserId = userId as Id<"users">;
 
-    const [tvProjections, animeProjections, pausedUserShows, homeSettings, franchiseSettings] =
+    const { globalRelationMode, pausedSectionMode, relationModeByRoot } =
+      await getHomeFeedSettings(ctx, typedUserId);
+    const [activeProjections, pausedProjections, notStartedProjections] =
       await Promise.all([
-        ctx.db
-          .query("feedProjections")
-          .withIndex("by_user_media", (q) =>
-            q.eq("userId", typedUserId).eq("mediaType", "tv")
-          )
-          .collect(),
-        ctx.db
-          .query("feedProjections")
-          .withIndex("by_user_media", (q) =>
-            q.eq("userId", typedUserId).eq("mediaType", "anime")
-          )
-          .collect(),
-        ctx.db
-          .query("userShows")
-          .withIndex("by_user_status", (q) =>
-            q.eq("userId", typedUserId).eq("status", "paused")
-          )
-          .collect(),
-        ctx.db
-          .query("userAnimeHomeSettings")
-          .withIndex("by_user", (q) => q.eq("userId", typedUserId))
-          .unique(),
-        ctx.db
-          .query("userAnimeFranchiseSettings")
-          .withIndex("by_user", (q) => q.eq("userId", typedUserId))
-          .take(200),
+        getHomeFeedProjectionCandidates(ctx, {
+          userId: typedUserId,
+          mediaFilter: undefined,
+          statuses: ["watching"],
+          perStatusLimit: HOME_FEED_MAX_RESULTS * 4,
+        }),
+        getHomeFeedProjectionCandidates(ctx, {
+          userId: typedUserId,
+          mediaFilter: undefined,
+          statuses: ["paused"],
+          perStatusLimit: HOME_FEED_MAX_RESULTS,
+          orderByAutoPausedAt: true,
+        }),
+        getHomeFeedProjectionCandidates(ctx, {
+          userId: typedUserId,
+          mediaFilter: undefined,
+          statuses: ["plan_to_watch"],
+          perStatusLimit: HOME_FEED_MAX_RESULTS,
+        }),
       ]);
 
-    const globalRelationMode =
-      (homeSettings?.relationMode as AnimeHomeRelationMode | undefined) ??
-      DEFAULT_ANIME_HOME_RELATION_MODE;
-    const pausedSectionMode =
-      (homeSettings?.pausedSectionMode as HomePausedSectionMode | undefined) ??
-      DEFAULT_HOME_PAUSED_SECTION_MODE;
-    const relationModeByRoot = new Map<number, AnimeHomeRelationMode>();
-    for (const row of franchiseSettings) {
-      relationModeByRoot.set(
-        row.relationRootAnilistId,
-        row.relationMode as AnimeHomeRelationMode
-      );
-    }
-    const autoPausedAtByUserShowId = new Map<Id<"userShows">, number | null>();
-    const pausedUserShowsForSection = pausedUserShows.filter(
-      (userShow) =>
-        pausedSectionMode === "all_paused" || typeof userShow.autoPausedAt === "number"
-    );
-    for (const userShow of pausedUserShowsForSection) {
-      autoPausedAtByUserShowId.set(userShow._id, userShow.autoPausedAt ?? null);
-    }
+    const active = selectHomeFeedItemsFromProjections({
+      projections: activeProjections,
+      globalRelationMode,
+      pausedSectionMode,
+      relationModeByRoot,
+      section: "active",
+      limit: HOME_FEED_MAX_RESULTS,
+    });
+    const paused = selectHomeFeedItemsFromProjections({
+      projections: pausedProjections,
+      globalRelationMode,
+      pausedSectionMode,
+      relationModeByRoot,
+      section: "paused",
+      limit: HOME_FEED_MAX_RESULTS,
+    });
+    const notStarted = selectHomeFeedItemsFromProjections({
+      projections: notStartedProjections,
+      globalRelationMode,
+      pausedSectionMode,
+      relationModeByRoot,
+      section: "not_started",
+      limit: HOME_FEED_MAX_RESULTS,
+    });
 
-    const nonMovies = [...tvProjections, ...animeProjections];
-
-    type HomeFeedProjectionItem = {
-      id: string;
-      title: string;
-      mediaType: "tv" | "anime" | "movie";
-      posterUrl: string | null;
-      backdropUrl: string | null;
-      overview: string | null;
-      firstAired: string | null;
-      tmdbId: number | null;
-      anilistId: number | null;
-      malId: number | null;
-      tvmazeId: number | null;
-      imdbId: string | null;
-      status: UserShowStatus;
-      isAutoTracked: boolean;
-      trackingState: "not_started" | "in_progress" | "upcoming" | "tba";
-      relationRootAnilistId: number | null;
-      anilistFormat: string | null;
-      animeSeason: string | null;
-      animeSeasonYear: number | null;
-      watchedEpisodes: number;
-      totalEpisodes: number | null;
-      remainingEpisodes: number | null;
-      progressPercent: number | null;
-      lastWatchedAt: number;
-      autoPausedAt: number | null;
-    };
-
-    const hydrated: HomeFeedProjectionItem[] = [];
-    for (const projection of nonMovies) {
-      const externalId = getExternalShowIdFromProjection(projection);
-      if (!externalId) {
-        continue;
-      }
-
-      const watchedCount = projection.watchedEpisodesCount;
-      const totalEpisodes = projection.totalEpisodes ?? null;
-      const remainingEpisodes = projection.remainingEpisodes ?? null;
-
-      const progressPercent =
-        totalEpisodes && totalEpisodes > 0
-          ? Math.min(100, Math.round((watchedCount / totalEpisodes) * 100))
-          : null;
-
-      const trackingState =
-        totalEpisodes === null
-          ? watchedCount > 0
-            ? "in_progress"
-            : "tba"
-          : watchedCount === 0
-            ? "not_started"
-            : "in_progress";
-
-      hydrated.push({
-        id: externalId,
-        title: projection.title,
-        mediaType: projection.mediaType,
-        posterUrl: projection.posterUrl ?? null,
-        backdropUrl: projection.backdropUrl ?? null,
-        overview: null,
-        firstAired: projection.firstAired ?? null,
-        tmdbId: projection.tmdbId ?? null,
-        anilistId: projection.anilistId ?? null,
-        malId: projection.malId ?? null,
-        tvmazeId: projection.tvmazeId ?? null,
-        imdbId: projection.imdbId ?? null,
-        status: projection.status,
-        isAutoTracked: projection.isAutoTracked ?? false,
-        trackingState,
-        relationRootAnilistId: projection.relationRootAnilistId ?? null,
-        anilistFormat: projection.anilistFormat ?? null,
-        animeSeason: projection.animeSeason ?? null,
-        animeSeasonYear: projection.animeSeasonYear ?? null,
-        watchedEpisodes: watchedCount,
-        totalEpisodes,
-        remainingEpisodes,
-        progressPercent,
-        lastWatchedAt: projection.lastWatchedAt,
-        autoPausedAt: autoPausedAtByUserShowId.get(projection.userShowId) ?? null,
-      });
-    }
-
-    const groupedAnime = new Map<string, HomeFeedProjectionItem[]>();
-    const selectedEntries: HomeFeedProjectionItem[] = [];
-
-    for (const item of hydrated) {
-      if (item.mediaType !== "anime") {
-        if (
-          shouldShowHomeFeedWatchlistEntry(item) ||
-          isHomeFeedPausedSectionEntry(item, pausedSectionMode) ||
-          isHomeFeedNotStartedSectionEntry(item)
-        ) {
-          selectedEntries.push(item);
-        }
-        continue;
-      }
-
-      const groupKey =
-        typeof item.relationRootAnilistId === "number"
-          ? `root:${item.relationRootAnilistId}`
-          : typeof item.anilistId === "number"
-            ? `anilist:${item.anilistId}`
-            : typeof item.malId === "number"
-              ? `mal:${item.malId}`
-              : `show:${item.id}`;
-
-      const group = groupedAnime.get(groupKey) ?? [];
-      group.push(item);
-      groupedAnime.set(groupKey, group);
-    }
-
-    for (const entries of groupedAnime.values()) {
-      const relationRootAnilistId =
-        typeof entries[0]?.relationRootAnilistId === "number"
-          ? entries[0].relationRootAnilistId
-          : null;
-      const effectiveRelationMode =
-        relationRootAnilistId !== null
-          ? relationModeByRoot.get(relationRootAnilistId) ?? globalRelationMode
-          : globalRelationMode;
-
-      const selected = selectHomeAnimeFranchiseRepresentative(entries, {
-        isMainlineEntry: isProjectionMainlineAnime,
-        pausedSectionMode,
-        preferMainlineOnly: effectiveRelationMode === "core_only",
-        sortEntries: sortProjectionAnimeCandidates,
-      });
-
-      if (!selected) {
-        continue;
-      }
-
-      selectedEntries.push({
-        ...selected.entry,
-        lastWatchedAt: selected.lastActivityAt,
-      });
-    }
-
-    const selectedActiveEntries = selectedEntries
-      .filter(
-        (entry) =>
-          !isHomeFeedPausedSectionEntry(entry, pausedSectionMode) &&
-          !isHomeFeedNotStartedSectionEntry(entry)
-      )
-      .sort((a, b) => b.lastWatchedAt - a.lastWatchedAt)
-      .slice(0, HOME_FEED_MAX_RESULTS);
-    const selectedPausedEntries = selectedEntries
-      .filter((entry) => isHomeFeedPausedSectionEntry(entry, pausedSectionMode))
-      .sort((a, b) => {
-        const autoPausedDelta =
-          Number(typeof b.autoPausedAt === "number") - Number(typeof a.autoPausedAt === "number");
-        if (autoPausedDelta !== 0) {
-          return autoPausedDelta;
-        }
-
-        const pausedAtDelta = (b.autoPausedAt ?? 0) - (a.autoPausedAt ?? 0);
-        if (pausedAtDelta !== 0) {
-          return pausedAtDelta;
-        }
-
-        return b.lastWatchedAt - a.lastWatchedAt;
-      })
-      .slice(0, HOME_FEED_MAX_RESULTS);
-    const selectedNotStartedEntries = selectedEntries
-      .filter((entry) => isHomeFeedNotStartedSectionEntry(entry))
-      .sort((a, b) => b.lastWatchedAt - a.lastWatchedAt)
-      .slice(0, HOME_FEED_MAX_RESULTS);
-
-    return [...selectedActiveEntries, ...selectedPausedEntries, ...selectedNotStartedEntries].map(
-        ({
-          relationRootAnilistId: _relationRootAnilistId,
-          anilistFormat: _anilistFormat,
-          animeSeason: _animeSeason,
-          animeSeasonYear: _animeSeasonYear,
-          ...rest
-        }) => rest
-      );
+    return serializeHomeFeedItems([...active, ...paused, ...notStarted]);
   },
+});
+
+async function getHomeFeedSection(ctx: QueryCtx, args: {
+  section: HomeFeedSection;
+  limit?: number;
+  mediaFilter?: "tv" | "anime";
+}) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) {
+    return [];
+  }
+
+  const typedUserId = userId as Id<"users">;
+  const safeLimit = Math.max(
+    1,
+    Math.min(args.limit ?? HOME_FEED_MAX_RESULTS, HOME_FEED_MAX_RESULTS)
+  );
+  const perStatusLimit =
+    args.section === "active"
+      ? Math.max(safeLimit * 4, 80)
+      : Math.max(safeLimit, 20);
+  const { globalRelationMode, pausedSectionMode, relationModeByRoot } =
+    await getHomeFeedSettings(ctx, typedUserId, {
+      includeFranchiseSettings: args.mediaFilter !== "tv",
+    });
+  const statuses: UserShowStatus[] =
+    args.section === "active"
+      ? ["watching"]
+      : args.section === "paused"
+        ? ["paused"]
+        : ["plan_to_watch"];
+  const projections = await getHomeFeedProjectionCandidates(ctx, {
+    userId: typedUserId,
+    mediaFilter: args.mediaFilter,
+    statuses,
+    perStatusLimit,
+    orderByAutoPausedAt: args.section === "paused",
+  });
+
+  const selected = selectHomeFeedItemsFromProjections({
+    projections,
+    globalRelationMode,
+    pausedSectionMode,
+    relationModeByRoot,
+    section: args.section,
+    limit: safeLimit,
+  });
+
+  return serializeHomeFeedItems(selected);
+}
+
+export const getHomeActiveFeed = query({
+  args: {
+    limit: v.optional(v.number()),
+    mediaFilter: homeFeedMediaFilterValidator,
+  },
+  handler: async (ctx, args) =>
+    getHomeFeedSection(ctx, {
+      section: "active",
+      limit: args.limit,
+      mediaFilter: args.mediaFilter,
+    }),
+});
+
+export const getHomePausedFeed = query({
+  args: {
+    limit: v.optional(v.number()),
+    mediaFilter: homeFeedMediaFilterValidator,
+  },
+  handler: async (ctx, args) =>
+    getHomeFeedSection(ctx, {
+      section: "paused",
+      limit: args.limit,
+      mediaFilter: args.mediaFilter,
+    }),
+});
+
+export const getHomeNotStartedFeed = query({
+  args: {
+    limit: v.optional(v.number()),
+    mediaFilter: homeFeedMediaFilterValidator,
+  },
+  handler: async (ctx, args) =>
+    getHomeFeedSection(ctx, {
+      section: "not_started",
+      limit: args.limit,
+      mediaFilter: args.mediaFilter,
+    }),
 });
 
 export const getDistinctTrackedUserIds = internalQuery({
@@ -1591,10 +1855,16 @@ async function getUserAnimeHomeSettingsFromDb(
     pausedSectionMode:
       (existing?.pausedSectionMode as HomePausedSectionMode | undefined) ??
       DEFAULT_HOME_PAUSED_SECTION_MODE,
+    watchlistAirtimeMode:
+      (existing?.watchlistAirtimeMode as WatchlistAirtimeMode | undefined) ??
+      DEFAULT_WATCHLIST_AIRTIME_MODE,
+    updatedAt: existing?.updatedAt ?? 0,
   } as {
     relationMode: AnimeHomeRelationMode;
     completionBehavior: AnimeCompletionBehavior;
     pausedSectionMode: HomePausedSectionMode;
+    watchlistAirtimeMode: WatchlistAirtimeMode;
+    updatedAt: number;
   };
 }
 
@@ -2409,10 +2679,42 @@ async function fetchLatestNormalizedShowForExistingShow(show: Doc<"shows">) {
       show.mediaType === "movie" ? "movie" : "tv",
       show.tmdbId
     );
-    return normalizeTmdbShowDetails(
+    const normalized = normalizeTmdbShowDetails(
       show.mediaType === "movie" ? "movie" : "tv",
       details
     );
+
+    const releasedEpisodeCount = normalized.releasedEpisodes ?? null;
+    const totalEpisodeCount = normalized.totalEpisodes ?? null;
+    if (
+      show.mediaType !== "movie" &&
+      (releasedEpisodeCount === null ||
+        (typeof totalEpisodeCount === "number" && releasedEpisodeCount < totalEpisodeCount))
+    ) {
+      try {
+        const releasedFromSeasons =
+          await getTmdbReleasedEpisodeCountFromSeasonDetails(show.tmdbId, details.seasons);
+        if (
+          typeof releasedFromSeasons === "number" &&
+          releasedFromSeasons > (normalized.releasedEpisodes ?? 0)
+        ) {
+          return {
+            ...normalized,
+            releasedEpisodes: Math.min(
+              releasedFromSeasons,
+              normalized.totalEpisodes ?? releasedFromSeasons
+            ),
+          };
+        }
+      } catch (error) {
+        console.warn("Failed to refine TMDB released episode count from season details", {
+          tmdbId: show.tmdbId,
+          error,
+        });
+      }
+    }
+
+    return normalized;
   }
 
   return null;
@@ -2898,6 +3200,34 @@ export const getAnimeRelationSyncCandidates = internalQuery({
   },
 });
 
+export const getAnimeRelationSyncCandidateForRoot = internalQuery({
+  args: {
+    userId: v.id("users"),
+    relationRootAnilistId: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const rootShow = await ctx.db
+      .query("shows")
+      .withIndex("by_anilistId", (q) => q.eq("anilistId", args.relationRootAnilistId))
+      .unique();
+    const userShowsForRoot = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_relation_root", (q) =>
+        q.eq("userId", args.userId).eq("relationRootAnilistId", args.relationRootAnilistId)
+      )
+      .collect();
+    const lastSyncedAt = Math.max(
+      rootShow?.lastRelationSyncAt ?? 0,
+      ...userShowsForRoot.map((entry) => entry.lastRelationSyncAt ?? 0)
+    );
+
+    return {
+      rootAnilistId: args.relationRootAnilistId,
+      lastSyncedAt,
+    };
+  },
+});
+
 export const addAnimeToWatchlistWithRelations = action({
   args: showInput,
   handler: async (ctx, args): Promise<AddAnimeToWatchlistResult> => {
@@ -3115,6 +3445,8 @@ export const setUserAnimeHomeSettings = mutation({
     relationMode: v.optional(animeHomeRelationModeValidator),
     completionBehavior: v.optional(animeCompletionBehaviorValidator),
     pausedSectionMode: v.optional(homePausedSectionModeValidator),
+    watchlistAirtimeMode: v.optional(watchlistAirtimeModeValidator),
+    lastKnownUpdatedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getCurrentUserId(ctx);
@@ -3131,17 +3463,29 @@ export const setUserAnimeHomeSettings = mutation({
           pausedSectionMode:
             (existing.pausedSectionMode as HomePausedSectionMode | undefined) ??
             DEFAULT_HOME_PAUSED_SECTION_MODE,
+          watchlistAirtimeMode:
+            (existing.watchlistAirtimeMode as WatchlistAirtimeMode | undefined) ??
+            DEFAULT_WATCHLIST_AIRTIME_MODE,
         }
       : {
           relationMode: DEFAULT_ANIME_HOME_RELATION_MODE,
           completionBehavior: DEFAULT_ANIME_COMPLETION_BEHAVIOR,
           pausedSectionMode: DEFAULT_HOME_PAUSED_SECTION_MODE,
+          watchlistAirtimeMode: DEFAULT_WATCHLIST_AIRTIME_MODE,
         };
+    if (
+      existing &&
+      typeof args.lastKnownUpdatedAt === "number" &&
+      existing.updatedAt > args.lastKnownUpdatedAt
+    ) {
+      throw new Error("Settings were changed by a newer request.");
+    }
 
     const next = {
       relationMode: args.relationMode ?? current.relationMode,
       completionBehavior: args.completionBehavior ?? current.completionBehavior,
       pausedSectionMode: args.pausedSectionMode ?? current.pausedSectionMode,
+      watchlistAirtimeMode: args.watchlistAirtimeMode ?? current.watchlistAirtimeMode,
       updatedAt: Date.now(),
     };
 
@@ -3158,6 +3502,8 @@ export const setUserAnimeHomeSettings = mutation({
       relationMode: next.relationMode,
       completionBehavior: next.completionBehavior,
       pausedSectionMode: next.pausedSectionMode,
+      watchlistAirtimeMode: next.watchlistAirtimeMode,
+      updatedAt: next.updatedAt,
     };
   },
 });
@@ -3174,6 +3520,20 @@ export const getAnimeFranchiseHomeSettings = query({
       userId,
       args.relationRootAnilistId
     );
+    const rootShow = await ctx.db
+      .query("shows")
+      .withIndex("by_anilistId", (q) => q.eq("anilistId", args.relationRootAnilistId))
+      .unique();
+    const userShowsForRoot = await ctx.db
+      .query("userShows")
+      .withIndex("by_user_relation_root", (q) =>
+        q.eq("userId", userId).eq("relationRootAnilistId", args.relationRootAnilistId)
+      )
+      .collect();
+    const lastRelationSyncAt = Math.max(
+      rootShow?.lastRelationSyncAt ?? 0,
+      ...userShowsForRoot.map((entry) => entry.lastRelationSyncAt ?? 0)
+    );
 
     return {
       globalRelationMode: homeSettings.relationMode,
@@ -3181,6 +3541,7 @@ export const getAnimeFranchiseHomeSettings = query({
       effectiveRelationMode:
         franchiseRelationMode ?? homeSettings.relationMode,
       completionBehavior: homeSettings.completionBehavior,
+      lastRelationSyncAt: lastRelationSyncAt > 0 ? lastRelationSyncAt : null,
     };
   },
 });
@@ -3229,12 +3590,13 @@ export const setAnimeFranchiseRelationMode = mutation({
 export const syncAnimeRelationsForRoot = action({
   args: {
     relationRootAnilistId: v.number(),
+    force: v.optional(v.boolean()),
   },
   handler: async (
     ctx,
     args
   ): Promise<
-    AnimeRelationSyncResult & { relationMode: AnimeHomeRelationMode }
+    AnimeRelationSyncResult & { relationMode: AnimeHomeRelationMode; skipped?: boolean }
   > => {
     const userId = await getCurrentUserId(ctx);
     const effectiveRelationMode: AnimeHomeRelationMode = await ctx.runQuery(
@@ -3244,6 +3606,28 @@ export const syncAnimeRelationsForRoot = action({
         relationRootAnilistId: args.relationRootAnilistId,
       }
     );
+    const candidate: { rootAnilistId: number; lastSyncedAt: number } =
+      await ctx.runQuery(internal.shows.getAnimeRelationSyncCandidateForRoot, {
+        userId,
+        relationRootAnilistId: args.relationRootAnilistId,
+      });
+    const lastSyncedAt = candidate.lastSyncedAt;
+
+    if (
+      args.force !== true &&
+      lastSyncedAt > 0 &&
+      Date.now() - lastSyncedAt < FRANCHISE_AUTO_SYNC_FRESH_MS
+    ) {
+      return {
+        synced: false,
+        rootAnilistId: args.relationRootAnilistId,
+        discoveredShows: 0,
+        insertedUserShows: 0,
+        autoTrackedInserted: 0,
+        relationMode: effectiveRelationMode,
+        skipped: true,
+      };
+    }
 
     const result = await syncAnimeRelationRoot(
       ctx,
@@ -3570,8 +3954,33 @@ export const repairShowMetadataById = internalAction({
   },
 });
 
-export const auditTrackedShowHealth = action({
+export const markUserShowAutoPausedForRepair = internalMutation({
   args: {
+    userShowId: v.id("userShows"),
+    autoPausedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userShow = await ctx.db.get(args.userShowId);
+    if (!userShow) {
+      throw new Error("User show not found");
+    }
+
+    await ctx.db.patch(args.userShowId, {
+      status: "paused",
+      statusChangedAt: args.autoPausedAt,
+      completedAt: undefined,
+      droppedAt: undefined,
+      autoPausedAt: args.autoPausedAt,
+    });
+    await upsertFeedProjectionForUserShow(ctx, args.userShowId);
+
+    return { userShowId: args.userShowId, status: "paused", autoPausedAt: args.autoPausedAt };
+  },
+});
+
+export const auditTrackedShowHealthForUser = internalAction({
+  args: {
+    userId: v.id("users"),
     continueCursor: v.optional(v.string()),
     pageSize: v.optional(v.number()),
   },
@@ -3593,14 +4002,13 @@ export const auditTrackedShowHealth = action({
       notes: string[];
     }>;
   }> => {
-    const userId = await getCurrentUserId(ctx);
     const pageSize = Math.max(1, Math.min(args.pageSize ?? AUDIT_PAGE_SIZE_DEFAULT, AUDIT_PAGE_SIZE_MAX));
     const userShowsPage: {
       page: Array<Doc<"userShows">>;
       continueCursor: string;
       isDone: boolean;
     } = await ctx.runQuery(internal.shows.getUserShowsByUserIdForAudit, {
-      userId,
+      userId: args.userId,
       paginationOpts: {
         cursor: args.continueCursor ?? null,
         numItems: pageSize,
@@ -3608,14 +4016,15 @@ export const auditTrackedShowHealth = action({
     });
 
     const today = new Date();
-    const startDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const startDate = formatUtcDateKey(today);
     const endDateObj = new Date(today);
-    endDateObj.setDate(endDateObj.getDate() + 365);
-    const endDate = `${endDateObj.getFullYear()}-${String(endDateObj.getMonth() + 1).padStart(2, "0")}-${String(endDateObj.getDate()).padStart(2, "0")}`;
+    endDateObj.setUTCDate(endDateObj.getUTCDate() + 119);
+    const endDate = formatUtcDateKey(endDateObj);
 
     const futureCounts: Array<{ routeId: string; futureCount: number }> = await ctx.runQuery(
-      api.schedule.getFutureUpcomingCountsForWatchlist,
+      internal.schedule.getFutureUpcomingCountsForWatchlistForUser,
       {
+        userId: args.userId,
         startDate,
         endDate,
         mediaFilter: "tv",
@@ -4047,7 +4456,8 @@ export const repairMyShowsTrackingBatch = mutation({
     for (const userShow of page.page) {
       const refreshed = await refreshUserShowTrackingAggregatesForDoc(
         ctx,
-        userShow
+        userShow,
+        { deriveStatus: false }
       );
 
       if (!refreshed) {
@@ -7041,22 +7451,6 @@ export const normalizeWatchingStatusesFromProgressForUser = internalAction({
   },
   handler: async (ctx, args) => {
     return normalizeWatchingStatusesForUser(ctx, args.userId);
-  },
-});
-
-export const normalizeWatchingStatusesFromProgress = action({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getCurrentUserId(ctx);
-    return normalizeWatchingStatusesForUser(ctx, userId);
-  },
-});
-
-export const rebuildUserShowTrackingAggregates = action({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getCurrentUserId(ctx);
-    return rebuildTrackingAggregatesForUser(ctx, userId);
   },
 });
 

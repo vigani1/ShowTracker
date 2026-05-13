@@ -7,7 +7,7 @@ import {
   query,
 } from "@/convex/_generated/server";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
-import type { ActionCtx } from "@/convex/_generated/server";
+import type { ActionCtx, QueryCtx } from "@/convex/_generated/server";
 import { v } from "convex/values";
 import { getAniListAiringSchedule } from "@/lib/api/anilist";
 import {
@@ -23,6 +23,7 @@ const SCHEDULE_CACHE_FRESH_MS = 1000 * 60 * 60 * 6;
 const MAX_ANILIST_SCHEDULE_PAGES = 8;
 const ANILIST_SCHEDULE_RATE_LIMIT_COOLDOWN_MS = 90_000;
 const ANILIST_SCHEDULE_RATE_LIMIT_KEY = "anilistSchedule";
+const MAX_SCHEDULE_RANGE_DAYS = 120;
 
 type DateCacheStatus = {
   tvCount: number;
@@ -42,6 +43,12 @@ type CompactScheduleEntry = {
   showId: string;
   normalizedTitle: string;
   episode: CompactScheduleEpisode;
+};
+
+type WatchlistFutureCountRow = {
+  routeId: string;
+  futureCount: number;
+  unavailableCount: number;
 };
 
 export const getRateLimitState = internalQuery({
@@ -138,6 +145,37 @@ function parseScheduleDateKey(dateString: string) {
   }
 
   return formatDate(parsed) === dateString ? parsed : null;
+}
+
+function parseRequiredScheduleDateKey(dateString: string, label: string) {
+  const parsed = parseScheduleDateKey(dateString);
+  if (!parsed) {
+    throw new Error(`Invalid ${label}: ${dateString}`);
+  }
+  return {
+    date: parsed,
+    key: formatDate(parsed),
+  };
+}
+
+function getScheduleRangeKeys(startDate: string, endDate: string) {
+  const start = parseRequiredScheduleDateKey(startDate, "schedule start date");
+  const end = parseRequiredScheduleDateKey(endDate, "schedule end date");
+  if (end.date.getTime() < start.date.getTime()) {
+    throw new Error("Schedule end date must be on or after start date");
+  }
+
+  const spanDays =
+    Math.floor((end.date.getTime() - start.date.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  if (spanDays > MAX_SCHEDULE_RANGE_DAYS) {
+    throw new Error(`Schedule range cannot exceed ${MAX_SCHEDULE_RANGE_DAYS} days`);
+  }
+
+  return {
+    startDate: start.key,
+    endDate: end.key,
+    spanDays,
+  };
 }
 
 function getEpisodeAirtimeTimestamp(airDate?: string | null) {
@@ -481,9 +519,10 @@ export const getScheduleCacheStatusForDate = query({
 
     const now = Date.now();
     const todayKey = formatDate(new Date());
+    const dateKey = parseRequiredScheduleDateKey(args.date, "schedule cache date").key;
     const rows = await ctx.db
       .query("scheduleCache")
-      .withIndex("by_date", (q) => q.eq("date", args.date))
+      .withIndex("by_date", (q) => q.eq("date", dateKey))
       .collect();
 
     let tvCount = 0;
@@ -511,7 +550,7 @@ export const getScheduleCacheStatusForDate = query({
       typeof animeLastUpdated === "number" &&
       now - animeLastUpdated < SCHEDULE_CACHE_FRESH_MS;
     const shouldForceRefreshPastAnimeZero =
-      animeCount === 0 && args.date === todayKey;
+      animeCount === 0 && dateKey === todayKey;
     const hasFreshAnime =
       ((args.date < todayKey && animeLastUpdated !== null) || hasFreshAnimeByTime) &&
       !shouldForceRefreshPastAnimeZero;
@@ -658,11 +697,14 @@ export const hydrateScheduleRange = action({
       throw new Error("Unauthorized");
     }
 
-    const startDate = new Date(args.startDate);
+    const startDate = parseRequiredScheduleDateKey(
+      args.startDate,
+      "schedule hydration start date"
+    ).date;
     const safeDays = Math.max(1, Math.min(args.days, 42));
     const dateKeys = Array.from({ length: safeDays }, (_, index) => {
       const date = new Date(startDate);
-      date.setDate(startDate.getDate() + index);
+      date.setUTCDate(startDate.getUTCDate() + index);
       return formatDate(date);
     });
 
@@ -712,6 +754,7 @@ export const getUpcomingSchedule = query({
     }
 
     const typedUserId = userId as Id<"users">;
+    const range = getScheduleRangeKeys(args.startDate, args.endDate);
     
     const today = startOfDay(new Date());
 
@@ -769,7 +812,7 @@ export const getUpcomingSchedule = query({
       normalizedTitle: normalizeTitle(p.title),
       mediaType: p.mediaType as "tv" | "anime",
       posterUrl: p.posterUrl ?? undefined,
-      routeId: getRouteIdForProjection(p),
+      routeId: getWatchlistIdForProjection(p),
       anilistId: p.anilistId,
       tvmazeId: p.tvmazeId,
     }));
@@ -794,16 +837,16 @@ export const getUpcomingSchedule = query({
       ? await ctx.db
           .query("scheduleCache")
           .withIndex("by_type_date", (q) =>
-            q
-              .eq("mediaType", mediaFilter)
-              .gte("date", args.startDate)
-              .lte("date", args.endDate)
+              q
+                .eq("mediaType", mediaFilter)
+                .gte("date", range.startDate)
+                .lte("date", range.endDate)
           )
           .collect()
       : await ctx.db
           .query("scheduleCache")
           .withIndex("by_date", (q) =>
-            q.gte("date", args.startDate).lte("date", args.endDate)
+            q.gte("date", range.startDate).lte("date", range.endDate)
           )
           .collect();
 
@@ -896,20 +939,16 @@ export const getUpcomingSchedule = query({
   },
 });
 
-export const getFutureUpcomingCountsForWatchlist = query({
+async function getFutureUpcomingCountsForUser(
+  ctx: QueryCtx,
   args: {
-    startDate: v.string(),
-    endDate: v.string(),
-    mediaFilter: v.optional(v.union(v.literal("tv"), v.literal("anime"))),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-
-    if (!userId) {
-      return [] as { routeId: string; futureCount: number }[];
-    }
-
-    const typedUserId = userId as Id<"users">;
+    userId: Id<"users">;
+    startDate: string;
+    endDate: string;
+    mediaFilter?: "tv" | "anime";
+  }
+): Promise<WatchlistFutureCountRow[]> {
+    const range = getScheduleRangeKeys(args.startDate, args.endDate);
     const today = startOfDay(new Date());
     const mediaFilter = args.mediaFilter;
 
@@ -917,7 +956,7 @@ export const getFutureUpcomingCountsForWatchlist = query({
       ? await ctx.db
           .query("feedProjections")
           .withIndex("by_user_media", (q) =>
-            q.eq("userId", typedUserId).eq("mediaType", mediaFilter)
+            q.eq("userId", args.userId).eq("mediaType", mediaFilter)
           )
           .collect()
       : (
@@ -925,20 +964,20 @@ export const getFutureUpcomingCountsForWatchlist = query({
             ctx.db
               .query("feedProjections")
               .withIndex("by_user_media", (q) =>
-                q.eq("userId", typedUserId).eq("mediaType", "tv")
+                q.eq("userId", args.userId).eq("mediaType", "tv")
               )
               .collect(),
             ctx.db
               .query("feedProjections")
               .withIndex("by_user_media", (q) =>
-                q.eq("userId", typedUserId).eq("mediaType", "anime")
+                q.eq("userId", args.userId).eq("mediaType", "anime")
               )
               .collect(),
           ])
         ).flat();
 
     if (nonMovieProjections.length === 0) {
-      return [] as { routeId: string; futureCount: number }[];
+      return [] as WatchlistFutureCountRow[];
     }
 
     const trackedShows = nonMovieProjections.map((p) => ({
@@ -969,21 +1008,22 @@ export const getFutureUpcomingCountsForWatchlist = query({
       ? await ctx.db
           .query("scheduleCache")
           .withIndex("by_type_date", (q) =>
-            q
-              .eq("mediaType", mediaFilter)
-              .gte("date", args.startDate)
-              .lte("date", args.endDate)
+              q
+                .eq("mediaType", mediaFilter)
+                .gte("date", range.startDate)
+                .lte("date", range.endDate)
           )
           .collect()
       : await ctx.db
           .query("scheduleCache")
           .withIndex("by_date", (q) =>
-            q.gte("date", args.startDate).lte("date", args.endDate)
+            q.gte("date", range.startDate).lte("date", range.endDate)
           )
           .collect();
 
-    const counts = new Map<string, number>();
+    const counts = new Map<string, { futureCount: number; unavailableCount: number }>();
     const dedupe = new Set<string>();
+    const nowMs = Date.now();
 
     for (const row of rows) {
       const entries = parseCachedScheduleEntries(row.episodes);
@@ -1010,20 +1050,64 @@ export const getFutureUpcomingCountsForWatchlist = query({
           (startOfDay(bucketDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
 
-        if (daysUntil <= 0) {
-          continue;
-        }
-
         const uniqueKey = `${tracked.watchlistId}:${dayKey}:${entry.episode.seasonNumber}:${entry.episode.episodeNumber}`;
         if (dedupe.has(uniqueKey)) continue;
         dedupe.add(uniqueKey);
 
-        counts.set(tracked.watchlistId, (counts.get(tracked.watchlistId) ?? 0) + 1);
+        const airtimeMs = getEpisodeAirtimeTimestamp(entry.episode.airDate);
+        const isFutureDay = daysUntil > 0;
+        const isTodayBeforeAirtime = daysUntil === 0 && airtimeMs !== null && airtimeMs > nowMs;
+        if (!isFutureDay && !isTodayBeforeAirtime) {
+          continue;
+        }
+
+        const existing = counts.get(tracked.watchlistId) ?? {
+          futureCount: 0,
+          unavailableCount: 0,
+        };
+        if (isFutureDay) {
+          existing.futureCount += 1;
+        }
+        existing.unavailableCount += 1;
+        counts.set(tracked.watchlistId, existing);
       }
     }
 
     return Array.from(counts.entries())
       .sort(([routeIdA], [routeIdB]) => routeIdA.localeCompare(routeIdB))
-      .map(([routeId, futureCount]) => ({ routeId, futureCount }));
+      .map(([routeId, count]) => ({
+        routeId,
+        futureCount: count.futureCount,
+        unavailableCount: count.unavailableCount,
+      }));
+}
+
+export const getFutureUpcomingCountsForWatchlistForUser = internalQuery({
+  args: {
+    userId: v.id("users"),
+    startDate: v.string(),
+    endDate: v.string(),
+    mediaFilter: v.optional(v.union(v.literal("tv"), v.literal("anime"))),
+  },
+  handler: async (ctx, args) => getFutureUpcomingCountsForUser(ctx, args),
+});
+
+export const getFutureUpcomingCountsForWatchlist = query({
+  args: {
+    startDate: v.string(),
+    endDate: v.string(),
+    mediaFilter: v.optional(v.union(v.literal("tv"), v.literal("anime"))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+
+    if (!userId) {
+      return [] as WatchlistFutureCountRow[];
+    }
+
+    return getFutureUpcomingCountsForUser(ctx, {
+      userId: userId as Id<"users">,
+      ...args,
+    });
   },
 });
