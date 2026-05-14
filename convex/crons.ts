@@ -27,6 +27,15 @@ crons.cron(
   internal.shows.refreshCompletedShowsForNewEpisodes
 );
 
+// Run monthly after the previous calendar month has fully settled. This is a
+// schedule-cache-only safety net for users who did not open the app while old
+// tracked shows released new episodes.
+crons.cron(
+  "monthlyHomeWatchlistScheduleSignals",
+  "30 3 2 * *",
+  internal.schedule.runMonthlyHomeWatchlistScheduleSignalBackfill
+);
+
 // Manual repair only: dailyReconcileProjections is intentionally not scheduled.
 // It performs a full aggregate/projection rebuild and is too expensive for
 // routine production use. Run it manually after migrations or data repair.

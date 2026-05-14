@@ -17,7 +17,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { Link } from "expo-router";
-import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@/convex/_generated/api";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
@@ -85,17 +85,9 @@ type ProfileStats = {
   longestStreak?: number;
   completedShows?: number;
   totalTrackedShows?: number;
+  statsRebuiltAt?: number | null;
+  statsSource?: "cached" | "live";
 };
-
-type AnimeHomeFranchiseMode = "core_only" | "all_relations";
-type AnimeCompletionBehavior =
-  | "ask_every_time"
-  | "auto_open_next"
-  | "auto_pause_others_keep_next";
-type HomePausedSectionMode = "auto_paused_only" | "all_paused";
-
-const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
-const TRACKING_REPAIR_MAX_BATCHES = 200;
 
 function formatCount(value: number) {
   return value.toLocaleString("en-US");
@@ -297,94 +289,201 @@ function StatsPanelUnified({
   const total = stats.totalTrackedShows ?? 0;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  const metrics: { icon: keyof typeof Ionicons.glyphMap; value: string | number; label: string }[] = [
-    { icon: "tv-outline", value: stats.tvWatchTimeFormatted ?? "0min", label: "TV TIME" },
-    { icon: "albums-outline", value: formatCount(stats.tvEpisodes ?? 0), label: "TV EPS" },
-    { icon: "planet-outline", value: stats.animeWatchTimeFormatted ?? "0min", label: "ANIME TIME" },
-    { icon: "sparkles-outline", value: formatCount(stats.animeEpisodes ?? 0), label: "ANIME EPS" },
-    { icon: "film-outline", value: stats.movieWatchTimeFormatted ?? "0min", label: "MOVIE TIME" },
-    { icon: "play-circle-outline", value: String(stats.movieCount ?? 0), label: "MOVIES" },
-    { icon: "flame-outline", value: `${stats.currentStreak ?? 0}d`, label: "STREAK" },
-    { icon: "trophy-outline", value: `${stats.longestStreak ?? 0}d`, label: "BEST STREAK" },
+  const mediaMetrics: {
+    icon: keyof typeof Ionicons.glyphMap;
+    title: string;
+    value: string;
+    meta: string;
+    breakdown?: TimeBreakdown;
+  }[] = [
+    {
+      icon: "tv-outline",
+      title: "TV",
+      value: stats.tvWatchTimeFormatted ?? "0min",
+      meta: `${formatCount(stats.tvEpisodes ?? 0)} eps`,
+      breakdown: stats.tvWatchTimeBreakdown,
+    },
+    {
+      icon: "planet-outline",
+      title: "Anime",
+      value: stats.animeWatchTimeFormatted ?? "0min",
+      meta: `${formatCount(stats.animeEpisodes ?? 0)} eps`,
+      breakdown: stats.animeWatchTimeBreakdown,
+    },
+    {
+      icon: "film-outline",
+      title: "Movies",
+      value: stats.movieWatchTimeFormatted ?? "0min",
+      meta: `${formatCount(stats.movieCount ?? 0)} watched`,
+      breakdown: stats.movieWatchTimeBreakdown,
+    },
+  ];
+
+  const streakMetrics: {
+    icon: keyof typeof Ionicons.glyphMap;
+    label: string;
+    value: string;
+  }[] = [
+    { icon: "flame-outline", label: "Current streak", value: `${stats.currentStreak ?? 0}d` },
+    { icon: "trophy-outline", label: "Best streak", value: `${stats.longestStreak ?? 0}d` },
   ];
 
   return (
-    <View className="overflow-hidden rounded-2xl border border-border-default bg-bg-surface">
+    <View className="overflow-hidden rounded-3xl border border-border-default bg-[#121214]">
       <LinearGradient
-        colors={["rgba(239,68,68,0.06)", "transparent"]}
+        colors={["rgba(239,68,68,0.16)", "rgba(39,39,42,0.26)", "rgba(18,18,20,0)"]}
         start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
+        end={{ x: 1, y: 1 }}
         style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
       />
 
-      <View className="relative flex-row items-center justify-between gap-3 px-5 pb-4 pt-5">
-        <View className="min-w-0 flex-1">
-          <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
-            Total Watch Time
-          </Text>
+      <View
+        className={`${isMobile ? "gap-4" : "flex-row items-stretch gap-4"} relative p-4`}
+      >
+        <View className="min-w-0 flex-1 justify-between rounded-2xl border border-white/10 bg-black/20 p-4">
+          <View className="flex-row items-center gap-2">
+            <View className="h-8 w-8 items-center justify-center rounded-xl bg-primary/15">
+              <Ionicons name="time-outline" size={16} color="#ef4444" />
+            </View>
+            <Text className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+              Total watch time
+            </Text>
+          </View>
           <Text
-            className="mt-1 text-4xl font-black text-text-primary"
+            className={`${isMobile ? "text-4xl" : "text-5xl"} mt-5 font-black leading-tight text-text-primary`}
             numberOfLines={1}
             adjustsFontSizeToFit
-            minimumFontScale={0.72}
+            minimumFontScale={0.64}
           >
             {stats.totalWatchTimeFormatted ?? "0min"}
           </Text>
-        </View>
-        <View className="w-24 shrink-0 items-end">
-          <View className="flex-row items-center gap-1.5">
-            <Ionicons name="checkmark-circle" size={14} color="#ef4444" />
-              <Text className="text-sm font-bold text-text-primary" numberOfLines={1}>
-                {completed}/{total}
+          <View className="mt-5 flex-row flex-wrap gap-2">
+            <View className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+              <Text className="text-[11px] font-bold text-text-secondary">
+                {formatCount(stats.totalEpisodesWatched ?? 0)} episodes
               </Text>
+            </View>
+            <View className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+              <Text className="text-[11px] font-bold text-text-secondary">
+                {formatCount(stats.movieCount ?? 0)} movies
+              </Text>
+            </View>
+            {breakdownPills(stats.totalWatchTimeBreakdown).map((s) => (
+              <View key={s.key} className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1.5">
+                <Text className="text-[11px] font-black text-text-primary">
+                  {s.value}{s.label}
+                </Text>
+              </View>
+            ))}
           </View>
-          <View className="mt-1.5 h-1.5 w-24 overflow-hidden rounded-full bg-bg-elevated">
+        </View>
+
+        <View className={`${isMobile ? "" : "w-72"} justify-between rounded-2xl border border-white/10 bg-white/[0.04] p-4`}>
+          <View className="flex-row items-center justify-between">
+            <Text className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+              Completion
+            </Text>
+            <View className="flex-row items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1">
+              <Ionicons name="checkmark-circle" size={12} color="#ef4444" />
+              <Text className="text-xs font-black text-text-primary" numberOfLines={1}>
+                {pct}%
+              </Text>
+            </View>
+          </View>
+          <View className="mt-6 flex-row items-end gap-2">
+            <Text className="text-3xl font-black text-text-primary">{completed}</Text>
+            <Text className="pb-1 text-sm font-semibold text-text-muted">of {total} finished</Text>
+          </View>
+          <View className="mt-4 h-2.5 overflow-hidden rounded-full bg-black/40">
             <View
               className="h-full rounded-full bg-primary"
               style={{ width: `${pct}%` }}
             />
           </View>
-          <Text className="mt-1 text-[10px] text-text-muted">
-            {pct}% completed
+          <Text className="mt-2 text-[11px] font-semibold text-text-muted">
+            {Math.max(total - completed, 0)} still in progress or queued
           </Text>
         </View>
       </View>
 
-      <View className="mx-5 h-px bg-border-default" />
-
       <View
-        className="relative flex-row flex-wrap px-5 py-4"
-        style={{ gap: 12 }}
+        className="relative flex-row flex-wrap px-4 pb-4"
+        style={{ gap: isMobile ? 10 : 12 }}
       >
-        {metrics.map((m) => (
-          <View
-            key={m.label}
-            className="items-center py-2"
-            style={{
-              flexBasis: isDesktop ? "11.5%" : "48%",
-              flexGrow: isDesktop ? 1 : 0,
-              minHeight: isMobile ? 94 : undefined,
-            }}
-          >
-            <View className="mb-2 h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-              <Ionicons name={m.icon} size={16} color="#ef4444" />
+        {mediaMetrics.map((m) => {
+          const segments = breakdownPills(m.breakdown);
+
+          return (
+            <View
+              key={m.title}
+              className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]"
+              style={{
+                flexBasis: isDesktop ? 0 : "100%",
+                flexGrow: 1,
+              }}
+            >
+              <View className="h-1 bg-primary" />
+              <View className="p-4">
+                <View className="flex-row items-center justify-between">
+                  <View className="h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
+                    <Ionicons name={m.icon} size={17} color="#ef4444" />
+                  </View>
+                  <Text className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                    {m.title}
+                  </Text>
+                </View>
+                <Text
+                  className="mt-5 text-2xl font-black leading-tight text-text-primary"
+                  numberOfLines={1}
+                  minimumFontScale={0.74}
+                  adjustsFontSizeToFit
+                >
+                  {m.value}
+                </Text>
+                <Text className="mt-1 text-xs font-semibold text-text-muted" numberOfLines={1}>
+                  {m.meta}
+                </Text>
+                {segments.length > 0 ? (
+                  <View className="mt-3 flex-row flex-wrap gap-1.5">
+                    {segments.map((s) => (
+                      <View
+                        key={s.key}
+                        className="rounded-lg bg-black/30 px-2 py-1"
+                      >
+                        <Text className="text-[10px] font-bold text-text-secondary">
+                          {s.value}{s.label}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
             </View>
-            <Text
-              className={`${isMobile ? "text-base" : "text-lg"} font-black text-text-primary leading-tight text-center`}
-              numberOfLines={2}
-              minimumFontScale={0.85}
-              adjustsFontSizeToFit
+          );
+        })}
+
+        <View
+          className={`${isMobile ? "gap-2" : "flex-row gap-3"} w-full`}
+        >
+          {streakMetrics.map((m) => (
+            <View
+              key={m.label}
+              className="flex-1 flex-row items-center justify-between rounded-2xl border border-white/10 bg-black/20 px-4 py-3"
             >
-              {m.value}
-            </Text>
-            <Text
-              className="mt-0.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted text-center"
-              numberOfLines={2}
-            >
-              {m.label}
-            </Text>
-          </View>
-        ))}
+              <View className="flex-row items-center gap-3">
+                <View className="h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
+                  <Ionicons name={m.icon} size={17} color="#ef4444" />
+                </View>
+                <Text className="text-xs font-bold uppercase tracking-widest text-text-muted">
+                  {m.label}
+                </Text>
+              </View>
+              <Text className="text-2xl font-black text-text-primary">
+                {m.value}
+              </Text>
+            </View>
+          ))}
+        </View>
       </View>
     </View>
   );
@@ -409,132 +508,6 @@ function breakdownPills(breakdown?: TimeBreakdown) {
   }
 
   return [{ key: "minutes", value: breakdown.minutes, label: "MIN" }];
-}
-
-function StatsPanelCards({
-  stats,
-  isDesktop,
-}: {
-  stats: ProfileStats;
-  isDesktop: boolean;
-}) {
-  const completed = stats.completedShows ?? 0;
-  const total = stats.totalTrackedShows ?? 0;
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-  const quickMetrics = [
-    { icon: "flame-outline" as keyof typeof Ionicons.glyphMap, value: `${stats.currentStreak ?? 0}d`, label: "STREAK" },
-    { icon: "trophy-outline" as keyof typeof Ionicons.glyphMap, value: `${stats.longestStreak ?? 0}d`, label: "BEST" },
-    { icon: "checkmark-circle-outline" as keyof typeof Ionicons.glyphMap, value: `${completed}/${total}`, label: `${pct}%` },
-  ];
-
-  const mainCards: {
-    icon: keyof typeof Ionicons.glyphMap;
-    label: string;
-    value: string;
-    subtitle: string;
-    breakdown?: TimeBreakdown;
-  }[] = [
-    {
-      icon: "time-outline",
-      label: "TOTAL TIME",
-      value: stats.totalWatchTimeFormatted ?? "0min",
-      subtitle: `${formatCount(stats.totalEpisodesWatched ?? 0)} episodes`,
-      breakdown: stats.totalWatchTimeBreakdown,
-    },
-    {
-      icon: "tv-outline",
-      label: "TV TIME",
-      value: stats.tvWatchTimeFormatted ?? "0min",
-      subtitle: `${formatCount(stats.tvEpisodes ?? 0)} episodes`,
-      breakdown: stats.tvWatchTimeBreakdown,
-    },
-    {
-      icon: "planet-outline",
-      label: "ANIME TIME",
-      value: stats.animeWatchTimeFormatted ?? "0min",
-      subtitle: `${formatCount(stats.animeEpisodes ?? 0)} episodes`,
-      breakdown: stats.animeWatchTimeBreakdown,
-    },
-    {
-      icon: "film-outline",
-      label: "MOVIE TIME",
-      value: stats.movieWatchTimeFormatted ?? "0min",
-      subtitle: `${formatCount(stats.movieCount ?? 0)} movies`,
-      breakdown: stats.movieWatchTimeBreakdown,
-    },
-  ];
-
-  return (
-    <View>
-      <View className="flex-row gap-2">
-        {quickMetrics.map((m) => (
-          <View
-            key={m.label}
-            className="flex-1 flex-row items-center gap-2 overflow-hidden rounded-xl border border-border-default bg-bg-surface px-3 py-2.5"
-          >
-            <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-              <Ionicons name={m.icon} size={14} color="#ef4444" />
-            </View>
-            <View>
-              <Text className="text-base font-black text-text-primary" numberOfLines={1}>
-                {m.value}
-              </Text>
-              <Text className="text-[9px] font-semibold uppercase tracking-widest text-text-muted" numberOfLines={1}>
-                {m.label}
-              </Text>
-            </View>
-          </View>
-        ))}
-      </View>
-
-      <View className="mt-3 flex-row flex-wrap gap-3">
-        {mainCards.map((card) => {
-          const segments = breakdownPills(card.breakdown);
-
-          return (
-            <View
-              key={card.label}
-              className="flex-row overflow-hidden rounded-xl border border-border-default bg-bg-surface"
-              style={{ flexBasis: isDesktop ? "23.5%" : "48%", flexGrow: 1, minWidth: 160 }}
-            >
-              <View className="w-1 bg-primary" />
-              <View className="flex-1 px-3 py-3">
-                <View className="mb-2 flex-row items-center gap-2">
-                  <View className="h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-                    <Ionicons name={card.icon} size={14} color="#ef4444" />
-                  </View>
-                  <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted" numberOfLines={1}>
-                    {card.label}
-                  </Text>
-                </View>
-                <Text className="text-2xl font-black text-text-primary" numberOfLines={1}>
-                  {card.value}
-                </Text>
-                <Text className="mt-0.5 text-[11px] text-text-secondary" numberOfLines={1}>
-                  {card.subtitle}
-                </Text>
-                {segments.length > 0 ? (
-                  <View className="mt-2 flex-row flex-wrap gap-1.5">
-                    {segments.map((s) => (
-                      <View
-                        key={s.key}
-                        className="rounded-md bg-bg-elevated/70 px-2 py-0.5"
-                      >
-                        <Text className="text-[10px] font-semibold text-text-secondary">
-                          {s.value}{s.label}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-              </View>
-            </View>
-          );
-        })}
-      </View>
-    </View>
-  );
 }
 
 function PosterRail({
@@ -642,26 +615,11 @@ export default function ProfileScreen() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
-  const [isAnimeSettingsVisible, setIsAnimeSettingsVisible] = useState(false);
-  const [isSavingAnimeSettings, setIsSavingAnimeSettings] = useState(false);
-  const [animeSettingsError, setAnimeSettingsError] = useState<string | null>(null);
-  const [isRepairingTracking, setIsRepairingTracking] = useState(false);
-  const [trackingRepairError, setTrackingRepairError] = useState<string | null>(null);
-  const [trackingRepairNotice, setTrackingRepairNotice] = useState<string | null>(null);
-  const [trackingRepairProgress, setTrackingRepairProgress] = useState({
-    scanned: 0,
-    patched: 0,
-    batches: 0,
-  });
-  const [trackingRepairCursor, setTrackingRepairCursor] = useState<string | null>(null);
-  const [statsVersion, setStatsVersion] = useState<"A" | "B">("A");
   const [shouldLoadHeavySections, setShouldLoadHeavySections] = useState(false);
   const [visibleRailCount, setVisibleRailCount] = useState(8);
   const [isLoadingMoreRails, setIsLoadingMoreRails] = useState(false);
   const canLoadMoreFromEdgeRef = useRef(true);
   const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const animeSettingsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isSavingAnimeSettingsRef = useRef(false);
   const deferredLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const profileSummary = useQuery(api.stats.getUserProfileSummary);
@@ -672,26 +630,9 @@ export default function ProfileScreen() {
   );
   const lists = useQuery(api.lists.getUserLists, shouldLoadHeavySections ? {} : "skip");
   const library = useQuery(api.shows.getLibrary, shouldLoadHeavySections ? {} : "skip");
-  const animeHomeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
   const upsertUserProfile = useMutation(api.stats.upsertUserProfile);
-  const setUserAnimeHomeSettings = useMutation(api.shows.setUserAnimeHomeSettings);
-  const repairMyShowsTrackingBatch = useMutation(api.shows.repairMyShowsTrackingBatch);
-  const syncTrackedAnimeRelations = useAction(api.shows.syncTrackedAnimeRelations);
-  const pruneAnimeFranchiseToCoreRelations = useAction(
-    api.shows.pruneAnimeFranchiseToCoreRelations
-  );
 
-  const animeHomeFranchiseMode =
-    (animeHomeSettings?.relationMode as AnimeHomeFranchiseMode | undefined) ??
-    "core_only";
-  const animeCompletionBehavior =
-    (animeHomeSettings?.completionBehavior as AnimeCompletionBehavior | undefined) ??
-    "ask_every_time";
-  const homePausedSectionMode =
-    (animeHomeSettings?.pausedSectionMode as HomePausedSectionMode | undefined) ??
-    "auto_paused_only";
-
-  const isInitialLoading = profileSummary === undefined || animeHomeSettings === undefined;
+  const isInitialLoading = profileSummary === undefined;
   const isHeavySectionsLoading =
     shouldLoadHeavySections &&
     (stats === undefined || favorites === undefined || lists === undefined || library === undefined);
@@ -709,21 +650,6 @@ export default function ProfileScreen() {
     () =>
       selectPrimaryAnimeEntries(
         libraryEntries.filter((entry) => entry.mediaType === "anime")
-      ),
-    [libraryEntries]
-  );
-  const trackedAnimeFranchiseRoots = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          libraryEntries
-            .filter(
-              (entry) =>
-                entry.mediaType === "anime" &&
-                typeof entry.relationRootAnilistId === "number"
-            )
-            .map((entry) => entry.relationRootAnilistId as number)
-        )
       ),
     [libraryEntries]
   );
@@ -954,9 +880,6 @@ export default function ProfileScreen() {
       if (loadMoreTimerRef.current) {
         clearTimeout(loadMoreTimerRef.current);
       }
-      if (animeSettingsTimeoutRef.current) {
-        clearTimeout(animeSettingsTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -1007,201 +930,6 @@ export default function ProfileScreen() {
     },
     [isHeavySectionsLoading, isInitialLoading, isLoadingMoreRails, loadMoreRails]
   );
-
-  const openAnimeSettings = () => {
-    setAnimeSettingsError(null);
-    setIsAnimeSettingsVisible(true);
-  };
-
-  const closeAnimeSettings = () => {
-    if (isSavingAnimeSettings) {
-      return;
-    }
-    setIsAnimeSettingsVisible(false);
-    setAnimeSettingsError(null);
-  };
-
-  const updateAnimeSettings = useCallback(
-    async (args: {
-      relationMode?: AnimeHomeFranchiseMode;
-      completionBehavior?: AnimeCompletionBehavior;
-      pausedSectionMode?: HomePausedSectionMode;
-    }) => {
-      if (isSavingAnimeSettingsRef.current) {
-        return false;
-      }
-      isSavingAnimeSettingsRef.current = true;
-
-      setAnimeSettingsError(null);
-      setIsSavingAnimeSettings(true);
-
-      try {
-        if (animeSettingsTimeoutRef.current) {
-          clearTimeout(animeSettingsTimeoutRef.current);
-          animeSettingsTimeoutRef.current = null;
-        }
-
-        await Promise.race([
-          setUserAnimeHomeSettings(args),
-          new Promise<never>((_, reject) => {
-            animeSettingsTimeoutRef.current = setTimeout(() => {
-              reject(new Error("timeout"));
-            }, ANIME_SETTINGS_UPDATE_TIMEOUT_MS);
-          }),
-        ]);
-        return true;
-      } catch (error) {
-        console.error("Failed to update anime settings", error);
-        const message = error instanceof Error ? error.message : String(error ?? "");
-        setAnimeSettingsError(
-          message.includes("timeout")
-            ? "Update timed out. Please try again."
-            : "Could not save anime settings."
-        );
-        return false;
-      } finally {
-        if (animeSettingsTimeoutRef.current) {
-          clearTimeout(animeSettingsTimeoutRef.current);
-          animeSettingsTimeoutRef.current = null;
-        }
-        isSavingAnimeSettingsRef.current = false;
-        setIsSavingAnimeSettings(false);
-      }
-    },
-    [setUserAnimeHomeSettings]
-  );
-
-  const handleSetHomeFranchiseMode = useCallback(
-    async (relationMode: AnimeHomeFranchiseMode) => {
-      const didUpdate = await updateAnimeSettings({ relationMode });
-      if (!didUpdate) {
-        return;
-      }
-
-      if (relationMode === "all_relations") {
-        void syncTrackedAnimeRelations({ force: true }).catch((error) => {
-          console.warn("Failed to sync tracked anime franchises", error);
-        });
-        return;
-      }
-
-      if (trackedAnimeFranchiseRoots.length === 0) {
-        return;
-      }
-
-      const pruneResults = await Promise.allSettled(
-        trackedAnimeFranchiseRoots.map((relationRootAnilistId) =>
-          pruneAnimeFranchiseToCoreRelations({ relationRootAnilistId })
-        )
-      );
-
-      const rejectedCount = pruneResults.filter(
-        (result) => result.status === "rejected"
-      ).length;
-      if (rejectedCount === 0) {
-        return;
-      }
-
-      console.warn(
-        `Failed to prune ${rejectedCount}/${pruneResults.length} anime franchise entries`
-      );
-      if (rejectedCount === pruneResults.length) {
-        setAnimeSettingsError(
-          "Saved settings, but pruning franchise entries failed. Please try again."
-        );
-      }
-    },
-    [
-      pruneAnimeFranchiseToCoreRelations,
-      setAnimeSettingsError,
-      syncTrackedAnimeRelations,
-      trackedAnimeFranchiseRoots,
-      updateAnimeSettings,
-    ]
-  );
-
-  const handleSetCompletionBehavior = useCallback(
-    async (completionBehavior: AnimeCompletionBehavior) => {
-      await updateAnimeSettings({ completionBehavior });
-    },
-    [updateAnimeSettings]
-  );
-
-  const handleSetPausedSectionMode = useCallback(
-    async (pausedSectionMode: HomePausedSectionMode) => {
-      await updateAnimeSettings({ pausedSectionMode });
-    },
-    [updateAnimeSettings]
-  );
-
-  const handleRepairTracking = useCallback(async () => {
-    if (!isAuthenticated || isRepairingTracking) {
-      return;
-    }
-
-    setIsRepairingTracking(true);
-    setTrackingRepairError(null);
-    setTrackingRepairNotice(null);
-    setTrackingRepairProgress({ scanned: 0, patched: 0, batches: 0 });
-
-    try {
-      let cursor: string | null = trackingRepairCursor;
-      let scanned = 0;
-      let patched = 0;
-      let batches = 0;
-      let isDone = false;
-      let hitBatchLimit = false;
-
-      while (!isDone) {
-        const requestCursor = cursor;
-        const batch: {
-          scanned: number;
-          patched: number;
-          continueCursor: string | null;
-          isDone: boolean;
-        } = await repairMyShowsTrackingBatch(
-          cursor ? { continueCursor: cursor } : {}
-        );
-
-        if (!batch.isDone && batch.continueCursor === requestCursor) {
-          throw new Error("Repair cursor did not advance.");
-        }
-
-        scanned += batch.scanned;
-        patched += batch.patched;
-        batches += 1;
-        cursor = batch.continueCursor;
-        isDone = batch.isDone;
-        setTrackingRepairCursor(isDone ? null : cursor);
-
-        setTrackingRepairProgress({ scanned, patched, batches });
-
-        if (!isDone && batches >= TRACKING_REPAIR_MAX_BATCHES) {
-          hitBatchLimit = true;
-          setTrackingRepairError(
-            `Stopped after ${batches} batches (${scanned} scanned, ${patched} patched) before completion${cursor ? ". Tap again to continue." : " at the start of pagination."}`
-          );
-          break;
-        }
-      }
-
-      if (hitBatchLimit) {
-        return;
-      }
-
-      setTrackingRepairCursor(null);
-      setTrackingRepairNotice(
-        scanned === 0
-          ? "No tracked shows to refresh."
-          : `Tracking refreshed for ${patched}/${scanned} tracked ${scanned === 1 ? "show" : "shows"}.`
-      );
-    } catch (error) {
-      console.error("Failed to refresh tracking library", error);
-      setTrackingRepairError("Could not refresh your tracked shows. Please try again.");
-    } finally {
-      setIsRepairingTracking(false);
-    }
-  }, [isAuthenticated, isRepairingTracking, repairMyShowsTrackingBatch, trackingRepairCursor]);
 
   const openProfileEditor = () => {
     setDraftUsername(profileIdentity?.username ?? "");
@@ -1323,15 +1051,14 @@ export default function ProfileScreen() {
               >
                 <Text className="text-xs font-bold tracking-wide text-white">EDIT</Text>
               </Pressable>
-              <Pressable
-                onPress={openAnimeSettings}
-                className="rounded-full border border-white/40 bg-black/70 px-4 py-2 shadow-lg"
-              >
-                <View className="flex-row items-center gap-1.5">
-                  <Ionicons name="settings-outline" size={14} color="#e4e4e7" />
-                  <Text className="text-xs font-bold tracking-wide text-white">SETTINGS</Text>
-                </View>
-              </Pressable>
+              <Link href="/profile/settings" asChild>
+                <Pressable className="rounded-full border border-white/40 bg-black/70 px-4 py-2 shadow-lg">
+                  <View className="flex-row items-center gap-1.5">
+                    <Ionicons name="settings-outline" size={14} color="#e4e4e7" />
+                    <Text className="text-xs font-bold tracking-wide text-white">SETTINGS</Text>
+                  </View>
+                </Pressable>
+              </Link>
               {isDesktop && (
                 <Pressable
                   onPress={() => setShowSignOutConfirm(true)}
@@ -1411,21 +1138,14 @@ export default function ProfileScreen() {
                 Stats
               </Text>
             </View>
-            <Pressable
-              onPress={() => setStatsVersion((v) => (v === "A" ? "B" : "A"))}
-              className="rounded-full border border-border-default bg-bg-surface px-3 py-1"
-            >
-              <Text className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
-                {statsVersion === "A" ? "Cards" : "Panel"}
-              </Text>
-            </Pressable>
           </View>
+          {stats?.statsSource === "live" ? (
+            <Text className="mb-3 text-xs text-text-muted">
+              Stats are live-calculated. Use Settings to cache them for faster, cheaper loads.
+            </Text>
+          ) : null}
           {stats ? (
-            statsVersion === "A" ? (
-              <StatsPanelUnified stats={stats} isDesktop={isDesktop} />
-            ) : (
-              <StatsPanelCards stats={stats} isDesktop={isDesktop} />
-            )
+            <StatsPanelUnified stats={stats} isDesktop={isDesktop} />
           ) : (
             <View className="items-center justify-center rounded-2xl border border-border-default bg-bg-surface py-8">
               <ActivityIndicator size="small" color="#ef4444" />
@@ -1589,85 +1309,6 @@ export default function ProfileScreen() {
             emptyMessage="Add movies to your library to see them here"
             isDesktop={isDesktop}
           />
-        </View>
-
-        <View className="mt-8">
-          <SectionHeader title="Data" icon="download-outline" />
-          <View className="mb-3 overflow-hidden rounded-xl border border-border-default bg-bg-surface">
-            <LinearGradient
-              colors={["rgba(56,189,248,0.12)", "rgba(239,68,68,0.03)"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={{ paddingHorizontal: 14, paddingVertical: 12 }}
-            >
-              <View className="flex-row items-center gap-3">
-                <View className="h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10">
-                  <Ionicons name="refresh-outline" size={16} color="#38bdf8" />
-                </View>
-                <View className="min-w-0 flex-1">
-                  <Text className="text-sm font-bold text-text-primary">
-                    Refresh my shows
-                  </Text>
-                  <Text className="mt-0.5 text-[11px] text-text-muted">
-                    Fix stale watched counts, statuses, and Home projections.
-                  </Text>
-                  {isRepairingTracking ? (
-                    <Text className="mt-1 text-[11px] text-text-secondary">
-                      Scanned {trackingRepairProgress.scanned} across {trackingRepairProgress.batches} batch{trackingRepairProgress.batches === 1 ? "" : "es"}...
-                    </Text>
-                  ) : null}
-                  {trackingRepairNotice ? (
-                    <Text className="mt-1 text-[11px] text-success">
-                      {trackingRepairNotice}
-                    </Text>
-                  ) : null}
-                  {trackingRepairError ? (
-                    <Text className="mt-1 text-[11px] text-primary">
-                      {trackingRepairError}
-                    </Text>
-                  ) : null}
-                </View>
-                <Pressable
-                  disabled={!isAuthenticated || isRepairingTracking}
-                  onPress={() => {
-                    void handleRepairTracking();
-                  }}
-                  className="min-w-24 items-center justify-center rounded-lg border border-sky-400/40 bg-sky-500/10 px-3 py-2"
-                  style={{ opacity: !isAuthenticated || isRepairingTracking ? 0.55 : 1 }}
-                >
-                  {isRepairingTracking ? (
-                    <ActivityIndicator size="small" color="#38bdf8" />
-                  ) : (
-                    <Text className="text-xs font-bold uppercase tracking-wide text-sky-300">
-                      Refresh
-                    </Text>
-                  )}
-                </Pressable>
-              </View>
-            </LinearGradient>
-          </View>
-          <Link href="/import" asChild>
-            <Pressable className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
-              <LinearGradient
-                colors={["rgba(239,68,68,0.12)", "rgba(239,68,68,0.03)"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={{ paddingHorizontal: 14, paddingVertical: 12 }}
-              >
-                <View className="flex-row items-center gap-3">
-                  <View className="h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-                    <Ionicons name="cloud-upload-outline" size={16} color="#ef4444" />
-                  </View>
-                  <View>
-                    <Text className="text-sm font-bold text-text-primary">Import from TV Time</Text>
-                    <Text className="text-[11px] text-text-muted">
-                      Paste or upload your export JSON
-                    </Text>
-                  </View>
-                </View>
-              </LinearGradient>
-            </Pressable>
-          </Link>
         </View>
 
         {isLoadingMoreRails ? (
@@ -1836,373 +1477,6 @@ export default function ProfileScreen() {
               </ScrollView>
             </View>
           </KeyboardAvoidingView>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={isAnimeSettingsVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={closeAnimeSettings}
-      >
-        <View className="flex-1 items-center justify-center bg-black/70 px-5 py-8">
-          <Pressable
-            className="absolute inset-0"
-            onPress={closeAnimeSettings}
-            disabled={isSavingAnimeSettings}
-          />
-
-          <View className={`w-full overflow-hidden rounded-xl border-2 border-border-bright bg-bg-surface ${isDesktop ? "max-w-md" : ""}`}>
-            <LinearGradient
-              colors={["rgba(239,68,68,0.2)", "rgba(56,189,248,0.06)", "transparent"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={{ height: 4, width: "100%" }}
-            />
-
-            <View className="border-b border-border-default px-4 pb-3 pt-4">
-              <Text className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                Anime Settings
-              </Text>
-              <Text className="mt-1 text-lg font-black text-text-primary">
-                Home and Completion
-              </Text>
-              <Text className="mt-2 text-sm text-text-secondary">
-                These defaults apply to all anime unless you set a franchise override on a show page.
-              </Text>
-            </View>
-
-            <ScrollView
-              className="max-h-[70vh]"
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              <View className="gap-3 px-4 pb-4 pt-3">
-                <View>
-                  <Text className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                    Home Franchise View
-                  </Text>
-
-                  <View className="gap-2">
-                    <Pressable
-                      disabled={isSavingAnimeSettings}
-                      onPress={() => {
-                        void handleSetHomeFranchiseMode("core_only");
-                      }}
-                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
-                        animeHomeFranchiseMode === "core_only"
-                          ? "border-primary/60 bg-primary/15"
-                          : "border-border-default bg-bg-base"
-                      }`}
-                      style={({ pressed }) => ({
-                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
-                      })}
-                    >
-                      <View className="flex-1">
-                        <Text
-                          className={`text-sm font-semibold ${
-                            animeHomeFranchiseMode === "core_only"
-                              ? "text-primary"
-                              : "text-text-primary"
-                          }`}
-                        >
-                          Core Franchise Titles
-                        </Text>
-                        <Text className="mt-0.5 text-xs text-text-secondary">
-                          Keep Home focused on the main franchise timeline.
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name={
-                          animeHomeFranchiseMode === "core_only"
-                            ? "radio-button-on"
-                            : "radio-button-off"
-                        }
-                        size={18}
-                        color={animeHomeFranchiseMode === "core_only" ? "#ef4444" : "#71717a"}
-                      />
-                    </Pressable>
-
-                    <Pressable
-                      disabled={isSavingAnimeSettings}
-                      onPress={() => {
-                        void handleSetHomeFranchiseMode("all_relations");
-                      }}
-                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
-                        animeHomeFranchiseMode === "all_relations"
-                          ? "border-primary/60 bg-primary/15"
-                          : "border-border-default bg-bg-base"
-                      }`}
-                      style={({ pressed }) => ({
-                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
-                      })}
-                    >
-                      <View className="flex-1">
-                        <Text
-                          className={`text-sm font-semibold ${
-                            animeHomeFranchiseMode === "all_relations"
-                              ? "text-primary"
-                              : "text-text-primary"
-                          }`}
-                        >
-                          All Franchise Titles
-                        </Text>
-                        <Text className="mt-0.5 text-xs text-text-secondary">
-                          Include side stories and related titles on Home.
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name={
-                          animeHomeFranchiseMode === "all_relations"
-                            ? "radio-button-on"
-                            : "radio-button-off"
-                        }
-                        size={18}
-                        color={animeHomeFranchiseMode === "all_relations" ? "#ef4444" : "#71717a"}
-                      />
-                    </Pressable>
-                  </View>
-                </View>
-
-                <View>
-                  <Text className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                    On Completion
-                  </Text>
-
-                  <View className="gap-2">
-                    <Pressable
-                      disabled={isSavingAnimeSettings}
-                      onPress={() => {
-                        void handleSetCompletionBehavior("ask_every_time");
-                      }}
-                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
-                        animeCompletionBehavior === "ask_every_time"
-                          ? "border-primary/60 bg-primary/15"
-                          : "border-border-default bg-bg-base"
-                      }`}
-                      style={({ pressed }) => ({
-                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
-                      })}
-                    >
-                      <View className="flex-1">
-                        <Text
-                          className={`text-sm font-semibold ${
-                            animeCompletionBehavior === "ask_every_time"
-                              ? "text-primary"
-                              : "text-text-primary"
-                          }`}
-                        >
-                          Ask Every Time
-                        </Text>
-                        <Text className="mt-0.5 text-xs text-text-secondary">
-                          Prompt before moving to the next season.
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name={
-                          animeCompletionBehavior === "ask_every_time"
-                            ? "radio-button-on"
-                            : "radio-button-off"
-                        }
-                        size={18}
-                        color={animeCompletionBehavior === "ask_every_time" ? "#ef4444" : "#71717a"}
-                      />
-                    </Pressable>
-
-                    <Pressable
-                      disabled={isSavingAnimeSettings}
-                      onPress={() => {
-                        void handleSetCompletionBehavior("auto_open_next");
-                      }}
-                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
-                        animeCompletionBehavior === "auto_open_next"
-                          ? "border-primary/60 bg-primary/15"
-                          : "border-border-default bg-bg-base"
-                      }`}
-                      style={({ pressed }) => ({
-                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
-                      })}
-                    >
-                      <View className="flex-1">
-                        <Text
-                          className={`text-sm font-semibold ${
-                            animeCompletionBehavior === "auto_open_next"
-                              ? "text-primary"
-                              : "text-text-primary"
-                          }`}
-                        >
-                          Open Next Season
-                        </Text>
-                        <Text className="mt-0.5 text-xs text-text-secondary">
-                          Jump directly to the next main franchise season.
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name={
-                          animeCompletionBehavior === "auto_open_next"
-                            ? "radio-button-on"
-                            : "radio-button-off"
-                        }
-                        size={18}
-                        color={animeCompletionBehavior === "auto_open_next" ? "#ef4444" : "#71717a"}
-                      />
-                    </Pressable>
-
-                    <Pressable
-                      disabled={isSavingAnimeSettings}
-                      onPress={() => {
-                        void handleSetCompletionBehavior("auto_pause_others_keep_next");
-                      }}
-                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
-                        animeCompletionBehavior === "auto_pause_others_keep_next"
-                          ? "border-primary/60 bg-primary/15"
-                          : "border-border-default bg-bg-base"
-                      }`}
-                      style={({ pressed }) => ({
-                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
-                      })}
-                    >
-                      <View className="flex-1">
-                        <Text
-                          className={`text-sm font-semibold ${
-                            animeCompletionBehavior === "auto_pause_others_keep_next"
-                              ? "text-primary"
-                              : "text-text-primary"
-                          }`}
-                        >
-                          Pause Other Franchise Titles
-                        </Text>
-                        <Text className="mt-0.5 text-xs text-text-secondary">
-                          Keep the next season active and pause the rest.
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name={
-                          animeCompletionBehavior === "auto_pause_others_keep_next"
-                            ? "radio-button-on"
-                            : "radio-button-off"
-                        }
-                        size={18}
-                        color={animeCompletionBehavior === "auto_pause_others_keep_next" ? "#ef4444" : "#71717a"}
-                      />
-                    </Pressable>
-                  </View>
-                </View>
-
-                <View>
-                  <Text className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-                    Home Paused Shelf
-                  </Text>
-
-                  <View className="gap-2">
-                    <Pressable
-                      disabled={isSavingAnimeSettings}
-                      onPress={() => {
-                        void handleSetPausedSectionMode("auto_paused_only");
-                      }}
-                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
-                        homePausedSectionMode === "auto_paused_only"
-                          ? "border-primary/60 bg-primary/15"
-                          : "border-border-default bg-bg-base"
-                      }`}
-                      style={({ pressed }) => ({
-                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
-                      })}
-                    >
-                      <View className="flex-1">
-                        <Text
-                          className={`text-sm font-semibold ${
-                            homePausedSectionMode === "auto_paused_only"
-                              ? "text-primary"
-                              : "text-text-primary"
-                          }`}
-                        >
-                          Auto-paused Only
-                        </Text>
-                        <Text className="mt-0.5 text-xs text-text-secondary">
-                          Show just the titles snoozed by inactivity.
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name={
-                          homePausedSectionMode === "auto_paused_only"
-                            ? "radio-button-on"
-                            : "radio-button-off"
-                        }
-                        size={18}
-                        color={homePausedSectionMode === "auto_paused_only" ? "#ef4444" : "#71717a"}
-                      />
-                    </Pressable>
-
-                    <Pressable
-                      disabled={isSavingAnimeSettings}
-                      onPress={() => {
-                        void handleSetPausedSectionMode("all_paused");
-                      }}
-                      className={`flex-row items-center gap-3 rounded-xl border px-3 py-3 ${
-                        homePausedSectionMode === "all_paused"
-                          ? "border-primary/60 bg-primary/15"
-                          : "border-border-default bg-bg-base"
-                      }`}
-                      style={({ pressed }) => ({
-                        opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.9 : 1,
-                      })}
-                    >
-                      <View className="flex-1">
-                        <Text
-                          className={`text-sm font-semibold ${
-                            homePausedSectionMode === "all_paused"
-                              ? "text-primary"
-                              : "text-text-primary"
-                          }`}
-                        >
-                          All Paused Shows
-                        </Text>
-                        <Text className="mt-0.5 text-xs text-text-secondary">
-                          Include both manually paused and auto-paused titles.
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name={
-                          homePausedSectionMode === "all_paused"
-                            ? "radio-button-on"
-                            : "radio-button-off"
-                        }
-                        size={18}
-                        color={homePausedSectionMode === "all_paused" ? "#ef4444" : "#71717a"}
-                      />
-                    </Pressable>
-                  </View>
-                </View>
-
-                <Text className="text-xs text-text-muted">
-                  Tip: anime franchise overrides are available from each anime show page.
-                </Text>
-
-                {animeSettingsError ? (
-                  <Text className="text-sm text-primary">{animeSettingsError}</Text>
-                ) : null}
-
-                {isSavingAnimeSettings ? (
-                  <View className="flex-row items-center justify-center gap-2 py-1">
-                    <ActivityIndicator size="small" color="#a1a1aa" />
-                    <Text className="text-xs text-text-secondary">Saving settings...</Text>
-                  </View>
-                ) : null}
-
-                <Pressable
-                  disabled={isSavingAnimeSettings}
-                  onPress={closeAnimeSettings}
-                  className="items-center justify-center rounded-xl border border-border-default bg-bg-elevated py-3"
-                  style={({ pressed }) => ({
-                    opacity: isSavingAnimeSettings ? 0.45 : pressed ? 0.88 : 1,
-                  })}
-                >
-                  <Text className="text-sm font-semibold text-text-primary">Done</Text>
-                </Pressable>
-              </View>
-            </ScrollView>
-          </View>
         </View>
       </Modal>
 

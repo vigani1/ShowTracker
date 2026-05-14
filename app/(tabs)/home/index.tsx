@@ -29,6 +29,7 @@ import { toHttpsImageUrl } from "@/lib/image-url";
 type HomeTab = "watchlist" | "upcoming";
 type HomeMediaFilter = "all" | "tv" | "anime";
 type HomePausedSectionMode = "auto_paused_only" | "all_paused";
+type WatchlistAirtimeMode = "same_day" | "after_airtime";
 
 type WatchlistItem = {
   id: string;
@@ -46,6 +47,7 @@ type WatchlistItem = {
   totalEpisodes: number | null;
   autoPausedAt?: number | null;
   lastWatchedAt?: number | null;
+  newEpisodeSignalAt?: number | null;
 };
 
 type UpcomingEpisode = {
@@ -71,7 +73,7 @@ const DAY_IN_MS = 1000 * 60 * 60 * 24;
 const GRID_GAP = 12;
 const INITIAL_UPCOMING_HYDRATION_TIMEOUT_MS = 8000;
 const TMDB_AIRED_LOOKUP_BATCH_SIZE = 8;
-const WATCHLIST_FUTURE_LOOKAHEAD_DAYS = 365;
+const WATCHLIST_FUTURE_LOOKAHEAD_DAYS = 90;
 const homeModeOptions = [
   { value: "watchlist" as const, label: "Watchlist" },
   { value: "upcoming" as const, label: "Schedule" },
@@ -1437,7 +1439,28 @@ export function HomeScreen() {
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
 
-  const todayDate = useMemo(() => new Date(), []);
+  const [todayDate, setTodayDate] = useState(() => new Date());
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleNextDayTick = () => {
+      const now = new Date();
+      const nextDay = new Date(now);
+      nextDay.setHours(24, 0, 1, 0);
+      timeout = setTimeout(() => {
+        setTodayDate(new Date());
+        scheduleNextDayTick();
+      }, Math.max(1000, nextDay.getTime() - now.getTime()));
+    };
+
+    scheduleNextDayTick();
+
+    return () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    };
+  }, []);
   const todayKey = useMemo(() => formatDateForApi(todayDate), [todayDate]);
   const setHomeMode = useCallback((value: HomeTab) => {
     setActiveTab(value);
@@ -1458,10 +1481,25 @@ export function HomeScreen() {
   const watchlistFutureCountsQueryKey = `${watchlistFutureStartDate}:${watchlistFutureEndDate}:${mediaFilter}`;
   const effectiveWidth = gridWidth || Math.max(width - 40, 0);
   const usesMonthCalendarLayout = isWeb && effectiveWidth >= 980;
+  const columns = getColumnCount(effectiveWidth, isWeb);
+  const isCompactHomeLayout = effectiveWidth < 640;
+  const isSmallPhone = width < 390;
+  const watchlistPageSize = Math.max(columns * 3, 6);
+  const secondarySectionPageSize = Math.max(columns * 2, 6);
+  const watchlistQueryLimit = Math.max(
+    watchlistVisibleCount + watchlistPageSize * 2,
+    watchlistPageSize * 4
+  );
+  const secondaryQueryLimit = Math.max(
+    Math.max(pausedVisibleCount, notStartedVisibleCount) + secondarySectionPageSize * 2,
+    secondarySectionPageSize * 4
+  );
+  const homeFeedMediaFilter =
+    mediaFilter === "all" ? undefined : mediaFilter;
 
   const hydratedRangesRef = useRef(new Set<string>());
+  const homeScheduleSignalRunsRef = useRef(new Set<string>());
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const relationSyncTriggeredRef = useRef(false);
   const [tmdbAiredEpisodeCountById, setTmdbAiredEpisodeCountById] = useState<
     Record<number, number>
   >({});
@@ -1500,8 +1538,34 @@ export function HomeScreen() {
     };
   }, [calendarAnchorDate, currentWeekStart, usesMonthCalendarLayout]);
 
-  // Projection-backed feed eliminates N show-doc reads.
-  const watchlist = useQuery(api.shows.getHomeFeed, {});
+  // Projection-backed section feeds keep Home reads bounded by visible demand.
+  const activeFeed = useQuery(
+    api.shows.getHomeActiveFeed,
+    activeTab === "watchlist"
+      ? {
+          limit: watchlistQueryLimit,
+          mediaFilter: homeFeedMediaFilter,
+        }
+      : "skip"
+  );
+  const pausedFeed = useQuery(
+    api.shows.getHomePausedFeed,
+    activeTab === "watchlist"
+      ? {
+          limit: secondaryQueryLimit,
+          mediaFilter: homeFeedMediaFilter,
+        }
+      : "skip"
+  );
+  const notStartedFeed = useQuery(
+    api.shows.getHomeNotStartedFeed,
+    activeTab === "watchlist"
+      ? {
+          limit: secondaryQueryLimit,
+          mediaFilter: homeFeedMediaFilter,
+        }
+      : "skip"
+  );
   const upcoming = useQuery(
     api.schedule.getUpcomingSchedule,
     activeTab === "upcoming"
@@ -1523,11 +1587,16 @@ export function HomeScreen() {
       : "skip"
   );
   const hydrateScheduleRange = useAction(api.schedule.hydrateScheduleRange);
-  const syncTrackedAnimeRelations = useAction(api.shows.syncTrackedAnimeRelations);
+  const ensureHomeWatchlistScheduleSignals = useAction(
+    api.schedule.ensureHomeWatchlistScheduleSignals
+  );
   const homeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
   const pausedSectionMode =
     (homeSettings?.pausedSectionMode as HomePausedSectionMode | undefined) ??
     "auto_paused_only";
+  const watchlistAirtimeMode =
+    (homeSettings?.watchlistAirtimeMode as WatchlistAirtimeMode | undefined) ??
+    "same_day";
 
   const hydrateRange = useCallback(
     async (startDate: string, days: number) => {
@@ -1550,6 +1619,29 @@ export function HomeScreen() {
     },
     [hydrateScheduleRange]
   );
+
+  useEffect(() => {
+    if (activeTab !== "watchlist") {
+      return;
+    }
+
+    const cacheKey = todayKey;
+    if (homeScheduleSignalRunsRef.current.has(cacheKey)) {
+      return;
+    }
+
+    homeScheduleSignalRunsRef.current.add(cacheKey);
+    void ensureHomeWatchlistScheduleSignals()
+      .then((result) => {
+        if (result?.reason === "schedule_hydration_failed") {
+          homeScheduleSignalRunsRef.current.delete(cacheKey);
+        }
+      })
+      .catch((error) => {
+        homeScheduleSignalRunsRef.current.delete(cacheKey);
+        console.warn("Home watchlist schedule signal refresh failed", error);
+      });
+  }, [activeTab, ensureHomeWatchlistScheduleSignals, todayKey]);
 
   useEffect(() => {
     if (activeTab !== "upcoming") {
@@ -1586,29 +1678,40 @@ export function HomeScreen() {
     upcomingRange.startDate,
   ]);
 
-  useEffect(() => {
-    if (relationSyncTriggeredRef.current) {
-      return;
-    }
+  const activeFeedItems = useMemo(
+    () => (activeFeed ?? []) as WatchlistItem[],
+    [activeFeed]
+  );
+  const pausedFeedItems = useMemo(
+    () => (pausedFeed ?? []) as WatchlistItem[],
+    [pausedFeed]
+  );
+  const notStartedFeedItems = useMemo(
+    () => (notStartedFeed ?? []) as WatchlistItem[],
+    [notStartedFeed]
+  );
+  const watchlistItems = useMemo(
+    () => [...activeFeedItems, ...pausedFeedItems, ...notStartedFeedItems],
+    [activeFeedItems, notStartedFeedItems, pausedFeedItems]
+  );
 
-    relationSyncTriggeredRef.current = true;
-    void syncTrackedAnimeRelations({ force: false }).catch((error) => {
-      console.warn("Background anime relation sync failed", error);
-      // Reset the trigger so subsequent attempts can retry
-      relationSyncTriggeredRef.current = false;
-    });
-  }, [syncTrackedAnimeRelations]);
-
-  const watchlistItems = useMemo(() => (watchlist ?? []) as WatchlistItem[], [watchlist]);
-
-  const futureUpcomingCountByRoute = useMemo(() => {
-    const counts = new Map<string, number>();
+  const upcomingAvailabilityByRoute = useMemo(() => {
+    const counts = new Map<
+      string,
+      { availableCount: number; futureCount: number; unavailableCount: number }
+    >();
 
     for (const entry of (watchlistFutureUpcomingCounts ?? []) as {
       routeId: string;
+      availableCount?: number;
       futureCount: number;
+      unavailableCount?: number;
     }[]) {
-      counts.set(entry.routeId, entry.futureCount);
+      counts.set(entry.routeId, {
+        availableCount: entry.availableCount ?? 0,
+        futureCount: entry.futureCount,
+        unavailableCount: entry.unavailableCount ?? entry.futureCount,
+      });
     }
 
     return counts;
@@ -1617,14 +1720,14 @@ export function HomeScreen() {
   useEffect(() => {
     if (
       activeTab === "watchlist" &&
-      watchlist !== undefined &&
+      activeFeed !== undefined &&
       watchlistFutureUpcomingCounts !== undefined
     ) {
       setResolvedFutureCountsQueryKey(watchlistFutureCountsQueryKey);
     }
   }, [
     activeTab,
-    watchlist,
+    activeFeed,
     watchlistFutureCountsQueryKey,
     watchlistFutureUpcomingCounts,
   ]);
@@ -1707,20 +1810,37 @@ export function HomeScreen() {
   ]);
 
   const filteredWatchlist = useMemo(() => {
-    return watchlistItems.filter((item) => {
+    return activeFeedItems.filter((item) => {
       const routeId = item.id;
-      const futureUpcomingCount = routeId
-        ? futureUpcomingCountByRoute.get(routeId) ?? 0
-        : 0;
+      const upcomingCounts = routeId
+        ? upcomingAvailabilityByRoute.get(routeId)
+        : undefined;
+      const unavailableUpcomingCount =
+        watchlistAirtimeMode === "after_airtime"
+          ? upcomingCounts?.unavailableCount ?? 0
+          : upcomingCounts?.futureCount ?? 0;
+      const availableScheduleCount =
+        watchlistAirtimeMode === "after_airtime"
+          ? upcomingCounts?.availableCount ?? 0
+          : (upcomingCounts?.availableCount ?? 0) +
+            ((upcomingCounts?.unavailableCount ?? 0) -
+              (upcomingCounts?.futureCount ?? 0));
+      const hasAvailableScheduleSignal =
+        typeof item.newEpisodeSignalAt === "number" &&
+        item.newEpisodeSignalAt > (item.lastWatchedAt ?? 0);
+      const hasTmdbAiredEpisodeFallback =
+        item.mediaType === "tv" && typeof item.tmdbId === "number";
       const allRemainingEpisodesAreFuture =
+        (!hasTmdbAiredEpisodeFallback || watchlistAirtimeMode === "after_airtime") &&
         typeof item.remainingEpisodes === "number" &&
         item.remainingEpisodes > 0 &&
-        futureUpcomingCount >= item.remainingEpisodes;
+        availableScheduleCount <= 0 &&
+        unavailableUpcomingCount >= item.remainingEpisodes;
 
       if (item.status === "paused") return false;
       if (item.status === "dropped") return false;
       if (item.trackingState === "upcoming") return false;
-      if (item.status === "completed") return false;
+      if (item.status === "completed" && !hasAvailableScheduleSignal) return false;
       if (item.watchedEpisodes <= 0) {
         return false;
       }
@@ -1733,15 +1853,20 @@ export function HomeScreen() {
         if (typeof airedEpisodes === "number") {
           const watchedEpisodes = Math.min(item.watchedEpisodes, airedEpisodes);
           const releasedRemaining = Math.max(airedEpisodes - watchedEpisodes, 0);
-          if (releasedRemaining <= 0) {
+          if (releasedRemaining <= 0 && !hasAvailableScheduleSignal) {
             return false;
           }
-        } else if (typeof item.remainingEpisodes === "number" && item.remainingEpisodes <= 0) {
+        } else if (
+          typeof item.remainingEpisodes === "number" &&
+          item.remainingEpisodes <= 0 &&
+          !hasAvailableScheduleSignal
+        ) {
           return false;
         }
       } else if (
         typeof item.remainingEpisodes === "number" &&
-        item.remainingEpisodes <= 0
+        item.remainingEpisodes <= 0 &&
+        !hasAvailableScheduleSignal
       ) {
         return false;
       }
@@ -1750,14 +1875,15 @@ export function HomeScreen() {
       return true;
     });
   }, [
-    futureUpcomingCountByRoute,
+    upcomingAvailabilityByRoute,
     mediaFilter,
     tmdbAiredEpisodeCountById,
-    watchlistItems,
+    activeFeedItems,
+    watchlistAirtimeMode,
   ]);
 
   const pausedSectionWatchlist = useMemo(() => {
-    return watchlistItems.filter((item) => {
+    return pausedFeedItems.filter((item) => {
       if (item.status !== "paused") {
         return false;
       }
@@ -1794,10 +1920,10 @@ export function HomeScreen() {
 
       return (b.lastWatchedAt ?? 0) - (a.lastWatchedAt ?? 0);
     });
-  }, [mediaFilter, pausedSectionMode, watchlistItems]);
+  }, [mediaFilter, pausedFeedItems, pausedSectionMode]);
 
   const notStartedSectionWatchlist = useMemo(() => {
-    return watchlistItems
+    return notStartedFeedItems
       .filter((item) => {
         if (item.status === "paused" || item.status === "dropped" || item.status === "completed") {
           return false;
@@ -1814,7 +1940,7 @@ export function HomeScreen() {
         return true;
       })
       .sort((a, b) => (b.lastWatchedAt ?? 0) - (a.lastWatchedAt ?? 0));
-  }, [mediaFilter, watchlistItems]);
+  }, [mediaFilter, notStartedFeedItems]);
 
   const upcomingGroups = useMemo(() => ((upcoming ?? []) as UpcomingGroup[]), [upcoming]);
   const episodesByDate = useMemo(() => {
@@ -1825,11 +1951,6 @@ export function HomeScreen() {
     return nextMap;
   }, [upcomingGroups]);
 
-  const columns = getColumnCount(effectiveWidth, isWeb);
-  const isCompactHomeLayout = effectiveWidth < 640;
-  const isSmallPhone = width < 390;
-  const watchlistPageSize = Math.max(columns * 3, 6);
-  const secondarySectionPageSize = Math.max(columns * 2, 6);
   const isWideCalendar = usesMonthCalendarLayout && effectiveWidth >= 1180;
   const webCalendarDays = useMemo(() => {
     const gridStart = startOfWeekDate(currentMonthDate);
@@ -1842,12 +1963,14 @@ export function HomeScreen() {
     );
   }, [currentMonthDate]);
 
-  const isWatchlistLoading = watchlist === undefined;
+  const isWatchlistLoading =
+    activeTab === "watchlist" &&
+    (activeFeed === undefined || pausedFeed === undefined || notStartedFeed === undefined);
   const hasResolvedFutureCountsForCurrentKey =
     resolvedFutureCountsQueryKey === watchlistFutureCountsQueryKey;
   const isWatchlistFutureCountsLoading =
     activeTab === "watchlist" &&
-    watchlist !== undefined &&
+    activeFeed !== undefined &&
     (!hasResolvedFutureCountsForCurrentKey ||
       watchlistFutureUpcomingCounts === undefined);
   const upcomingCount = upcomingGroups.reduce((sum, group) => sum + group.episodes.length, 0);
@@ -1855,7 +1978,9 @@ export function HomeScreen() {
     () => filteredWatchlist.slice(0, watchlistVisibleCount),
     [filteredWatchlist, watchlistVisibleCount]
   );
-  const hasMoreWatchlist = watchlistVisibleCount < filteredWatchlist.length;
+  const hasMoreWatchlist =
+    watchlistVisibleCount < filteredWatchlist.length ||
+    activeFeedItems.length >= watchlistQueryLimit;
   const watchlistSkeletonCount = Math.max(columns * 2, 6);
   const watchlistSkeletonRows = useMemo(
     () => chunkItems(Array.from({ length: watchlistSkeletonCount }, (_, index) => index), columns),
@@ -1882,13 +2007,13 @@ export function HomeScreen() {
   );
   const isWatchlistFilterSettling =
     activeTab === "watchlist" &&
-    watchlist !== undefined &&
+    activeFeed !== undefined &&
     (isWatchlistFutureCountsLoading || pendingWatchlistTmdbLookups > 0);
   const isWatchlistVisualLoading = isWatchlistLoading || isWatchlistFilterSettling;
   const isUpcomingContentLoading =
     activeTab === "upcoming" && (upcoming === undefined || isHydratingInitialUpcoming);
   const watchlistSettleContextKey = useMemo(() => {
-    if (watchlist === undefined) {
+    if (activeFeed === undefined || pausedFeed === undefined || notStartedFeed === undefined) {
       return "";
     }
 
@@ -1907,7 +2032,7 @@ export function HomeScreen() {
       .join("|");
 
     return `${watchlistFutureCountsQueryKey}:${itemSignature}`;
-  }, [watchlist, watchlistFutureCountsQueryKey, watchlistItems]);
+  }, [activeFeed, notStartedFeed, pausedFeed, watchlistFutureCountsQueryKey, watchlistItems]);
   const [settledWatchlistSnapshot, setSettledWatchlistSnapshot] = useState<{
     key: string;
     items: WatchlistItem[];
@@ -2026,7 +2151,7 @@ export function HomeScreen() {
   }, [notStartedSectionWatchlist.length, secondarySectionPageSize]);
 
   useEffect(() => {
-    if (watchlist === undefined) {
+    if (activeFeed === undefined || pausedFeed === undefined || notStartedFeed === undefined) {
       setSettledWatchlistSnapshot({
         key: "",
         items: [],
@@ -2040,7 +2165,14 @@ export function HomeScreen() {
         items: filteredWatchlist,
       });
     }
-  }, [filteredWatchlist, isWatchlistFilterSettling, watchlist, watchlistSettleContextKey]);
+  }, [
+    activeFeed,
+    filteredWatchlist,
+    isWatchlistFilterSettling,
+    notStartedFeed,
+    pausedFeed,
+    watchlistSettleContextKey,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -2057,13 +2189,10 @@ export function HomeScreen() {
 
     setIsLoadingMoreWatchlist(true);
     watchlistLoadMoreTimerRef.current = setTimeout(() => {
-      setWatchlistVisibleCount((count) =>
-        Math.min(count + watchlistPageSize, filteredWatchlist.length)
-      );
+      setWatchlistVisibleCount((count) => count + watchlistPageSize);
       setIsLoadingMoreWatchlist(false);
     }, 120);
   }, [
-    filteredWatchlist.length,
     hasMoreWatchlist,
     isLoadingMoreWatchlist,
     isWatchlistLoading,
@@ -2098,9 +2227,12 @@ export function HomeScreen() {
     () => notStartedSectionWatchlist.slice(0, notStartedVisibleCount),
     [notStartedSectionWatchlist, notStartedVisibleCount]
   );
-  const hasMorePausedSection = pausedVisibleCount < pausedSectionWatchlist.length;
+  const hasMorePausedSection =
+    pausedVisibleCount < pausedSectionWatchlist.length ||
+    pausedFeedItems.length >= secondaryQueryLimit;
   const hasMoreNotStartedSection =
-    notStartedVisibleCount < notStartedSectionWatchlist.length;
+    notStartedVisibleCount < notStartedSectionWatchlist.length ||
+    notStartedFeedItems.length >= secondaryQueryLimit;
   const autoPausedRows = useMemo(
     () => chunkItems(visiblePausedSectionItems, columns),
     [visiblePausedSectionItems, columns]
@@ -2311,10 +2443,7 @@ export function HomeScreen() {
                 className="rounded-full border border-amber-300/20 bg-amber-400/10 px-4 py-2.5"
                 onPress={() =>
                   setPausedVisibleCount((count) =>
-                    Math.min(
-                      count + secondarySectionPageSize,
-                      pausedSectionWatchlist.length
-                    )
+                    count + secondarySectionPageSize
                   )
                 }
                 style={({ pressed }) => ({
@@ -2391,10 +2520,7 @@ export function HomeScreen() {
                 className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2.5"
                 onPress={() =>
                   setNotStartedVisibleCount((count) =>
-                    Math.min(
-                      count + secondarySectionPageSize,
-                      notStartedSectionWatchlist.length
-                    )
+                    count + secondarySectionPageSize
                   )
                 }
                 style={({ pressed }) => ({
