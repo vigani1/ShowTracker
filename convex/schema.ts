@@ -140,6 +140,7 @@ export default defineSchema({
     droppedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
     autoPausedAt: v.optional(v.number()),
+    newEpisodeSignalAt: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
     .index("by_user_status", ["userId", "status"])
@@ -218,6 +219,8 @@ export default defineSchema({
     watchedEpisodesCount: v.number(),
     remainingEpisodes: v.optional(v.number()),
     lastWatchedAt: v.number(),
+    newEpisodeSignalAt: v.optional(v.number()),
+    homeSortAt: v.optional(v.number()),
     autoPausedAt: v.optional(v.number()),
 
     // Timestamps
@@ -226,6 +229,7 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_user_media", ["userId", "mediaType"])
     .index("by_user_media_status_lastWatched", ["userId", "mediaType", "status", "lastWatchedAt"])
+    .index("by_user_media_status_homeSortAt", ["userId", "mediaType", "status", "homeSortAt"])
     .index("by_user_media_status_autoPausedAt", ["userId", "mediaType", "status", "autoPausedAt"])
     .index("by_user_show", ["userId", "showId"])
     .index("by_userShow", ["userShowId"]),
@@ -234,6 +238,7 @@ export default defineSchema({
     key: v.string(),
     lastAttemptTime: v.number(),
     nextRetryTime: v.number(),
+    retryCount: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
   maintenanceState: defineTable({

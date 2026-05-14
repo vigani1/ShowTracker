@@ -43,6 +43,12 @@ export type TvMazeScheduleEntry = {
   image?: { medium?: string; original?: string } | null;
 };
 
+type TvMazeWebScheduleEntry = Omit<TvMazeScheduleEntry, "show"> & {
+  _embedded?: {
+    show?: TvMazeShow;
+  };
+};
+
 export type TvMazeSearchResult = {
   score: number;
   show: TvMazeShow;
@@ -115,15 +121,57 @@ export async function getTvMazeScheduleByDate(
   date: string,
   country = "US"
 ) {
-  const cacheKey = `tvmaze-schedule:${date}:${country}`;
+  const cacheKey = `tvmaze-schedule:${date}:${country}:with-web`;
   const cached = getCached<TvMazeScheduleEntry[]>(cacheKey);
   if (cached) {
     return cached;
   }
-  const data = await request<TvMazeScheduleEntry[]>("/schedule", {
-    date,
-    country,
-  });
+
+  const [countrySchedule, webSchedule] = await Promise.all([
+    request<TvMazeScheduleEntry[]>("/schedule", {
+      date,
+      country,
+    }),
+    request<TvMazeWebScheduleEntry[]>("/schedule/web", {
+      date,
+    }).catch((error) => {
+      console.warn("TVMaze web schedule request failed", error);
+      return [] as TvMazeWebScheduleEntry[];
+    }),
+  ]);
+
+  const byEpisodeId = new Map<number, TvMazeScheduleEntry>();
+  for (const entry of countrySchedule) {
+    byEpisodeId.set(entry.id, entry);
+  }
+
+  for (const entry of webSchedule) {
+    const show = entry._embedded?.show;
+    if (
+      !show ||
+      !Number.isFinite(entry.id) ||
+      !Number.isFinite(entry.season) ||
+      !Number.isFinite(entry.number) ||
+      byEpisodeId.has(entry.id)
+    ) {
+      continue;
+    }
+
+    byEpisodeId.set(entry.id, {
+      id: entry.id,
+      name: entry.name,
+      airdate: entry.airdate,
+      airtime: entry.airtime,
+      airstamp: entry.airstamp,
+      season: entry.season,
+      number: entry.number,
+      runtime: entry.runtime,
+      image: entry.image,
+      show,
+    });
+  }
+
+  const data = Array.from(byEpisodeId.values());
   setCached(cacheKey, data, cacheTtlMs);
   return data;
 }

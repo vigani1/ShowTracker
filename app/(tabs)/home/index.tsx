@@ -47,6 +47,7 @@ type WatchlistItem = {
   totalEpisodes: number | null;
   autoPausedAt?: number | null;
   lastWatchedAt?: number | null;
+  newEpisodeSignalAt?: number | null;
 };
 
 type UpcomingEpisode = {
@@ -1438,7 +1439,28 @@ export function HomeScreen() {
   const { width } = useWindowDimensions();
   const isWeb = Platform.OS === "web";
 
-  const todayDate = useMemo(() => new Date(), []);
+  const [todayDate, setTodayDate] = useState(() => new Date());
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleNextDayTick = () => {
+      const now = new Date();
+      const nextDay = new Date(now);
+      nextDay.setHours(24, 0, 1, 0);
+      timeout = setTimeout(() => {
+        setTodayDate(new Date());
+        scheduleNextDayTick();
+      }, Math.max(1000, nextDay.getTime() - now.getTime()));
+    };
+
+    scheduleNextDayTick();
+
+    return () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    };
+  }, []);
   const todayKey = useMemo(() => formatDateForApi(todayDate), [todayDate]);
   const setHomeMode = useCallback((value: HomeTab) => {
     setActiveTab(value);
@@ -1476,6 +1498,7 @@ export function HomeScreen() {
     mediaFilter === "all" ? undefined : mediaFilter;
 
   const hydratedRangesRef = useRef(new Set<string>());
+  const homeScheduleSignalRunsRef = useRef(new Set<string>());
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [tmdbAiredEpisodeCountById, setTmdbAiredEpisodeCountById] = useState<
     Record<number, number>
@@ -1564,6 +1587,9 @@ export function HomeScreen() {
       : "skip"
   );
   const hydrateScheduleRange = useAction(api.schedule.hydrateScheduleRange);
+  const ensureHomeWatchlistScheduleSignals = useAction(
+    api.schedule.ensureHomeWatchlistScheduleSignals
+  );
   const homeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
   const pausedSectionMode =
     (homeSettings?.pausedSectionMode as HomePausedSectionMode | undefined) ??
@@ -1593,6 +1619,29 @@ export function HomeScreen() {
     },
     [hydrateScheduleRange]
   );
+
+  useEffect(() => {
+    if (activeTab !== "watchlist") {
+      return;
+    }
+
+    const cacheKey = todayKey;
+    if (homeScheduleSignalRunsRef.current.has(cacheKey)) {
+      return;
+    }
+
+    homeScheduleSignalRunsRef.current.add(cacheKey);
+    void ensureHomeWatchlistScheduleSignals()
+      .then((result) => {
+        if (result?.reason === "schedule_hydration_failed") {
+          homeScheduleSignalRunsRef.current.delete(cacheKey);
+        }
+      })
+      .catch((error) => {
+        homeScheduleSignalRunsRef.current.delete(cacheKey);
+        console.warn("Home watchlist schedule signal refresh failed", error);
+      });
+  }, [activeTab, ensureHomeWatchlistScheduleSignals, todayKey]);
 
   useEffect(() => {
     if (activeTab !== "upcoming") {
@@ -1646,15 +1695,20 @@ export function HomeScreen() {
     [activeFeedItems, notStartedFeedItems, pausedFeedItems]
   );
 
-  const unavailableUpcomingCountByRoute = useMemo(() => {
-    const counts = new Map<string, { futureCount: number; unavailableCount: number }>();
+  const upcomingAvailabilityByRoute = useMemo(() => {
+    const counts = new Map<
+      string,
+      { availableCount: number; futureCount: number; unavailableCount: number }
+    >();
 
     for (const entry of (watchlistFutureUpcomingCounts ?? []) as {
       routeId: string;
+      availableCount?: number;
       futureCount: number;
       unavailableCount?: number;
     }[]) {
       counts.set(entry.routeId, {
+        availableCount: entry.availableCount ?? 0,
         futureCount: entry.futureCount,
         unavailableCount: entry.unavailableCount ?? entry.futureCount,
       });
@@ -1759,24 +1813,34 @@ export function HomeScreen() {
     return activeFeedItems.filter((item) => {
       const routeId = item.id;
       const upcomingCounts = routeId
-        ? unavailableUpcomingCountByRoute.get(routeId)
+        ? upcomingAvailabilityByRoute.get(routeId)
         : undefined;
       const unavailableUpcomingCount =
         watchlistAirtimeMode === "after_airtime"
           ? upcomingCounts?.unavailableCount ?? 0
           : upcomingCounts?.futureCount ?? 0;
+      const availableScheduleCount =
+        watchlistAirtimeMode === "after_airtime"
+          ? upcomingCounts?.availableCount ?? 0
+          : (upcomingCounts?.availableCount ?? 0) +
+            ((upcomingCounts?.unavailableCount ?? 0) -
+              (upcomingCounts?.futureCount ?? 0));
+      const hasAvailableScheduleSignal =
+        typeof item.newEpisodeSignalAt === "number" &&
+        item.newEpisodeSignalAt > (item.lastWatchedAt ?? 0);
       const hasTmdbAiredEpisodeFallback =
         item.mediaType === "tv" && typeof item.tmdbId === "number";
       const allRemainingEpisodesAreFuture =
         (!hasTmdbAiredEpisodeFallback || watchlistAirtimeMode === "after_airtime") &&
         typeof item.remainingEpisodes === "number" &&
         item.remainingEpisodes > 0 &&
+        availableScheduleCount <= 0 &&
         unavailableUpcomingCount >= item.remainingEpisodes;
 
       if (item.status === "paused") return false;
       if (item.status === "dropped") return false;
       if (item.trackingState === "upcoming") return false;
-      if (item.status === "completed") return false;
+      if (item.status === "completed" && !hasAvailableScheduleSignal) return false;
       if (item.watchedEpisodes <= 0) {
         return false;
       }
@@ -1789,15 +1853,20 @@ export function HomeScreen() {
         if (typeof airedEpisodes === "number") {
           const watchedEpisodes = Math.min(item.watchedEpisodes, airedEpisodes);
           const releasedRemaining = Math.max(airedEpisodes - watchedEpisodes, 0);
-          if (releasedRemaining <= 0) {
+          if (releasedRemaining <= 0 && !hasAvailableScheduleSignal) {
             return false;
           }
-        } else if (typeof item.remainingEpisodes === "number" && item.remainingEpisodes <= 0) {
+        } else if (
+          typeof item.remainingEpisodes === "number" &&
+          item.remainingEpisodes <= 0 &&
+          !hasAvailableScheduleSignal
+        ) {
           return false;
         }
       } else if (
         typeof item.remainingEpisodes === "number" &&
-        item.remainingEpisodes <= 0
+        item.remainingEpisodes <= 0 &&
+        !hasAvailableScheduleSignal
       ) {
         return false;
       }
@@ -1806,7 +1875,7 @@ export function HomeScreen() {
       return true;
     });
   }, [
-    unavailableUpcomingCountByRoute,
+    upcomingAvailabilityByRoute,
     mediaFilter,
     tmdbAiredEpisodeCountById,
     activeFeedItems,
