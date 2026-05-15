@@ -48,3 +48,4 @@ artifacts/
 # Local exports / scratch data
 backup-export/
 backups
+.schedule-confidence/

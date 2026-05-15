@@ -13,6 +13,7 @@ import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as lists from "../lists.js";
 import type * as schedule from "../schedule.js";
+import type * as scheduleConfidence from "../scheduleConfidence.js";
 import type * as shows from "../shows.js";
 import type * as stats from "../stats.js";
 
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   lists: typeof lists;
   schedule: typeof schedule;
+  scheduleConfidence: typeof scheduleConfidence;
   shows: typeof shows;
   stats: typeof stats;
 }>;

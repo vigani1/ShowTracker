@@ -1,10 +1,8 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
-  action,
   internalAction,
   internalMutation,
   internalQuery,
-  mutation,
   query,
 } from "@/convex/_generated/server";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
@@ -17,7 +15,7 @@ import {
 } from "@/lib/api/normalize";
 import type { NormalizedScheduleEntry } from "@/lib/api/types";
 import { getTvMazeScheduleByDate } from "@/lib/api/tvmaze";
-import { api, internal } from "@/convex/_generated/api";
+import { internal } from "@/convex/_generated/api";
 
 const HYDRATE_BATCH_SIZE = 3;
 const SCHEDULE_CACHE_FRESH_MS = 1000 * 60 * 60 * 6;
@@ -323,9 +321,170 @@ function isAnimeSeasonTitleVariant(
   );
 }
 
+function getScheduleSeriesDedupeTitle(normalizedTitle: string) {
+  return normalizedTitle.replace(
+    /(?:s\d+|season\d*|\d+(?:st|nd|rd|th)?season|part\d*|cour\d*|finalseason)$/,
+    ""
+  );
+}
+
+function isGenericScheduleEpisodeName(name?: string) {
+  const normalized = normalizeTitle(name ?? "");
+  return !normalized || /^episode\d+$/.test(normalized);
+}
+
+function getScheduleEpisodeDedupeKey(episode: {
+  seasonNumber: number;
+  episodeNumber: number;
+  name?: string;
+}) {
+  const normalizedName = normalizeTitle(episode.name ?? "");
+  if (normalizedName && !isGenericScheduleEpisodeName(episode.name)) {
+    return `name:${normalizedName}`;
+  }
+  return `number:${episode.seasonNumber}:${episode.episodeNumber}`;
+}
+
+function getScheduleAirDatePrecision(airDate?: string) {
+  return airDate?.includes("T") ? 1 : 0;
+}
+
+function shouldPreferScheduleEpisode(
+  next: { episode: { airDate?: string } },
+  current: { episode: { airDate?: string } }
+) {
+  return (
+    getScheduleAirDatePrecision(next.episode.airDate) >
+    getScheduleAirDatePrecision(current.episode.airDate)
+  );
+}
+
+function getScheduleEntrySourceProvider(entry: CompactScheduleEntry) {
+  return entry.showId.split(":")[0] ?? "";
+}
+
+function getScheduleSourcePriority(sourceProvider: string) {
+  switch (sourceProvider) {
+    case "tvmaze":
+      return 3;
+    case "anilist":
+      return 2;
+    case "tmdb":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function shouldCollapseSameTrackedShowDay(
+  next: CompactScheduleEntry,
+  current: CompactScheduleEntry
+) {
+  const nextName = normalizeTitle(next.episode.name ?? "");
+  const currentName = normalizeTitle(current.episode.name ?? "");
+  const sameNonGenericName =
+    nextName.length > 0 &&
+    nextName === currentName &&
+    !isGenericScheduleEpisodeName(next.episode.name) &&
+    !isGenericScheduleEpisodeName(current.episode.name);
+
+  if (sameNonGenericName) {
+    return true;
+  }
+
+  const differentSource =
+    getScheduleEntrySourceProvider(next) !== getScheduleEntrySourceProvider(current);
+  if (!differentSource) {
+    return false;
+  }
+
+  return (
+    isGenericScheduleEpisodeName(next.episode.name) ||
+    isGenericScheduleEpisodeName(current.episode.name) ||
+    getScheduleAirDatePrecision(next.episode.airDate) !==
+      getScheduleAirDatePrecision(current.episode.airDate)
+  );
+}
+
+function shouldPreferSameTrackedShowDayEpisode(
+  next: CompactScheduleEntry,
+  current: CompactScheduleEntry
+) {
+  const nameDelta =
+    Number(!isGenericScheduleEpisodeName(next.episode.name)) -
+    Number(!isGenericScheduleEpisodeName(current.episode.name));
+  if (nameDelta !== 0) {
+    return nameDelta > 0;
+  }
+
+  const sourceDelta =
+    getScheduleSourcePriority(getScheduleEntrySourceProvider(next)) -
+    getScheduleSourcePriority(getScheduleEntrySourceProvider(current));
+  if (sourceDelta !== 0) {
+    return sourceDelta > 0;
+  }
+
+  const precisionDelta =
+    getScheduleAirDatePrecision(next.episode.airDate) -
+    getScheduleAirDatePrecision(current.episode.airDate);
+  if (precisionDelta !== 0) {
+    return precisionDelta > 0;
+  }
+
+  const nextAirtime = getEpisodeAirtimeTimestamp(next.episode.airDate);
+  const currentAirtime = getEpisodeAirtimeTimestamp(current.episode.airDate);
+  if (nextAirtime !== null && currentAirtime !== null && nextAirtime !== currentAirtime) {
+    return nextAirtime < currentAirtime;
+  }
+
+  return false;
+}
+
+function getScheduleStatusPriority(status?: string) {
+  switch (status) {
+    case "watching":
+      return 5;
+    case "completed":
+      return 4;
+    case "paused":
+      return 3;
+    case "plan_to_watch":
+      return 2;
+    case "dropped":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function shouldPreferScheduleCandidate(
+  next: { mediaType: "tv" | "anime"; status?: string; lastWatchedAt?: number | null },
+  current: { mediaType: "tv" | "anime"; status?: string; lastWatchedAt?: number | null }
+) {
+  const statusDelta =
+    getScheduleStatusPriority(next.status) - getScheduleStatusPriority(current.status);
+  if (statusDelta !== 0) {
+    return statusDelta > 0;
+  }
+
+  const watchedDelta = (next.lastWatchedAt ?? 0) - (current.lastWatchedAt ?? 0);
+  if (watchedDelta !== 0) {
+    return watchedDelta > 0;
+  }
+
+  if (next.mediaType !== current.mediaType) {
+    return next.mediaType === "tv";
+  }
+
+  return false;
+}
+
 function findTrackedScheduleMatch<T extends {
   mediaType: "tv" | "anime";
   normalizedTitle: string;
+  status?: string;
+  lastWatchedAt?: number | null;
+  tmdbId?: number;
   anilistId?: number;
   tvmazeId?: number;
 }>(
@@ -335,34 +494,37 @@ function findTrackedScheduleMatch<T extends {
   byExternalKey: Map<string, T>,
   byTitle: Map<string, T>
 ) {
-  const exactMatch =
-    byExternalKey.get(entry.showId) ??
-    byTitle.get(getTitleLookupKey(mediaType, entry.normalizedTitle));
-
-  if (exactMatch) {
-    return exactMatch;
+  const externalMatch = byExternalKey.get(entry.showId);
+  if (externalMatch) {
+    return externalMatch;
   }
 
   if (mediaType !== "anime") {
-    return null;
+    return byTitle.get(getTitleLookupKey(mediaType, entry.normalizedTitle)) ?? null;
   }
 
-  const titleCandidates = trackedShows.filter(
-    (tracked) =>
-      tracked.mediaType === mediaType &&
+  const titleCandidates = trackedShows.filter((tracked) => {
+    if (tracked.mediaType !== "tv" && tracked.mediaType !== "anime") {
+      return false;
+    }
+    return (
+      entry.normalizedTitle === tracked.normalizedTitle ||
       isAnimeSeasonTitleVariant(entry.normalizedTitle, tracked.normalizedTitle)
-  );
+    );
+  });
 
   if (titleCandidates.length === 0) {
     return null;
   }
 
   titleCandidates.sort((a, b) => {
-    const mediaTypeDelta =
-      Number(b.mediaType === mediaType) - Number(a.mediaType === mediaType);
-    if (mediaTypeDelta !== 0) {
-      return mediaTypeDelta;
+    if (shouldPreferScheduleCandidate(b, a)) {
+      return 1;
     }
+    if (shouldPreferScheduleCandidate(a, b)) {
+      return -1;
+    }
+
     return b.normalizedTitle.length - a.normalizedTitle.length;
   });
   return titleCandidates[0] ?? null;
@@ -555,12 +717,59 @@ function getUnixRangeForDate(dateString: string) {
   return { start, end };
 }
 
-export const upsertScheduleBucket = mutation({
+async function getScheduleCacheStatusForDateFromDb(
+  ctx: QueryCtx,
+  date: string
+): Promise<DateCacheStatus> {
+    const now = Date.now();
+    const todayKey = formatDate(new Date());
+    const dateKey = parseRequiredScheduleDateKey(date, "schedule cache date").key;
+    const rows = await ctx.db
+      .query("scheduleCache")
+      .withIndex("by_date", (q) => q.eq("date", dateKey))
+      .collect();
+
+    let tvCount = 0;
+    let animeCount = 0;
+    let tvLastUpdated: number | null = null;
+    let animeLastUpdated: number | null = null;
+
+    for (const row of rows) {
+      const parsedCount = parseCachedScheduleEntries(row.episodes).length;
+
+      if (row.mediaType === "tv") {
+        tvCount = Math.max(tvCount, parsedCount);
+        tvLastUpdated = Math.max(tvLastUpdated ?? 0, row.lastUpdated);
+      } else if (row.mediaType === "anime") {
+        animeCount = Math.max(animeCount, parsedCount);
+        animeLastUpdated = Math.max(animeLastUpdated ?? 0, row.lastUpdated);
+      }
+    }
+
+    const hasFreshTv =
+      (dateKey < todayKey && tvLastUpdated !== null) ||
+      (typeof tvLastUpdated === "number" &&
+        now - tvLastUpdated < SCHEDULE_CACHE_FRESH_MS);
+    const hasFreshAnimeByTime =
+      typeof animeLastUpdated === "number" &&
+      now - animeLastUpdated < SCHEDULE_CACHE_FRESH_MS;
+    const shouldForceRefreshPastAnimeZero =
+      animeCount === 0 && dateKey === todayKey;
+    const hasFreshAnime =
+      ((dateKey < todayKey && animeLastUpdated !== null) || hasFreshAnimeByTime) &&
+      !shouldForceRefreshPastAnimeZero;
+
+    return {
+      tvCount,
+      animeCount,
+      hasFreshTv,
+      hasFreshAnime,
+    } as DateCacheStatus;
+}
+
+export const getScheduleCacheStatusForDate = query({
   args: {
     date: v.string(),
-    mediaType: v.union(v.literal("tv"), v.literal("anime")),
-    episodes: v.string(),
-    lastUpdated: v.number(),
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
@@ -568,6 +777,25 @@ export const upsertScheduleBucket = mutation({
       throw new Error("Unauthorized: unauthenticated access to schedule cache");
     }
 
+    return getScheduleCacheStatusForDateFromDb(ctx, args.date);
+  },
+});
+
+export const getScheduleCacheStatusForDateInternal = internalQuery({
+  args: {
+    date: v.string(),
+  },
+  handler: async (ctx, args) => getScheduleCacheStatusForDateFromDb(ctx, args.date),
+});
+
+export const upsertScheduleBucketInternal = internalMutation({
+  args: {
+    date: v.string(),
+    mediaType: v.union(v.literal("tv"), v.literal("anime")),
+    episodes: v.string(),
+    lastUpdated: v.number(),
+  },
+  handler: async (ctx, args) => {
     const normalizedDate = parseScheduleDateKey(args.date);
     if (!normalizedDate) {
       throw new Error(`Invalid schedule cache date: ${args.date}`);
@@ -613,63 +841,6 @@ export const upsertScheduleBucket = mutation({
   },
 });
 
-export const getScheduleCacheStatusForDate = query({
-  args: {
-    date: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Unauthorized: unauthenticated access to schedule cache");
-    }
-
-    const now = Date.now();
-    const todayKey = formatDate(new Date());
-    const dateKey = parseRequiredScheduleDateKey(args.date, "schedule cache date").key;
-    const rows = await ctx.db
-      .query("scheduleCache")
-      .withIndex("by_date", (q) => q.eq("date", dateKey))
-      .collect();
-
-    let tvCount = 0;
-    let animeCount = 0;
-    let tvLastUpdated: number | null = null;
-    let animeLastUpdated: number | null = null;
-
-    for (const row of rows) {
-      const parsedCount = parseCachedScheduleEntries(row.episodes).length;
-
-      if (row.mediaType === "tv") {
-        tvCount = Math.max(tvCount, parsedCount);
-        tvLastUpdated = Math.max(tvLastUpdated ?? 0, row.lastUpdated);
-      } else if (row.mediaType === "anime") {
-        animeCount = Math.max(animeCount, parsedCount);
-        animeLastUpdated = Math.max(animeLastUpdated ?? 0, row.lastUpdated);
-      }
-    }
-
-    const hasFreshTv =
-      (args.date < todayKey && tvLastUpdated !== null) ||
-      (typeof tvLastUpdated === "number" &&
-        now - tvLastUpdated < SCHEDULE_CACHE_FRESH_MS);
-    const hasFreshAnimeByTime =
-      typeof animeLastUpdated === "number" &&
-      now - animeLastUpdated < SCHEDULE_CACHE_FRESH_MS;
-    const shouldForceRefreshPastAnimeZero =
-      animeCount === 0 && dateKey === todayKey;
-    const hasFreshAnime =
-      ((args.date < todayKey && animeLastUpdated !== null) || hasFreshAnimeByTime) &&
-      !shouldForceRefreshPastAnimeZero;
-
-    return {
-      tvCount,
-      animeCount,
-      hasFreshTv,
-      hasFreshAnime,
-    } as DateCacheStatus;
-  },
-});
-
 async function hydrateOneDate(
   ctx: ActionCtx,
   date: string
@@ -685,7 +856,7 @@ async function hydrateOneDate(
 }> {
   const now = Date.now();
   const cacheStatus: DateCacheStatus = await ctx.runQuery(
-    api.schedule.getScheduleCacheStatusForDate,
+    internal.schedule.getScheduleCacheStatusForDateInternal,
     { date }
   );
 
@@ -790,7 +961,7 @@ async function hydrateOneDate(
   const compactAnimeEntries = compactScheduleEntries(animeEntries);
 
   if (!tvFetchFailed) {
-    await ctx.runMutation(api.schedule.upsertScheduleBucket, {
+    await ctx.runMutation(internal.schedule.upsertScheduleBucketInternal, {
       date,
       mediaType: "tv",
       episodes: JSON.stringify(compactTvEntries),
@@ -799,7 +970,7 @@ async function hydrateOneDate(
   }
 
   if (!animeFetchRateLimited && !animeFetchFailed) {
-    await ctx.runMutation(api.schedule.upsertScheduleBucket, {
+    await ctx.runMutation(internal.schedule.upsertScheduleBucketInternal, {
       date,
       mediaType: "anime",
       episodes: JSON.stringify(compactAnimeEntries),
@@ -847,30 +1018,21 @@ async function hydrateScheduleDates(ctx: ActionCtx, dateKeys: string[]) {
   return results;
 }
 
-export const hydrateScheduleDate = action({
+export const hydrateScheduleDate = internalAction({
   args: {
     date: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Unauthorized");
-    }
     return hydrateOneDate(ctx, args.date);
   },
 });
 
-export const hydrateScheduleRange = action({
+export const hydrateScheduleRange = internalAction({
   args: {
     startDate: v.string(),
     days: v.number(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Unauthorized");
-    }
-
     const startDate = parseRequiredScheduleDateKey(
       args.startDate,
       "schedule hydration start date"
@@ -939,6 +1101,7 @@ export const getHomeScheduleSignalMatches = internalQuery({
         newEpisodeSignalAt: projection.newEpisodeSignalAt,
         normalizedTitle: normalizeTitle(projection.title),
         mediaType: projection.mediaType as "tv" | "anime",
+        tmdbId: projection.tmdbId,
         anilistId: projection.anilistId,
         tvmazeId: projection.tvmazeId,
       }));
@@ -953,6 +1116,9 @@ export const getHomeScheduleSignalMatches = internalQuery({
     for (const tracked of trackedShows) {
       if (typeof tracked.anilistId === "number") {
         byExternalKey.set(`anilist:${tracked.anilistId}`, tracked);
+      }
+      if (typeof tracked.tmdbId === "number") {
+        byExternalKey.set(`tmdb:${tracked.mediaType}:${tracked.tmdbId}`, tracked);
       }
       if (typeof tracked.tvmazeId === "number") {
         byExternalKey.set(`tvmaze:${tracked.tvmazeId}`, tracked);
@@ -1292,16 +1458,12 @@ export const applyHomeScheduleSignals = internalMutation({
   },
 });
 
-export const ensureHomeWatchlistScheduleSignals = action({
-  args: {},
-  handler: async (ctx): Promise<HomeScheduleSignalResult> => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      return {
-        skipped: true,
-        reason: "unauthenticated",
-      };
-    }
+export const ensureHomeWatchlistScheduleSignals = internalAction({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<HomeScheduleSignalResult> => {
+    const userId = args.userId;
 
     const now = new Date();
     const today = startOfDay(now);
@@ -1606,8 +1768,11 @@ export const getUpcomingSchedule = query({
       title: p.title,
       normalizedTitle: normalizeTitle(p.title),
       mediaType: p.mediaType as "tv" | "anime",
+      status: p.status,
+      lastWatchedAt: p.lastWatchedAt,
       posterUrl: p.posterUrl ?? undefined,
       routeId: getWatchlistIdForProjection(p),
+      tmdbId: p.tmdbId,
       anilistId: p.anilistId,
       tvmazeId: p.tvmazeId,
     }));
@@ -1618,6 +1783,9 @@ export const getUpcomingSchedule = query({
     for (const tracked of trackedShows) {
       if (typeof tracked.anilistId === "number") {
         byExternalKey.set(`anilist:${tracked.anilistId}`, tracked);
+      }
+      if (typeof tracked.tmdbId === "number") {
+        byExternalKey.set(`tmdb:${tracked.mediaType}:${tracked.tmdbId}`, tracked);
       }
       if (typeof tracked.tvmazeId === "number") {
         byExternalKey.set(`tvmaze:${tracked.tvmazeId}`, tracked);
@@ -1653,7 +1821,23 @@ export const getUpcomingSchedule = query({
     >();
     const dedupe = new Map<
       string,
-      { dayKey: string; index: number; sourceMatchesTracked: boolean }
+      {
+        dayKey: string;
+        index: number;
+        sourceMatchesTracked: boolean;
+        entry: CompactScheduleEntry;
+        tracked: (typeof trackedShows)[number];
+      }
+    >();
+    const sameTrackedShowDayDedupe = new Map<
+      string,
+      {
+        dayKey: string;
+        index: number;
+        entry: CompactScheduleEntry;
+        sourceMatchesTracked: boolean;
+        tracked: (typeof trackedShows)[number];
+      }
     >();
 
     for (const row of rows) {
@@ -1686,11 +1870,72 @@ export const getUpcomingSchedule = query({
         }
 
         const sourceMatchesTracked = rowMediaType === tracked.mediaType;
-        const uniqueKey = `${dayKey}:${tracked.routeId ?? entry.showId}:${entry.episode.episodeNumber}`;
+        const seriesKey = getScheduleSeriesDedupeTitle(
+          tracked.normalizedTitle.length <= entry.normalizedTitle.length
+            ? tracked.normalizedTitle
+            : entry.normalizedTitle
+        );
+        const uniqueKey = `${dayKey}:${seriesKey}:${getScheduleEpisodeDedupeKey(entry.episode)}`;
         const existing = dedupe.get(uniqueKey);
-        if (existing?.sourceMatchesTracked && !sourceMatchesTracked) {
+        const existingEpisode = existing ? grouped.get(existing.dayKey)?.[existing.index] : undefined;
+        const sameTrackedShowDayKey = `${dayKey}:${tracked.routeId ?? seriesKey}`;
+        const sameDayExisting = sameTrackedShowDayDedupe.get(sameTrackedShowDayKey);
+        const sameDayExistingEpisode = sameDayExisting
+          ? grouped.get(sameDayExisting.dayKey)?.[sameDayExisting.index]
+          : undefined;
+        if (
+          sameDayExisting &&
+          sameDayExistingEpisode &&
+          shouldCollapseSameTrackedShowDay(entry, sameDayExisting.entry)
+        ) {
+          const shouldReplaceSameDayExisting =
+            (!sameDayExisting.sourceMatchesTracked && sourceMatchesTracked) ||
+            ((sameDayExisting.sourceMatchesTracked === sourceMatchesTracked) &&
+              (shouldPreferScheduleCandidate(tracked, sameDayExisting.tracked) ||
+                shouldPreferSameTrackedShowDayEpisode(entry, sameDayExisting.entry)));
+
+          if (shouldReplaceSameDayExisting) {
+            const scheduleEpisode = {
+              routeId: tracked.routeId,
+              showTitle: tracked.title,
+              mediaType: tracked.mediaType,
+              posterUrl: tracked.posterUrl,
+              daysUntil,
+              episode: {
+                seasonNumber: entry.episode.seasonNumber,
+                episodeNumber: entry.episode.episodeNumber,
+                ...(entry.episode.name ? { name: entry.episode.name } : {}),
+                ...(entry.episode.airDate ? { airDate: entry.episode.airDate } : {}),
+              },
+            };
+
+            grouped.get(sameDayExisting.dayKey)![sameDayExisting.index] = scheduleEpisode;
+            sameTrackedShowDayDedupe.set(sameTrackedShowDayKey, {
+              dayKey: sameDayExisting.dayKey,
+              index: sameDayExisting.index,
+              entry,
+              sourceMatchesTracked,
+              tracked,
+            });
+          }
           continue;
         }
+
+        const shouldReplaceExisting =
+          !!existing &&
+          ((!existing.sourceMatchesTracked && sourceMatchesTracked) ||
+            ((existing.sourceMatchesTracked === sourceMatchesTracked) &&
+              (shouldPreferScheduleCandidate(tracked, existing.tracked) ||
+                (existingEpisode &&
+                  shouldPreferScheduleEpisode(
+                    {
+                      episode: {
+                        airDate: entry.episode.airDate,
+                      },
+                    },
+                    existingEpisode
+                  )))));
+        if (existing && !shouldReplaceExisting) continue;
 
         const scheduleEpisode = {
           routeId: tracked.routeId,
@@ -1708,14 +1953,21 @@ export const getUpcomingSchedule = query({
 
         const dayEpisodes = grouped.get(dayKey)!;
         if (existing) {
-          if (sourceMatchesTracked && !existing.sourceMatchesTracked) {
-            dayEpisodes[existing.index] = scheduleEpisode;
-            dedupe.set(uniqueKey, {
-              dayKey,
-              index: existing.index,
-              sourceMatchesTracked,
-            });
-          }
+          dayEpisodes[existing.index] = scheduleEpisode;
+          dedupe.set(uniqueKey, {
+            dayKey,
+            index: existing.index,
+            entry,
+            sourceMatchesTracked,
+            tracked,
+          });
+          sameTrackedShowDayDedupe.set(sameTrackedShowDayKey, {
+            dayKey,
+            index: existing.index,
+            entry,
+            sourceMatchesTracked,
+            tracked,
+          });
           continue;
         }
 
@@ -1723,7 +1975,16 @@ export const getUpcomingSchedule = query({
         dedupe.set(uniqueKey, {
           dayKey,
           index: dayEpisodes.length - 1,
+          entry,
           sourceMatchesTracked,
+          tracked,
+        });
+        sameTrackedShowDayDedupe.set(sameTrackedShowDayKey, {
+          dayKey,
+          index: dayEpisodes.length - 1,
+          entry,
+          sourceMatchesTracked,
+          tracked,
         });
       }
     }
@@ -1794,7 +2055,10 @@ async function getFutureUpcomingCountsForUser(
     const trackedShows = nonMovieProjections.map((p) => ({
       normalizedTitle: normalizeTitle(p.title),
       mediaType: p.mediaType as "tv" | "anime",
+      status: p.status,
+      lastWatchedAt: p.lastWatchedAt,
       watchlistId: getWatchlistIdForProjection(p),
+      tmdbId: p.tmdbId,
       anilistId: p.anilistId,
       tvmazeId: p.tvmazeId,
     }));
@@ -1805,6 +2069,9 @@ async function getFutureUpcomingCountsForUser(
     for (const tracked of trackedShows) {
       if (typeof tracked.anilistId === "number") {
         byExternalKey.set(`anilist:${tracked.anilistId}`, tracked);
+      }
+      if (typeof tracked.tmdbId === "number") {
+        byExternalKey.set(`tmdb:${tracked.mediaType}:${tracked.tmdbId}`, tracked);
       }
       if (typeof tracked.tvmazeId === "number") {
         byExternalKey.set(`tvmaze:${tracked.tvmazeId}`, tracked);
@@ -1827,6 +2094,7 @@ async function getFutureUpcomingCountsForUser(
       { availableCount: number; futureCount: number; unavailableCount: number }
     >();
     const dedupe = new Set<string>();
+    const sameTrackedShowDayDedupe = new Map<string, CompactScheduleEntry>();
     const nowMs = Date.now();
 
     for (const row of rows) {
@@ -1854,9 +2122,23 @@ async function getFutureUpcomingCountsForUser(
           (startOfDay(bucketDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
 
-        const uniqueKey = `${tracked.watchlistId}:${dayKey}:${entry.episode.episodeNumber}`;
+        const seriesKey = getScheduleSeriesDedupeTitle(
+          tracked.normalizedTitle.length <= entry.normalizedTitle.length
+            ? tracked.normalizedTitle
+            : entry.normalizedTitle
+        );
+        const uniqueKey = `${tracked.watchlistId}:${dayKey}:${seriesKey}:${getScheduleEpisodeDedupeKey(entry.episode)}`;
         if (dedupe.has(uniqueKey)) continue;
+        const sameTrackedShowDayKey = `${tracked.watchlistId}:${dayKey}`;
+        const sameTrackedShowDayEntry = sameTrackedShowDayDedupe.get(sameTrackedShowDayKey);
+        if (
+          sameTrackedShowDayEntry &&
+          shouldCollapseSameTrackedShowDay(entry, sameTrackedShowDayEntry)
+        ) {
+          continue;
+        }
         dedupe.add(uniqueKey);
+        sameTrackedShowDayDedupe.set(sameTrackedShowDayKey, entry);
 
         const airtimeMs = getEpisodeAirtimeTimestamp(entry.episode.airDate);
         const isFutureDay = daysUntil > 0;

@@ -9,8 +9,6 @@ import { internal } from "@/convex/_generated/api";
 
 const crons = cronJobs();
 
-// Run daily before metadata refresh so newly resumed completed shows are not
-// immediately paused by stale lastWatchedAt values.
 // Cron syntax: minute hour day month dayOfWeek
 // "45 1 * * *" = Every day at 1:45 AM UTC
 crons.cron(
@@ -19,22 +17,13 @@ crons.cron(
   internal.shows.autoPauseInactiveShows
 );
 
-// Run daily at 2 AM UTC. This refreshes completed TV/anime titles so old
-// completed shows can resurface when providers release new episodes.
-crons.cron(
-  "refreshCompletedShowsForNewEpisodes",
-  "0 2 * * *",
-  internal.shows.refreshCompletedShowsForNewEpisodes
-);
-
-// Run monthly after the previous calendar month has fully settled. This is a
-// schedule-cache-only safety net for users who did not open the app while old
-// tracked shows released new episodes.
-crons.cron(
-  "monthlyHomeWatchlistScheduleSignals",
-  "30 3 2 * *",
-  internal.schedule.runMonthlyHomeWatchlistScheduleSignalBackfill
-);
+// Manual fallback only. Release/schedule confidence is owned by the external
+// SQLite reconciler, which applies compact deltas through scheduleConfidence.
+// Keep these callable for dev verification or emergency repair, but do not
+// schedule Convex-side provider/schedule sweeps by default.
+//
+// internal.shows.refreshCompletedShowsForNewEpisodes
+// internal.schedule.runMonthlyHomeWatchlistScheduleSignalBackfill
 
 // Manual repair only: dailyReconcileProjections is intentionally not scheduled.
 // It performs a full aggregate/projection rebuild and is too expensive for

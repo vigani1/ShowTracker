@@ -13,7 +13,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { Link } from "expo-router";
-import { useAction, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { FlashList, type ListRenderItem } from "@shopify/flash-list";
 import { api } from "@/convex/_generated/api";
 import { FilterBar } from "@/components/FilterBar";
@@ -22,7 +22,6 @@ import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useHorizontalSectionSwipe } from "@/hooks/use-horizontal-section-swipe";
 import { useStableDisplayPair } from "@/hooks/use-stable-display-value";
-import { getTmdbShowDetails, type TmdbShowDetails } from "@/lib/api/tmdb";
 import type { MediaType } from "@/lib/api/types";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
@@ -71,8 +70,6 @@ type UpcomingGroup = {
 
 const DAY_IN_MS = 1000 * 60 * 60 * 24;
 const GRID_GAP = 12;
-const INITIAL_UPCOMING_HYDRATION_TIMEOUT_MS = 8000;
-const TMDB_AIRED_LOOKUP_BATCH_SIZE = 8;
 const WATCHLIST_FUTURE_LOOKAHEAD_DAYS = 90;
 const homeModeOptions = [
   { value: "watchlist" as const, label: "Watchlist" },
@@ -83,140 +80,6 @@ const homeMediaFilterOptions = [
   { value: "tv" as const, label: "TV Shows" },
   { value: "anime" as const, label: "Anime" },
 ];
-
-function estimateAiredEpisodesFromTmdb(details: TmdbShowDetails) {
-  const now = new Date();
-
-  const parseEpisodeReleaseTime = (airDate?: string | null) => {
-    const trimmed = airDate?.trim();
-    if (!trimmed) {
-      return null;
-    }
-
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-      const parsedLocal = parseLocalDate(trimmed);
-      if (!parsedLocal) {
-        return null;
-      }
-
-      return parsedLocal;
-    }
-
-    const parsed = new Date(trimmed);
-    if (Number.isNaN(parsed.getTime())) {
-      return null;
-    }
-
-    return parsed;
-  };
-
-  const isFutureEpisode = (airDate?: string | null) => {
-    const parsed = parseEpisodeReleaseTime(airDate);
-    if (!parsed) {
-      return false;
-    }
-
-    return parsed.getTime() > now.getTime();
-  };
-
-  const isReleasedEpisode = (airDate?: string | null) => {
-    const parsed = parseEpisodeReleaseTime(airDate);
-    if (!parsed) {
-      return false;
-    }
-
-    return parsed.getTime() <= now.getTime();
-  };
-
-  const nonSpecialSeasons = (details.seasons ?? []).filter(
-    (season) => season.season_number >= 1
-  );
-
-  const getEpisodeOffset = (seasonNumber: number, episodeNumber: number) => {
-    const targetSeason = nonSpecialSeasons.find(
-      (season) => season.season_number === seasonNumber
-    );
-    const targetSeasonEpisodeCount =
-      typeof targetSeason?.episode_count === "number"
-        ? Math.max(targetSeason.episode_count, 0)
-        : null;
-
-    // Some TMDB TV entries report absolute episode numbers in
-    // `last_episode_to_air` / `next_episode_to_air` even when a season number
-    // is also present. When that happens, avoid double-counting prior seasons.
-    if (
-      typeof targetSeasonEpisodeCount === "number" &&
-      episodeNumber > targetSeasonEpisodeCount
-    ) {
-      return Math.max(episodeNumber, 0);
-    }
-
-    const episodesBeforeSeason = nonSpecialSeasons.reduce((sum, season) => {
-      if (season.season_number < seasonNumber) {
-        return sum + Math.max(season.episode_count ?? 0, 0);
-      }
-      return sum;
-    }, 0);
-
-    return episodesBeforeSeason + Math.max(episodeNumber, 0);
-  };
-
-  const nextEpisode = details.next_episode_to_air;
-  if (
-    typeof nextEpisode?.season_number === "number" &&
-    typeof nextEpisode.episode_number === "number"
-  ) {
-    const releasedThroughNext = getEpisodeOffset(
-      nextEpisode.season_number,
-      nextEpisode.episode_number
-    );
-
-    if (isReleasedEpisode(nextEpisode.air_date) && releasedThroughNext > 0) {
-      return releasedThroughNext;
-    }
-
-    if (isFutureEpisode(nextEpisode.air_date)) {
-      const airedBeforeNext = getEpisodeOffset(
-        nextEpisode.season_number,
-        nextEpisode.episode_number - 1
-      );
-
-      if (airedBeforeNext > 0) {
-        return airedBeforeNext;
-      }
-    }
-  }
-
-  const lastEpisode = details.last_episode_to_air;
-  const lastSeasonNumber = lastEpisode?.season_number;
-  const lastEpisodeNumber = lastEpisode?.episode_number;
-  if (
-    typeof lastSeasonNumber === "number" &&
-    typeof lastEpisodeNumber === "number"
-  ) {
-    const adjustedEpisodeNumber = isReleasedEpisode(lastEpisode?.air_date)
-      ? lastEpisodeNumber
-      : lastEpisodeNumber - 1;
-
-    if (nonSpecialSeasons.length === 0) {
-      return Math.max(adjustedEpisodeNumber, 0);
-    }
-
-    const airedAcrossSeasons = getEpisodeOffset(lastSeasonNumber, adjustedEpisodeNumber);
-
-    if (airedAcrossSeasons > 0) {
-      return airedAcrossSeasons;
-    }
-
-    return Math.max(adjustedEpisodeNumber, 0);
-  }
-
-  if (typeof details.number_of_episodes === "number" && details.number_of_episodes > 0) {
-    return details.number_of_episodes;
-  }
-
-  return null;
-}
 
 function parseLocalDate(dateString: string) {
   const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -348,7 +211,8 @@ function endOfMonthDate(date: Date) {
 }
 
 function startOfWeekDate(date: Date) {
-  return addDaysToDate(date, -date.getDay());
+  const mondayFirstDayOffset = (date.getDay() + 6) % 7;
+  return addDaysToDate(date, -mondayFirstDayOffset);
 }
 
 function endOfWeekDate(date: Date) {
@@ -399,12 +263,6 @@ function getInclusiveDayCount(startDate: string, endDate: string): number {
 
   const inclusiveDays = getUtcDayIndex(end) - getUtcDayIndex(start) + 1;
   return Math.max(1, inclusiveDays);
-}
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function getWatchlistRouteId(item: WatchlistItem) {
@@ -458,12 +316,23 @@ function WatchlistCard({
     item.totalEpisodes !== null
       ? Math.min(item.watchedEpisodes, item.totalEpisodes)
       : item.watchedEpisodes;
-  const cornerLabel =
-    item.remainingEpisodes === null
-      ? item.trackingState === "tba"
-        ? "TBA"
-        : "Upcoming"
-      : `${item.remainingEpisodes} left`;
+  const hasRemainingEpisodes =
+    typeof item.remainingEpisodes === "number" && item.remainingEpisodes > 0;
+  const cornerLabel = hasRemainingEpisodes
+    ? `${item.remainingEpisodes} left`
+    : item.status === "paused"
+      ? "Paused"
+      : item.status === "plan_to_watch"
+        ? item.trackingState === "tba"
+          ? "TBA"
+          : item.trackingState === "upcoming"
+            ? "Upcoming"
+            : "Queued"
+        : item.remainingEpisodes === null
+          ? item.trackingState === "tba"
+            ? "TBA"
+            : "Upcoming"
+          : "Caught up";
   const progressLabel =
     item.totalEpisodes === null
       ? safeWatchedEpisodes > 0
@@ -1219,7 +1088,7 @@ function WebUpcomingCalendar({
           showsVerticalScrollIndicator
         >
           <View className="mb-3 flex-row">
-            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label) => (
+            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
               <View key={label} className="flex-1 px-1">
                 <Text className="text-center text-[10px] font-black uppercase tracking-[1.6px] text-zinc-500">
                   {label}
@@ -1432,7 +1301,6 @@ export function HomeScreen() {
   const [pausedVisibleCount, setPausedVisibleCount] = useState(0);
   const [notStartedVisibleCount, setNotStartedVisibleCount] = useState(0);
   const [isLoadingMoreWatchlist, setIsLoadingMoreWatchlist] = useState(false);
-  const [isHydratingInitialUpcoming, setIsHydratingInitialUpcoming] = useState(false);
   const [isMonthPickerVisible, setIsMonthPickerVisible] = useState(false);
   const [monthPickerYear, setMonthPickerYear] = useState(() => new Date().getFullYear());
   const [gridWidth, setGridWidth] = useState(0);
@@ -1497,15 +1365,7 @@ export function HomeScreen() {
   const homeFeedMediaFilter =
     mediaFilter === "all" ? undefined : mediaFilter;
 
-  const hydratedRangesRef = useRef(new Set<string>());
-  const homeScheduleSignalRunsRef = useRef(new Set<string>());
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [tmdbAiredEpisodeCountById, setTmdbAiredEpisodeCountById] = useState<
-    Record<number, number>
-  >({});
-  const [tmdbAiredLookupFailuresById, setTmdbAiredLookupFailuresById] = useState<
-    Record<number, number>
-  >({});
   const [resolvedFutureCountsQueryKey, setResolvedFutureCountsQueryKey] = useState<
     string | null
   >(null);
@@ -1586,10 +1446,6 @@ export function HomeScreen() {
         }
       : "skip"
   );
-  const hydrateScheduleRange = useAction(api.schedule.hydrateScheduleRange);
-  const ensureHomeWatchlistScheduleSignals = useAction(
-    api.schedule.ensureHomeWatchlistScheduleSignals
-  );
   const homeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
   const pausedSectionMode =
     (homeSettings?.pausedSectionMode as HomePausedSectionMode | undefined) ??
@@ -1597,86 +1453,6 @@ export function HomeScreen() {
   const watchlistAirtimeMode =
     (homeSettings?.watchlistAirtimeMode as WatchlistAirtimeMode | undefined) ??
     "same_day";
-
-  const hydrateRange = useCallback(
-    async (startDate: string, days: number) => {
-      const safeDays = Math.max(1, Math.min(days, 42));
-      const cacheKey = `${startDate}:${safeDays}`;
-      if (hydratedRangesRef.current.has(cacheKey)) {
-        return;
-      }
-
-      hydratedRangesRef.current.add(cacheKey);
-      try {
-        await hydrateScheduleRange({
-          startDate,
-          days: safeDays,
-        });
-      } catch (error) {
-        hydratedRangesRef.current.delete(cacheKey);
-        throw error;
-      }
-    },
-    [hydrateScheduleRange]
-  );
-
-  useEffect(() => {
-    if (activeTab !== "watchlist") {
-      return;
-    }
-
-    const cacheKey = todayKey;
-    if (homeScheduleSignalRunsRef.current.has(cacheKey)) {
-      return;
-    }
-
-    homeScheduleSignalRunsRef.current.add(cacheKey);
-    void ensureHomeWatchlistScheduleSignals()
-      .then((result) => {
-        if (result?.reason === "schedule_hydration_failed") {
-          homeScheduleSignalRunsRef.current.delete(cacheKey);
-        }
-      })
-      .catch((error) => {
-        homeScheduleSignalRunsRef.current.delete(cacheKey);
-        console.warn("Home watchlist schedule signal refresh failed", error);
-      });
-  }, [activeTab, ensureHomeWatchlistScheduleSignals, todayKey]);
-
-  useEffect(() => {
-    if (activeTab !== "upcoming") {
-      return;
-    }
-
-    let cancelled = false;
-    setIsHydratingInitialUpcoming(true);
-
-    const hydrationPromise = hydrateRange(
-      upcomingRange.startDate,
-      upcomingRange.days
-    ).catch((error) => {
-      console.warn("Upcoming calendar hydration failed", error);
-    });
-
-    void Promise.race([
-      hydrationPromise,
-      delay(INITIAL_UPCOMING_HYDRATION_TIMEOUT_MS),
-    ])
-      .finally(() => {
-        if (!cancelled) {
-          setIsHydratingInitialUpcoming(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeTab,
-    hydrateRange,
-    upcomingRange.days,
-    upcomingRange.startDate,
-  ]);
 
   const activeFeedItems = useMemo(
     () => (activeFeed ?? []) as WatchlistItem[],
@@ -1732,83 +1508,6 @@ export function HomeScreen() {
     watchlistFutureUpcomingCounts,
   ]);
 
-  useEffect(() => {
-    if (activeTab !== "watchlist") {
-      return;
-    }
-
-    const tmdbIdsToFetch = watchlistItems
-      .filter(
-        (item) =>
-          item.mediaType === "tv" &&
-          typeof item.tmdbId === "number" &&
-          tmdbAiredEpisodeCountById[item.tmdbId] === undefined &&
-          (tmdbAiredLookupFailuresById[item.tmdbId] ?? 0) < 3
-      )
-      .map((item) => item.tmdbId as number);
-
-    if (tmdbIdsToFetch.length === 0) {
-      return;
-    }
-
-    const uniqueIds = Array.from(new Set(tmdbIdsToFetch)).slice(0, TMDB_AIRED_LOOKUP_BATCH_SIZE);
-    let isCancelled = false;
-
-    const fetchAiredCounts = async () => {
-      const updates: Record<number, number> = {};
-      const failedIds: number[] = [];
-
-      await Promise.all(
-        uniqueIds.map(async (tmdbId) => {
-          try {
-            const details = await getTmdbShowDetails("tv", tmdbId);
-            const airedEpisodes = estimateAiredEpisodesFromTmdb(details);
-            if (typeof airedEpisodes === "number") {
-              updates[tmdbId] = airedEpisodes;
-              return;
-            }
-          } catch (error) {
-            console.warn(`Failed to fetch aired episode count for TMDB ${tmdbId}`, error);
-          }
-
-          failedIds.push(tmdbId);
-        })
-      );
-
-      if (isCancelled) {
-        return;
-      }
-
-      if (Object.keys(updates).length > 0) {
-        setTmdbAiredEpisodeCountById((prev) => ({
-          ...prev,
-          ...updates,
-        }));
-      }
-
-      if (failedIds.length > 0) {
-        setTmdbAiredLookupFailuresById((prev) => {
-          const next = { ...prev };
-          for (const tmdbId of failedIds) {
-            next[tmdbId] = (next[tmdbId] ?? 0) + 1;
-          }
-          return next;
-        });
-      }
-    };
-
-    void fetchAiredCounts();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [
-    activeTab,
-    tmdbAiredEpisodeCountById,
-    tmdbAiredLookupFailuresById,
-    watchlistItems,
-  ]);
-
   const filteredWatchlist = useMemo(() => {
     return activeFeedItems.filter((item) => {
       const routeId = item.id;
@@ -1828,10 +1527,8 @@ export function HomeScreen() {
       const hasAvailableScheduleSignal =
         typeof item.newEpisodeSignalAt === "number" &&
         item.newEpisodeSignalAt > (item.lastWatchedAt ?? 0);
-      const hasTmdbAiredEpisodeFallback =
-        item.mediaType === "tv" && typeof item.tmdbId === "number";
       const allRemainingEpisodesAreFuture =
-        (!hasTmdbAiredEpisodeFallback || watchlistAirtimeMode === "after_airtime") &&
+        watchlistAirtimeMode === "after_airtime" &&
         typeof item.remainingEpisodes === "number" &&
         item.remainingEpisodes > 0 &&
         availableScheduleCount <= 0 &&
@@ -1848,22 +1545,7 @@ export function HomeScreen() {
         return false;
       }
 
-      if (item.mediaType === "tv" && typeof item.tmdbId === "number") {
-        const airedEpisodes = tmdbAiredEpisodeCountById[item.tmdbId];
-        if (typeof airedEpisodes === "number") {
-          const watchedEpisodes = Math.min(item.watchedEpisodes, airedEpisodes);
-          const releasedRemaining = Math.max(airedEpisodes - watchedEpisodes, 0);
-          if (releasedRemaining <= 0 && !hasAvailableScheduleSignal) {
-            return false;
-          }
-        } else if (
-          typeof item.remainingEpisodes === "number" &&
-          item.remainingEpisodes <= 0 &&
-          !hasAvailableScheduleSignal
-        ) {
-          return false;
-        }
-      } else if (
+      if (
         typeof item.remainingEpisodes === "number" &&
         item.remainingEpisodes <= 0 &&
         !hasAvailableScheduleSignal
@@ -1877,7 +1559,6 @@ export function HomeScreen() {
   }, [
     upcomingAvailabilityByRoute,
     mediaFilter,
-    tmdbAiredEpisodeCountById,
     activeFeedItems,
     watchlistAirtimeMode,
   ]);
@@ -1887,22 +1568,22 @@ export function HomeScreen() {
       if (item.status !== "paused") {
         return false;
       }
+      if (mediaFilter !== "all" && item.mediaType !== mediaFilter) {
+        return false;
+      }
+      if (pausedSectionMode === "all_paused") {
+        return true;
+      }
       if (typeof item.remainingEpisodes !== "number" || item.remainingEpisodes <= 0) {
         return false;
       }
       if (typeof item.watchedEpisodes !== "number" || item.watchedEpisodes <= 0) {
         return false;
       }
-      if (
-        pausedSectionMode === "auto_paused_only" &&
-        typeof item.autoPausedAt !== "number"
-      ) {
+      if (typeof item.autoPausedAt !== "number") {
         return false;
       }
       if (item.trackingState === "upcoming") {
-        return false;
-      }
-      if (mediaFilter !== "all" && item.mediaType !== mediaFilter) {
         return false;
       }
       return true;
@@ -1925,10 +1606,7 @@ export function HomeScreen() {
   const notStartedSectionWatchlist = useMemo(() => {
     return notStartedFeedItems
       .filter((item) => {
-        if (item.status === "paused" || item.status === "dropped" || item.status === "completed") {
-          return false;
-        }
-        if (item.trackingState === "upcoming" || item.trackingState === "tba") {
+        if (item.status !== "plan_to_watch") {
           return false;
         }
         if (item.watchedEpisodes > 0) {
@@ -1990,28 +1668,13 @@ export function HomeScreen() {
     () => watchlistSkeletonRows[0] ?? Array.from({ length: columns }, (_, index) => index),
     [columns, watchlistSkeletonRows]
   );
-  const pendingWatchlistTmdbLookups = useMemo(
-    () =>
-      visibleWatchlistItems.filter(
-        (item) =>
-          item.mediaType === "tv" &&
-          typeof item.tmdbId === "number" &&
-          tmdbAiredEpisodeCountById[item.tmdbId] === undefined &&
-          (tmdbAiredLookupFailuresById[item.tmdbId] ?? 0) < 3
-      ).length,
-    [
-      tmdbAiredEpisodeCountById,
-      tmdbAiredLookupFailuresById,
-      visibleWatchlistItems,
-    ]
-  );
   const isWatchlistFilterSettling =
     activeTab === "watchlist" &&
     activeFeed !== undefined &&
-    (isWatchlistFutureCountsLoading || pendingWatchlistTmdbLookups > 0);
+    isWatchlistFutureCountsLoading;
   const isWatchlistVisualLoading = isWatchlistLoading || isWatchlistFilterSettling;
   const isUpcomingContentLoading =
-    activeTab === "upcoming" && (upcoming === undefined || isHydratingInitialUpcoming);
+    activeTab === "upcoming" && upcoming === undefined;
   const watchlistSettleContextKey = useMemo(() => {
     if (activeFeed === undefined || pausedFeed === undefined || notStartedFeed === undefined) {
       return "";
@@ -2406,7 +2069,8 @@ export function HomeScreen() {
 
             <View className="rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5">
               <Text className="text-[10px] font-black uppercase tracking-[1.2px] text-amber-100">
-                {pausedSectionWatchlist.length} paused
+                {pausedSectionWatchlist.length}
+                {hasMorePausedSection ? "+" : ""} paused
               </Text>
             </View>
           </View>
@@ -2483,7 +2147,8 @@ export function HomeScreen() {
 
             <View className="rounded-full border border-sky-300/25 bg-sky-400/10 px-3 py-1.5">
               <Text className="text-[10px] font-black uppercase tracking-[1.2px] text-sky-100">
-                {notStartedSectionWatchlist.length} queued
+                {notStartedSectionWatchlist.length}
+                {hasMoreNotStartedSection ? "+" : ""} queued
               </Text>
             </View>
           </View>

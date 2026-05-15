@@ -1,0 +1,901 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Schedule Confidence Ops</title>
+  <style>
+    :root {
+      --bg: #efeadf;
+      --panel: #fffaf0;
+      --ink: #181713;
+      --muted: #70685f;
+      --line: #d7cbb7;
+      --teal: #0c6b63;
+      --blue: #263f73;
+      --brick: #9d3f27;
+      --gold: #8a6811;
+      --green: #23603c;
+      --red: #a33131;
+      --shadow: 0 16px 36px rgba(42, 33, 23, 0.13);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(24, 23, 19, 0.045) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(24, 23, 19, 0.035) 1px, transparent 1px),
+        var(--bg);
+      background-size: 38px 38px;
+      font-family: "Aptos", "Segoe UI", sans-serif;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .page {
+      width: min(1500px, calc(100vw - 28px));
+      margin: 0 auto;
+      padding: 22px 0 36px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: end;
+      padding: 12px 0 20px;
+      border-bottom: 2px solid var(--ink);
+    }
+
+    h1 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2.5rem, 5vw, 5.8rem);
+      line-height: 0.95;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 12px 0 0;
+      max-width: 820px;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      min-height: 38px;
+      padding: 8px 12px;
+      border: 1px solid var(--ink);
+      background: var(--panel);
+      color: var(--ink);
+      font-weight: 850;
+      box-shadow: 4px 4px 0 rgba(24, 23, 19, 0.12);
+    }
+
+    .btn.primary {
+      background: var(--ink);
+      color: var(--panel);
+    }
+
+    .btn.small {
+      min-height: 30px;
+      padding: 5px 8px;
+      font-size: 0.82rem;
+      box-shadow: none;
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(130px, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .kpi {
+      border: 1px solid var(--ink);
+      background: var(--panel);
+      padding: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .kpi span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .kpi strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 1.75rem;
+      line-height: 1;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(340px, 0.92fr) minmax(420px, 1.08fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 1px solid var(--ink);
+      background: rgba(255, 250, 240, 0.82);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: 1fr repeat(3, minmax(100px, 0.35fr));
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .field {
+      display: grid;
+      gap: 5px;
+    }
+
+    label {
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fffdf7;
+      color: var(--ink);
+      padding: 9px 10px;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 82px;
+      resize: vertical;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--ink);
+      box-shadow: 0 0 0 3px rgba(12, 107, 99, 0.16);
+    }
+
+    .issue-list {
+      max-height: calc(100vh - 330px);
+      overflow: auto;
+    }
+
+    .issue-row {
+      display: grid;
+      grid-template-columns: 82px 1fr auto;
+      gap: 10px;
+      align-items: start;
+      width: 100%;
+      padding: 13px 12px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      text-align: left;
+    }
+
+    .issue-row:hover,
+    .issue-row.active {
+      background: rgba(12, 107, 99, 0.09);
+    }
+
+    .issue-row h3 {
+      margin: 0;
+      font-size: 0.98rem;
+      line-height: 1.2;
+    }
+
+    .issue-row p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: fit-content;
+      min-height: 24px;
+      padding: 3px 7px;
+      border: 1px solid currentColor;
+      font-size: 0.68rem;
+      font-weight: 950;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .badge.error { color: var(--red); }
+    .badge.warning { color: var(--gold); }
+    .badge.fixed { color: var(--green); }
+    .badge.manual_link { color: var(--teal); }
+    .badge.ignored { color: var(--muted); }
+    .badge.fact { color: var(--blue); }
+
+    .detail {
+      padding: 16px;
+    }
+
+    .detail-empty {
+      min-height: 360px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      text-align: center;
+      padding: 24px;
+    }
+
+    .detail h2 {
+      margin: 0 0 8px;
+      font-size: clamp(1.8rem, 3vw, 3rem);
+      font-family: Georgia, "Times New Roman", serif;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 10px 0 16px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .box {
+      border: 1px solid var(--line);
+      background: #fffdf7;
+      padding: 12px;
+    }
+
+    .box h3 {
+      margin: 0 0 8px;
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 0.78rem;
+      color: #342d25;
+    }
+
+    .candidate-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .candidate {
+      border: 1px solid var(--line);
+      background: #fffdf7;
+      padding: 10px;
+    }
+
+    .candidate-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: start;
+    }
+
+    .candidate strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .candidate small {
+      color: var(--muted);
+    }
+
+    .resolution-form {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      background: #fffdf7;
+      padding: 7px 10px;
+      font-weight: 850;
+    }
+
+    .tab.active {
+      background: var(--ink);
+      color: var(--panel);
+      border-color: var(--ink);
+    }
+
+    .lower {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .compact-list {
+      max-height: 330px;
+      overflow: auto;
+    }
+
+    .compact-row {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .compact-row strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .compact-row span {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .status {
+      min-height: 22px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    @media (max-width: 1120px) {
+      header,
+      .layout,
+      .lower {
+        grid-template-columns: 1fr;
+      }
+
+      .kpis {
+        grid-template-columns: repeat(3, 1fr);
+      }
+
+      .issue-list {
+        max-height: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        width: calc(100vw - 16px);
+      }
+
+      .filters,
+      .grid,
+      .provider-grid,
+      .kpis {
+        grid-template-columns: 1fr;
+      }
+
+      .issue-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div>
+        <h1>Schedule Confidence Ops</h1>
+        <p class="subtitle">
+          Latest reconciler audit, low-confidence matches, provider gaps, and local resolution notes.
+          Manual provider IDs saved here are used by the next SQLite reconcile before matching.
+        </p>
+      </div>
+      <div class="header-actions">
+        <button class="btn" id="refreshBtn" type="button">Refresh</button>
+        <button class="btn primary" id="showOpenOnlyBtn" type="button">Open Issues</button>
+      </div>
+    </header>
+
+    <section class="kpis" id="kpis"></section>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Latest Audit Issues</h2>
+          <span class="status" id="statusText">Loading...</span>
+        </div>
+        <div class="filters">
+          <div class="field">
+            <label for="searchInput">Search</label>
+            <input id="searchInput" type="search" placeholder="Title, show id, issue type">
+          </div>
+          <div class="field">
+            <label for="typeFilter">Type</label>
+            <select id="typeFilter">
+              <option value="">All</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="severityFilter">Severity</label>
+            <select id="severityFilter">
+              <option value="">All</option>
+              <option value="error">Error</option>
+              <option value="warning">Warning</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="statusFilter">Status</label>
+            <select id="statusFilter">
+              <option value="open">Open</option>
+              <option value="">All</option>
+              <option value="manual_link">Manual Link</option>
+              <option value="needs_provider">Needs Provider</option>
+              <option value="fixed">Fixed</option>
+              <option value="ignored">Ignored</option>
+            </select>
+          </div>
+        </div>
+        <div class="issue-list" id="issueList"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Resolve</h2>
+          <span class="status" id="saveStatus"></span>
+        </div>
+        <div id="detail" class="detail-empty">Select an audit issue to inspect and resolve.</div>
+      </section>
+    </main>
+
+    <section class="lower">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Low Confidence Facts</h2>
+          <span class="status" id="factCount"></span>
+        </div>
+        <div class="compact-list" id="factList"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Manual Links & Runs</h2>
+          <span class="status" id="runText"></span>
+        </div>
+        <div class="tabs">
+          <button class="tab active" type="button" data-tab="links">Manual Links</button>
+          <button class="tab" type="button" data-tab="runs">Runs</button>
+        </div>
+        <div class="compact-list" id="sideList"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      data: null,
+      selectedKey: null,
+      activeTab: "links",
+      openOnly: true,
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const fmt = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function dateLabel(value) {
+      if (!value) return "n/a";
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) ? fmt.format(date) : "n/a";
+    }
+
+    function providerText(providerIds) {
+      const entries = Object.entries(providerIds ?? {});
+      return entries.length
+        ? entries.map(([key, value]) => `${key}: ${value}`).join(" · ")
+        : "No provider ids";
+    }
+
+    function badge(text, kind = "") {
+      return `<span class="badge ${escapeHtml(kind)}">${escapeHtml(text)}</span>`;
+    }
+
+    async function loadDashboard() {
+      $("statusText").textContent = "Loading...";
+      const response = await fetch("/api/dashboard", { cache: "no-store" });
+      if (!response.ok) throw new Error(await response.text());
+      state.data = await response.json();
+      if (!state.selectedKey && state.data.issues[0]) {
+        state.selectedKey = state.data.issues[0].issueKey;
+      }
+      render();
+    }
+
+    function issueStatus(issue) {
+      return issue.resolution?.status ?? "open";
+    }
+
+    function filteredIssues() {
+      const data = state.data;
+      if (!data) return [];
+      const search = $("searchInput").value.trim().toLowerCase();
+      const type = $("typeFilter").value;
+      const severity = $("severityFilter").value;
+      const status = $("statusFilter").value;
+      return data.issues.filter((issue) => {
+        const currentStatus = issueStatus(issue);
+        if (state.openOnly && ["fixed", "ignored"].includes(currentStatus)) return false;
+        if (type && issue.issueType !== type) return false;
+        if (severity && issue.severity !== severity) return false;
+        if (status && currentStatus !== status) return false;
+        if (!search) return true;
+        return [
+          issue.title,
+          issue.showId,
+          issue.canonicalKey,
+          issue.issueType,
+          issue.mediaType,
+          currentStatus,
+        ].some((value) => String(value ?? "").toLowerCase().includes(search));
+      });
+    }
+
+    function renderKpis() {
+      const data = state.data;
+      const latestRun = data.latestRun;
+      const kpis = [
+        ["Open Issues", data.issueCounts.total],
+        ["Errors", data.issueCounts.bySeverity.error ?? 0],
+        ["Warnings", data.issueCounts.bySeverity.warning ?? 0],
+        ["Facts", data.totals.releaseFacts],
+        ["Provider Events", data.totals.providerEvents],
+        ["Latest Run", latestRun ? dateLabel(latestRun.finishedAtIso ?? latestRun.startedAtIso) : "None"],
+      ];
+      $("kpis").innerHTML = kpis.map(([label, value]) => `
+        <article class="kpi">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </article>
+      `).join("");
+    }
+
+    function renderFilters() {
+      const current = $("typeFilter").value;
+      const types = [...new Set(state.data.issues.map((issue) => issue.issueType))].sort();
+      $("typeFilter").innerHTML = `<option value="">All</option>${types
+        .map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`)
+        .join("")}`;
+      $("typeFilter").value = types.includes(current) ? current : "";
+    }
+
+    function renderIssueList() {
+      const issues = filteredIssues();
+      $("statusText").textContent = `${issues.length} visible`;
+      if (issues.length === 0) {
+        $("issueList").innerHTML = `<div class="detail-empty">No issues match the filters.</div>`;
+        return;
+      }
+      $("issueList").innerHTML = issues.map((issue) => {
+        const currentStatus = issueStatus(issue);
+        return `
+          <button class="issue-row ${issue.issueKey === state.selectedKey ? "active" : ""}" type="button" data-issue="${escapeHtml(issue.issueKey)}">
+            <span>${badge(issue.severity, issue.severity)}</span>
+            <span>
+              <h3>${escapeHtml(issue.title)}</h3>
+              <p>${escapeHtml(issue.issueType)} · ${escapeHtml(issue.mediaType)} · ${escapeHtml(issue.showId ?? "no show id")}</p>
+            </span>
+            <span>${badge(currentStatus, currentStatus)}</span>
+          </button>
+        `;
+      }).join("");
+      document.querySelectorAll("[data-issue]").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.selectedKey = button.dataset.issue;
+          render();
+        });
+      });
+    }
+
+    function renderDetail() {
+      const issue = state.data.issues.find((item) => item.issueKey === state.selectedKey);
+      if (!issue) {
+        $("detail").className = "detail-empty";
+        $("detail").innerHTML = "Select an audit issue to inspect and resolve.";
+        return;
+      }
+      $("detail").className = "detail";
+      const providerIds = issue.resolution?.providerIds ?? {};
+      const candidates = issue.candidateEvents.length
+        ? issue.candidateEvents.map((candidate, index) => `
+          <article class="candidate">
+            <div class="candidate-head">
+              <div>
+                <strong>${escapeHtml(candidate.title)}</strong>
+                <small>${escapeHtml(candidate.sourceProvider)} · ${escapeHtml(candidate.region ?? "global")} · S${escapeHtml(candidate.seasonNumber)}E${escapeHtml(candidate.episodeNumber)} · ${escapeHtml(candidate.airDate)}</small>
+              </div>
+              <button class="btn small" type="button" data-candidate="${index}">Use IDs</button>
+            </div>
+            <pre>${escapeHtml(providerText(candidate.providerIds))}</pre>
+          </article>
+        `).join("")
+        : `<div class="box">No same-title provider events in the local SQLite store.</div>`;
+
+      $("detail").innerHTML = `
+        <h2>${escapeHtml(issue.title)}</h2>
+        <div class="meta">
+          ${badge(issue.severity, issue.severity)}
+          ${badge(issue.issueType)}
+          ${badge(issue.mediaType, "fact")}
+          ${badge(issueStatus(issue), issueStatus(issue))}
+        </div>
+        <div class="grid">
+          <div class="box">
+            <h3>Issue Details</h3>
+            <pre>${escapeHtml(JSON.stringify(issue.details, null, 2))}</pre>
+          </div>
+          <div class="box">
+            <h3>Identity</h3>
+            <pre>${escapeHtml(JSON.stringify({
+              issueKey: issue.issueKey,
+              canonicalKey: issue.canonicalKey,
+              showId: issue.showId,
+              runId: issue.runId,
+              createdAt: issue.createdAtIso,
+            }, null, 2))}</pre>
+          </div>
+        </div>
+        <div class="resolution-form">
+          <div class="field">
+            <label>Candidate Provider Events</label>
+            <div class="candidate-list">${candidates}</div>
+          </div>
+          <div class="provider-grid">
+            <div class="field"><label for="tmdbId">TMDB</label><input id="tmdbId" inputmode="numeric" value="${escapeHtml(providerIds.tmdbId ?? "")}"></div>
+            <div class="field"><label for="tvmazeId">TVMaze</label><input id="tvmazeId" inputmode="numeric" value="${escapeHtml(providerIds.tvmazeId ?? "")}"></div>
+            <div class="field"><label for="anilistId">AniList</label><input id="anilistId" inputmode="numeric" value="${escapeHtml(providerIds.anilistId ?? "")}"></div>
+            <div class="field"><label for="malId">MAL</label><input id="malId" inputmode="numeric" value="${escapeHtml(providerIds.malId ?? "")}"></div>
+            <div class="field"><label for="imdbId">IMDb</label><input id="imdbId" value="${escapeHtml(providerIds.imdbId ?? "")}"></div>
+          </div>
+          <div class="grid">
+            <div class="field">
+              <label for="resolutionStatus">Status</label>
+              <select id="resolutionStatus">
+                ${["needs_provider", "manual_link", "fixed", "ignored", "open"].map((status) => `
+                  <option value="${status}" ${issueStatus(issue) === status ? "selected" : ""}>${status}</option>
+                `).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label for="resolutionNote">Note</label>
+              <input id="resolutionNote" value="${escapeHtml(issue.resolution?.note ?? "")}" placeholder="Why this is safe or what to check next">
+            </div>
+          </div>
+          <div class="header-actions">
+            <button class="btn primary" id="saveResolutionBtn" type="button">Save Resolution</button>
+            <button class="btn" id="markFixedBtn" type="button">Mark Fixed</button>
+            <button class="btn" id="ignoreBtn" type="button">Ignore</button>
+          </div>
+        </div>
+      `;
+
+      document.querySelectorAll("[data-candidate]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const candidate = issue.candidateEvents[Number(button.dataset.candidate)];
+          fillProviderIds(candidate.providerIds);
+          $("resolutionStatus").value = "manual_link";
+        });
+      });
+      $("saveResolutionBtn").addEventListener("click", () => saveResolution(issue));
+      $("markFixedBtn").addEventListener("click", () => {
+        $("resolutionStatus").value = "fixed";
+        saveResolution(issue);
+      });
+      $("ignoreBtn").addEventListener("click", () => {
+        $("resolutionStatus").value = "ignored";
+        saveResolution(issue);
+      });
+    }
+
+    function fillProviderIds(providerIds) {
+      for (const key of ["tmdbId", "tvmazeId", "anilistId", "malId", "imdbId"]) {
+        $(key).value = providerIds?.[key] ?? "";
+      }
+    }
+
+    function numericOrNull(id) {
+      const value = $(id).value.trim();
+      if (!value) return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    async function saveResolution(issue) {
+      $("saveStatus").textContent = "Saving...";
+      const payload = {
+        showId: issue.showId,
+        title: issue.title,
+        mediaType: issue.mediaType,
+        status: $("resolutionStatus").value,
+        note: $("resolutionNote").value.trim(),
+        providerIds: {
+          tmdbId: numericOrNull("tmdbId"),
+          tvmazeId: numericOrNull("tvmazeId"),
+          anilistId: numericOrNull("anilistId"),
+          malId: numericOrNull("malId"),
+          imdbId: $("imdbId").value.trim() || null,
+        },
+      };
+      const hasProviderIds = Object.values(payload.providerIds).some((value) => value !== null && value !== "");
+      if (hasProviderIds && payload.status === "needs_provider") {
+        payload.status = "manual_link";
+      }
+      const response = await fetch(`/api/issues/${encodeURIComponent(issue.issueKey)}/resolution`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        $("saveStatus").textContent = "Save failed";
+        throw new Error(await response.text());
+      }
+      const result = await response.json();
+      state.data = result.dashboard;
+      $("saveStatus").textContent = "Saved";
+      render();
+    }
+
+    function renderFacts() {
+      const facts = state.data.lowConfidenceFacts;
+      $("factCount").textContent = `${facts.length} rows`;
+      $("factList").innerHTML = facts.length ? facts.map((fact) => `
+        <div class="compact-row">
+          <strong>${escapeHtml(fact.title)}</strong>
+          <span>${escapeHtml(fact.matchConfidence)} · ${escapeHtml(fact.releaseState)} · ${escapeHtml(providerText(fact.providerIds))}</span>
+        </div>
+      `).join("") : `<div class="detail-empty">No low-confidence release facts.</div>`;
+    }
+
+    function renderSideList() {
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.tab === state.activeTab);
+      });
+      if (state.activeTab === "runs") {
+        $("runText").textContent = `${state.data.runs.length} runs`;
+        $("sideList").innerHTML = state.data.runs.map((run) => `
+          <div class="compact-row">
+            <strong>${escapeHtml(dateLabel(run.finishedAtIso ?? run.startedAtIso))} · ${escapeHtml(run.mode)}</strong>
+            <span>${escapeHtml(run.scannedItems)} scanned · ${escapeHtml(run.changedFacts)} facts · ${escapeHtml(run.auditIssues)} audit issues</span>
+          </div>
+        `).join("") || `<div class="detail-empty">No runs yet.</div>`;
+        return;
+      }
+
+      $("runText").textContent = `${state.data.manualLinks.length} links`;
+      $("sideList").innerHTML = state.data.manualLinks.map((link) => `
+        <div class="compact-row">
+          <strong>${escapeHtml(link.title)}</strong>
+          <span>${escapeHtml(link.mediaType)} · ${escapeHtml(providerText(link.providerIds))}</span>
+        </div>
+      `).join("") || `<div class="detail-empty">No manual links saved yet.</div>`;
+    }
+
+    function render() {
+      if (!state.data) return;
+      renderKpis();
+      renderFilters();
+      renderIssueList();
+      renderDetail();
+      renderFacts();
+      renderSideList();
+      const latestRun = state.data.latestRun;
+      $("statusText").textContent = latestRun
+        ? `${filteredIssues().length} visible · ${dateLabel(latestRun.finishedAtIso ?? latestRun.startedAtIso)}`
+        : `${filteredIssues().length} visible · no run`;
+      $("showOpenOnlyBtn").textContent = state.openOnly ? "Open Issues" : "All Issues";
+    }
+
+    for (const id of ["searchInput", "typeFilter", "severityFilter", "statusFilter"]) {
+      $(id).addEventListener("input", render);
+      $(id).addEventListener("change", render);
+    }
+    $("refreshBtn").addEventListener("click", () => loadDashboard().catch(console.error));
+    $("showOpenOnlyBtn").addEventListener("click", () => {
+      state.openOnly = !state.openOnly;
+      $("statusFilter").value = state.openOnly ? "open" : "";
+      render();
+    });
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        state.activeTab = tab.dataset.tab;
+        renderSideList();
+      });
+    });
+
+    loadDashboard().catch((error) => {
+      $("statusText").textContent = "Failed to load";
+      $("issueList").innerHTML = `<div class="detail-empty">${escapeHtml(error.message)}</div>`;
+    });
+  </script>
+</body>
+</html>
