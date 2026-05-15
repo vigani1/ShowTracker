@@ -1,0 +1,14 @@
+[Unit]
+Description=ShowTracker schedule confidence reconciler
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=showtracker
+Group=showtracker
+WorkingDirectory=/opt/showtracker
+Environment=SHOWTRACKER_APP_DIR=/opt/showtracker
+Environment=SHOWTRACKER_RECONCILER_BRANCH=main
+ExecStart=/opt/showtracker/scripts/ops/run-schedule-confidence.sh
+Nice=5
