@@ -9,7 +9,11 @@ const APPLY_DELTA_LIMIT = 50;
 const SCHEDULE_CONFIDENCE_TOKEN_ENV = "SCHEDULE_CONFIDENCE_IMPORT_TOKEN";
 const SYNTHETIC_PREFIX = "SC Synthetic";
 const SYNTHETIC_NOW = Date.UTC(2026, 4, 14, 12, 0, 0);
-const SYNTHETIC_SCHEDULE_CACHE_DATES = ["2026-05-15", "2026-05-20"];
+const SYNTHETIC_SCHEDULE_CACHE_DATES = [
+  "2026-05-15",
+  "2026-05-20",
+  "2026-05-30",
+];
 const SCHEDULE_MOVE_PRUNE_WINDOW_DAYS = 45;
 
 const mediaTypeValidator = v.union(
@@ -61,6 +65,7 @@ const releaseDeltaValidator = v.object({
   latestReleased: v.optional(episodeFactValidator),
   nextScheduled: v.optional(episodeFactValidator),
   upcomingEpisodes: v.optional(v.array(episodeFactValidator)),
+  clearStaleEpisodeSignal: v.optional(v.boolean()),
   sourceProvider: v.optional(v.string()),
   reconciledAt: v.number(),
 });
@@ -80,6 +85,7 @@ type SyntheticCase = {
   imdbId?: string;
   firstAired: string;
   lastWatchedAt: number;
+  newEpisodeSignalAt?: number;
 };
 
 const syntheticCases: SyntheticCase[] = [
@@ -135,6 +141,21 @@ const syntheticCases: SyntheticCase[] = [
     malId: 971004,
     firstAired: "2026-04-01",
     lastWatchedAt: Date.UTC(2026, 4, 1),
+  },
+  {
+    key: "stale_future_signal",
+    title: `${SYNTHETIC_PREFIX} Stale Future Signal Clear`,
+    mediaType: "tv",
+    status: "watching",
+    watchedEpisodesCount: 1201,
+    totalEpisodes: 1202,
+    releasedEpisodes: 1201,
+    tmdbId: 981010,
+    tvmazeId: 991010,
+    imdbId: "tt9810100",
+    firstAired: "1996-01-08",
+    lastWatchedAt: Date.UTC(2026, 4, 9, 13, 0, 0),
+    newEpisodeSignalAt: Date.UTC(2026, 4, 16, 13, 0, 0),
   },
   {
     key: "completed_old",
@@ -1072,6 +1093,7 @@ export const applyReleaseDeltas = mutation({
       patchedUserShows: 0,
       patchedFeedProjections: 0,
       resumedCompletedShows: 0,
+      clearedStaleEpisodeSignals: 0,
       scheduleCacheRowsUpdated: 0,
       scheduleCacheRowsSkipped: 0,
       skippedTitleFallback: 0,
@@ -1160,6 +1182,15 @@ export const applyReleaseDeltas = mutation({
             userPatch.statusChangedAt = args.generatedAt;
             result.resumedCompletedShows += 1;
           }
+        } else if (
+          delta.clearStaleEpisodeSignal === true &&
+          typeof releasedEpisodes === "number" &&
+          watchedCount >= releasedEpisodes &&
+          typeof userShow.newEpisodeSignalAt === "number" &&
+          userShow.newEpisodeSignalAt > (userShow.lastWatchedAt ?? userShow.addedAt ?? 0)
+        ) {
+          setChangedField(userPatch, userShow, "newEpisodeSignalAt", undefined);
+          result.clearedStaleEpisodeSignals += 1;
         }
 
         if (Object.keys(userPatch).length > 0) {
@@ -1247,6 +1278,7 @@ export const seedSyntheticDevCases = mutation({
         watchedRuntimeMinutes: entry.watchedEpisodesCount * 45,
         statusChangedAt: entry.lastWatchedAt,
         completedAt: entry.status === "completed" ? entry.lastWatchedAt : undefined,
+        newEpisodeSignalAt: entry.newEpisodeSignalAt,
       });
 
       for (let episode = 1; episode <= entry.watchedEpisodesCount; episode += 1) {

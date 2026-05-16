@@ -23,6 +23,7 @@ Agent-first documentation for ShowTracker.
 | **[ADR-0003-tracked-metadata-refresh-cost-gate.md](ADR-0003-tracked-metadata-refresh-cost-gate.md)** | Tracked detail metadata refresh skips broad user-library aggregate repair while preserving show-level projection refresh |
 | **[ADR-0004-tracked-ids-projection-read.md](ADR-0004-tracked-ids-projection-read.md)** | Discover and Recommendations read tracked identity state from feed projections instead of N+1 show hydration |
 | **[ADR-0005-server-owned-schedule-refresh.md](ADR-0005-server-owned-schedule-refresh.md)** | Nightly schedule-confidence owns schedule freshness and prunes moved episode cache rows |
+| **[ADR-0006-clear-stale-release-signals.md](ADR-0006-clear-stale-release-signals.md)** | Server reconciliation clears stale Home release signals when trusted facts say the user is caught up |
 
 ## Testing
 

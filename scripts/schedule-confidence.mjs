@@ -110,6 +110,22 @@ const fixtureLibrary = [
     malId: 7004,
   },
   {
+    id: "fixture-stale-signal-break",
+    userId: "fixture-user",
+    showId: "show-stale-signal-break",
+    title: "Stale Signal Break",
+    mediaType: "tv",
+    status: "watching",
+    watchedEpisodesCount: 1201,
+    totalEpisodes: 1202,
+    releasedEpisodes: 1201,
+    remainingEpisodes: 0,
+    newEpisodeSignalAt: Date.UTC(2026, 4, 16, 13, 0, 0),
+    lastWatchedAt: Date.UTC(2026, 4, 9, 13, 0, 0),
+    tmdbId: 1014,
+    imdbId: "tt9012014",
+  },
+  {
     id: "fixture-completed",
     userId: "fixture-user",
     showId: "show-completed",
@@ -259,6 +275,18 @@ const fixtureProviderEvents = [
     providers: { anilistId: 8004, malId: 7004 },
   },
   {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:1014",
+    title: "Stale Signal Break",
+    mediaType: "tv",
+    region: "JP",
+    seasonNumber: 1,
+    episodeNumber: 1202,
+    name: "Break Week Return",
+    airDate: "2026-05-30T09:00:00.000Z",
+    providers: { tmdbId: 1014, imdbId: "tt9012014" },
+  },
+  {
     sourceProvider: "tvmaze",
     providerShowId: "tvmaze:9005",
     title: "Completed Returns",
@@ -406,6 +434,18 @@ const syntheticProviderEvents = [
     providers: { anilistId: 981004, malId: 971004 },
   },
   {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:981010",
+    title: "SC Synthetic Stale Future Signal Clear",
+    mediaType: "tv",
+    region: "JP",
+    seasonNumber: 1,
+    episodeNumber: 1202,
+    name: "Break Week Return",
+    airDate: "2026-05-30T09:00:00.000Z",
+    providers: { tmdbId: 981010, tvmazeId: 991010, imdbId: "tt9810100" },
+  },
+  {
     sourceProvider: "tvmaze",
     providerShowId: "tvmaze:991005",
     title: "SC Synthetic Completed Old Show Returns",
@@ -528,6 +568,8 @@ function initDb(db) {
       watched_episodes_count INTEGER NOT NULL DEFAULT 0,
       total_episodes INTEGER,
       released_episodes INTEGER,
+      remaining_episodes INTEGER,
+      new_episode_signal_at INTEGER,
       tmdb_id INTEGER,
       tvmaze_id INTEGER,
       anilist_id INTEGER,
@@ -645,6 +687,8 @@ function initDb(db) {
     CREATE INDEX IF NOT EXISTS idx_manual_provider_media_title ON manual_provider_links(media_type, title);
   `);
   addColumnIfMissing(db, "library_items", "last_watched_at", "INTEGER");
+  addColumnIfMissing(db, "library_items", "remaining_episodes", "INTEGER");
+  addColumnIfMissing(db, "library_items", "new_episode_signal_at", "INTEGER");
   addColumnIfMissing(db, "audit_issues", "run_id", "TEXT");
   addColumnIfMissing(db, "audit_issues", "issue_key", "TEXT");
   db.exec(`
@@ -774,10 +818,10 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
     INSERT INTO library_items (
       id, user_id, show_id, projection_id, user_show_id, title, normalized_title,
       media_type, status, watched_episodes_count, total_episodes, released_episodes,
-      tmdb_id, tvmaze_id, anilist_id, mal_id, imdb_id, first_aired, last_watched_at,
-      imported_at
+      remaining_episodes, new_episode_signal_at, tmdb_id, tvmaze_id, anilist_id,
+      mal_id, imdb_id, first_aired, last_watched_at, imported_at
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(id) DO UPDATE SET
       user_id = excluded.user_id,
@@ -791,6 +835,8 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
       watched_episodes_count = excluded.watched_episodes_count,
       total_episodes = excluded.total_episodes,
       released_episodes = excluded.released_episodes,
+      remaining_episodes = excluded.remaining_episodes,
+      new_episode_signal_at = excluded.new_episode_signal_at,
       tmdb_id = excluded.tmdb_id,
       tvmaze_id = excluded.tvmaze_id,
       anilist_id = excluded.anilist_id,
@@ -812,6 +858,8 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
     Math.max(0, Math.floor(numberOrNull(item.watchedEpisodesCount ?? item.watched_episodes_count) ?? 0)),
     numberOrNull(item.totalEpisodes ?? item.total_episodes),
     numberOrNull(item.releasedEpisodes ?? item.released_episodes),
+    numberOrNull(item.remainingEpisodes ?? item.remaining_episodes),
+    numberOrNull(item.newEpisodeSignalAt ?? item.new_episode_signal_at),
     providerIds.tmdbId,
     providerIds.tvmazeId,
     providerIds.anilistId,
@@ -1330,7 +1378,30 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   };
 }
 
+function shouldClearStaleEpisodeSignal(item, fact) {
+  if (item.status !== "watching" && item.status !== "completed") {
+    return false;
+  }
+  const signalAt = numberOrNull(item.newEpisodeSignalAt ?? item.new_episode_signal_at);
+  if (typeof signalAt !== "number") {
+    return false;
+  }
+  const lastWatchedAt = numberOrNull(item.lastWatchedAt ?? item.last_watched_at) ?? 0;
+  if (signalAt <= lastWatchedAt) {
+    return false;
+  }
+  if (typeof fact.releasedEpisodes !== "number") {
+    return false;
+  }
+  const watchedCount = Math.max(
+    0,
+    Math.floor(numberOrNull(item.watchedEpisodesCount ?? item.watched_episodes_count) ?? 0)
+  );
+  return watchedCount >= fact.releasedEpisodes;
+}
+
 function storeFactAndDelta(db, fact, item, createdAt) {
+  const clearStaleEpisodeSignal = shouldClearStaleEpisodeSignal(item, fact);
   const payload = {
     canonicalKey: fact.canonicalKey,
     showId: item.show_id,
@@ -1362,12 +1433,20 @@ function storeFactAndDelta(db, fact, item, createdAt) {
       hasUpcomingSchedule: Boolean(fact.nextScheduled),
     },
   };
+  if (clearStaleEpisodeSignal) {
+    payload.clearStaleEpisodeSignal = true;
+  }
   const stablePayload = {
     ...payload,
     reconciledAt: undefined,
+    clearStaleEpisodeSignal: undefined,
   };
   delete stablePayload.reconciledAt;
+  delete stablePayload.clearStaleEpisodeSignal;
   const checksum = hashJson(stablePayload);
+  const deltaChecksum = clearStaleEpisodeSignal
+    ? hashJson({ ...stablePayload, clearStaleEpisodeSignal: true })
+    : checksum;
   const previousFact = db
     .prepare("SELECT checksum FROM release_facts WHERE canonical_key = ?")
     .get(fact.canonicalKey);
@@ -1413,7 +1492,7 @@ function storeFactAndDelta(db, fact, item, createdAt) {
     checksum
   );
 
-  if (changed) {
+  if (changed || clearStaleEpisodeSignal) {
     db.prepare(`
       INSERT INTO convex_deltas (canonical_key, payload_json, checksum, created_at)
       VALUES (?, ?, ?, ?)
@@ -1422,7 +1501,7 @@ function storeFactAndDelta(db, fact, item, createdAt) {
         checksum = excluded.checksum,
         created_at = excluded.created_at,
         applied_at = NULL
-    `).run(fact.canonicalKey, JSON.stringify(payload), checksum, createdAt);
+    `).run(fact.canonicalKey, JSON.stringify(payload), deltaChecksum, createdAt);
   } else if (!existingDelta || existingDelta.applied_at !== null) {
     db.prepare("DELETE FROM convex_deltas WHERE canonical_key = ?").run(fact.canonicalKey);
   }
@@ -1892,6 +1971,8 @@ async function importConvex(db, options) {
                 0,
                 (item.watchedEpisodesCount ?? 0) + (item.remainingEpisodes ?? 0)
               ),
+        remainingEpisodes: item.remainingEpisodes,
+        newEpisodeSignalAt: item.newEpisodeSignalAt,
         tmdbId: item.tmdbId,
         tvmazeId: item.tvmazeId,
         anilistId: item.anilistId,
@@ -1986,6 +2067,7 @@ async function applyConvex(deltaPath, options) {
         "patchedUserShows",
         "patchedFeedProjections",
         "resumedCompletedShows",
+        "clearedStaleEpisodeSignals",
         "scheduleCacheRowsUpdated",
         "scheduleCacheRowsSkipped",
         "skippedTitleFallback",
@@ -2394,6 +2476,7 @@ function aggregateApplyResults(applyResult) {
       patchedUserShows: 0,
       patchedFeedProjections: 0,
       resumedCompletedShows: 0,
+      clearedStaleEpisodeSignals: 0,
       scheduleCacheRowsUpdated: 0,
       scheduleCacheRowsSkipped: 0,
       skippedTitleFallback: 0,
@@ -2421,6 +2504,8 @@ function validateDevWorkflowResults({
   const bridged = getSnapshotRow(afterSnapshot, "Bridged Provider Match");
   const global = getSnapshotRow(afterSnapshot, "Global Web Release");
   const future = getSnapshotRow(afterSnapshot, "Future Anime");
+  const staleFutureSignalBefore = getSnapshotRow(beforeSnapshot, "Stale Future Signal Clear");
+  const staleFutureSignalAfter = getSnapshotRow(afterSnapshot, "Stale Future Signal Clear");
   const completed = getSnapshotRow(afterSnapshot, "Completed Old Show Returns");
   const missingProvider = getSnapshotRow(afterSnapshot, "Missing Provider Link");
   const titleFallback = getSnapshotRow(afterSnapshot, "Title Fallback Only");
@@ -2431,7 +2516,7 @@ function validateDevWorkflowResults({
   const staleProjectionBefore = getSnapshotRow(beforeSnapshot, "Stale Projection Repair");
   const staleProjectionAfter = getSnapshotRow(afterSnapshot, "Stale Projection Repair");
 
-  assertValidation(beforeSnapshot.count === 9 && afterSnapshot.count === 9, "Synthetic dev snapshot count changed.", {
+  assertValidation(beforeSnapshot.count === 10 && afterSnapshot.count === 10, "Synthetic dev snapshot count changed.", {
     before: beforeSnapshot.count,
     after: afterSnapshot.count,
   });
@@ -2476,6 +2561,17 @@ function validateDevWorkflowResults({
       hasScheduleEntry(future, "2026-05-20", "anime", 11) &&
       !hasScheduleEntry(future, "2026-05-15", "anime", 11),
     "Future episode dev case did not move the schedule row without available-now attention."
+  );
+  assertValidation(
+    firstProjection(staleFutureSignalBefore)?.remainingEpisodes === 0 &&
+      typeof firstUserShow(staleFutureSignalBefore)?.newEpisodeSignalAt === "number" &&
+      staleFutureSignalAfter?.releasedEpisodes === 1201 &&
+      firstProjection(staleFutureSignalAfter)?.remainingEpisodes === 0 &&
+      firstUserShow(staleFutureSignalAfter)?.newEpisodeSignalAt === null &&
+      firstProjection(staleFutureSignalAfter)?.newEpisodeSignalAt === null &&
+      hasScheduleEntry(staleFutureSignalAfter, "2026-05-30", "tv", 1202) &&
+      applyTotals.clearedStaleEpisodeSignals >= 1,
+    "Stale future signal dev case did not clear old Home attention while preserving the future schedule row."
   );
   assertValidation(
     firstUserShow(completed)?.status === "watching" &&
@@ -2539,7 +2635,7 @@ function validateDevWorkflowResults({
   );
 
   return {
-    checks: 16,
+    checks: 17,
     imported: importResult.imported,
     reconciled: reconcileSummary.scannedItems,
     deltas: reconcileSummary.deltas,
@@ -2674,7 +2770,13 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     "Future scheduled episode was not distinguished from available-now attention."
   );
   assertValidation(
-    summary.changedFacts >= 6 && summary.deltas >= 6,
+    byShowId.get("show-stale-signal-break")?.clearStaleEpisodeSignal === true &&
+      byShowId.get("show-stale-signal-break")?.simulatedProjection.remainingEpisodes === 0 &&
+      byShowId.get("show-stale-signal-break")?.simulatedProjection.hasUpcomingSchedule === true,
+    "Stale episode signal break case did not emit a targeted stale-signal clearing delta."
+  );
+  assertValidation(
+    summary.changedFacts >= 7 && summary.deltas >= 7,
     "Reconciliation did not produce the expected compact facts/deltas.",
     summary
   );
@@ -2684,7 +2786,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   );
 
   return {
-    checks: 10,
+    checks: 11,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,
