@@ -2473,8 +2473,9 @@ function validateDevWorkflowResults({
     future?.releasedEpisodes === 10 &&
       firstProjection(future)?.remainingEpisodes === 0 &&
       firstUserShow(future)?.newEpisodeSignalAt === null &&
-      hasScheduleEntry(future, "2026-05-20", "anime", 11),
-    "Future episode dev case was not kept distinct from available-now attention."
+      hasScheduleEntry(future, "2026-05-20", "anime", 11) &&
+      !hasScheduleEntry(future, "2026-05-15", "anime", 11),
+    "Future episode dev case did not move the schedule row without available-now attention."
   );
   assertValidation(
     firstUserShow(completed)?.status === "watching" &&

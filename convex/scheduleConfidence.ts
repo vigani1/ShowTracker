@@ -10,6 +10,7 @@ const SCHEDULE_CONFIDENCE_TOKEN_ENV = "SCHEDULE_CONFIDENCE_IMPORT_TOKEN";
 const SYNTHETIC_PREFIX = "SC Synthetic";
 const SYNTHETIC_NOW = Date.UTC(2026, 4, 14, 12, 0, 0);
 const SYNTHETIC_SCHEDULE_CACHE_DATES = ["2026-05-15", "2026-05-20"];
+const SCHEDULE_MOVE_PRUNE_WINDOW_DAYS = 45;
 
 const mediaTypeValidator = v.union(
   v.literal("tv"),
@@ -234,6 +235,15 @@ function parseDateKey(value: string | undefined) {
   return parsed.toISOString().slice(0, 10);
 }
 
+function addDaysToDateKey(dateKey: string, days: number) {
+  const parsed = new Date(`${dateKey}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime())) {
+    return dateKey;
+  }
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
 function getEpisodeSignalAt(episode: {
   airDate?: string;
   airTimestamp?: number;
@@ -340,6 +350,44 @@ function getRouteProviderShowIds(delta: {
   }
 
   ids.add(`title:${delta.mediaType}:${normalizeTitle(delta.title)}`);
+  return ids;
+}
+
+function getDurableRouteProviderShowIds(delta: {
+  mediaType: "tv" | "anime" | "movie";
+  providerIds: {
+    tvmazeId?: number;
+    anilistId?: number;
+    malId?: number;
+    tmdbId?: number;
+    imdbId?: string;
+  };
+}) {
+  const ids = new Set<string>();
+
+  if (delta.mediaType === "anime") {
+    if (typeof delta.providerIds.anilistId === "number") {
+      ids.add(`anilist:${delta.providerIds.anilistId}`);
+    }
+    if (typeof delta.providerIds.malId === "number") {
+      ids.add(`jikan:${delta.providerIds.malId}`);
+    }
+  }
+
+  if (delta.mediaType === "tv" || delta.mediaType === "movie") {
+    if (typeof delta.providerIds.tmdbId === "number") {
+      ids.add(`tmdb:${delta.mediaType}:${delta.providerIds.tmdbId}`);
+    }
+  }
+
+  if (delta.mediaType === "tv" && typeof delta.providerIds.tvmazeId === "number") {
+    ids.add(`tvmaze:${delta.providerIds.tvmazeId}`);
+  }
+
+  if (typeof delta.providerIds.imdbId === "string") {
+    ids.add(`imdb:${delta.mediaType}:${delta.providerIds.imdbId}`);
+  }
+
   return ids;
 }
 
@@ -534,6 +582,62 @@ async function deleteSyntheticRows(ctx: MutationCtx) {
   };
 }
 
+async function upsertSyntheticScheduleCacheEntry(
+  ctx: MutationCtx,
+  args: {
+    date: string;
+    mediaType: "tv" | "anime";
+    showId: string;
+    normalizedTitle: string;
+    episode: {
+      seasonNumber: number;
+      episodeNumber: number;
+      name?: string;
+      airDate?: string;
+    };
+  }
+) {
+  const rows = await ctx.db
+    .query("scheduleCache")
+    .withIndex("by_date_type", (q) =>
+      q.eq("date", args.date).eq("mediaType", args.mediaType)
+    )
+    .collect();
+  const [row, ...duplicates] = rows;
+  const existingEntries = row ? parseCompactScheduleEntries(row.episodes) : [];
+  const entries = existingEntries.filter(
+    (entry) =>
+      !(
+        entry.showId === args.showId &&
+        entry.episode.seasonNumber === args.episode.seasonNumber &&
+        entry.episode.episodeNumber === args.episode.episodeNumber
+      )
+  );
+
+  entries.push({
+    showId: args.showId,
+    normalizedTitle: args.normalizedTitle,
+    episode: args.episode,
+  });
+
+  const payload = {
+    date: args.date,
+    mediaType: args.mediaType,
+    episodes: serializeCompactScheduleEntries(entries),
+    lastUpdated: Date.now(),
+  };
+
+  if (row) {
+    await ctx.db.patch(row._id, payload);
+  } else {
+    await ctx.db.insert("scheduleCache", payload);
+  }
+
+  for (const duplicate of duplicates) {
+    await ctx.db.delete(duplicate._id);
+  }
+}
+
 async function patchProjectionForUserShow(
   ctx: MutationCtx,
   userShow: Doc<"userShows">,
@@ -571,6 +675,104 @@ async function patchProjectionForUserShow(
   patch.updatedAt = Date.now();
   await ctx.db.patch(projection._id, patch);
   return true;
+}
+
+async function pruneMovedScheduleCacheEntries(
+  ctx: MutationCtx,
+  args: {
+    mediaType: "tv" | "anime";
+    durableRouteProviderShowIds: Set<string>;
+    factsByDate: Map<
+      string,
+      Array<{
+        seasonNumber: number;
+        episodeNumber: number;
+        name?: string;
+        airDate?: string;
+      }>
+    >;
+  }
+) {
+  if (args.durableRouteProviderShowIds.size === 0) {
+    return 0;
+  }
+
+  const dates = Array.from(args.factsByDate.keys()).sort();
+  if (dates.length === 0) {
+    return 0;
+  }
+
+  const desiredDatesByEpisodeNumber = new Map<string, Set<string>>();
+  const desiredDatesByEpisodeName = new Map<string, Set<string>>();
+
+  for (const [date, facts] of args.factsByDate) {
+    for (const fact of facts) {
+      const numberKey = `${fact.seasonNumber}:${fact.episodeNumber}`;
+      const numberDates = desiredDatesByEpisodeNumber.get(numberKey) ?? new Set<string>();
+      numberDates.add(date);
+      desiredDatesByEpisodeNumber.set(numberKey, numberDates);
+
+      const nameKey = normalizeTitle(fact.name ?? "");
+      if (nameKey) {
+        const nameDates = desiredDatesByEpisodeName.get(nameKey) ?? new Set<string>();
+        nameDates.add(date);
+        desiredDatesByEpisodeName.set(nameKey, nameDates);
+      }
+    }
+  }
+
+  const startDate = addDaysToDateKey(
+    dates[0],
+    -SCHEDULE_MOVE_PRUNE_WINDOW_DAYS
+  );
+  const endDate = addDaysToDateKey(
+    dates[dates.length - 1],
+    SCHEDULE_MOVE_PRUNE_WINDOW_DAYS
+  );
+  const rows = await ctx.db
+    .query("scheduleCache")
+    .withIndex("by_type_date", (q) =>
+      q.eq("mediaType", args.mediaType).gte("date", startDate).lte("date", endDate)
+    )
+    .collect();
+
+  let rowsUpdated = 0;
+  for (const row of rows) {
+    const existingEntries = parseCompactScheduleEntries(row.episodes);
+    const entries = existingEntries.filter((entry) => {
+      if (!args.durableRouteProviderShowIds.has(entry.showId)) {
+        return true;
+      }
+
+      const episodeNumberKey = `${entry.episode.seasonNumber}:${entry.episode.episodeNumber}`;
+      const desiredNumberDates = desiredDatesByEpisodeNumber.get(episodeNumberKey);
+      if (desiredNumberDates && !desiredNumberDates.has(row.date)) {
+        return false;
+      }
+
+      const episodeNameKey = normalizeTitle(entry.episode.name ?? "");
+      const desiredNameDates = episodeNameKey
+        ? desiredDatesByEpisodeName.get(episodeNameKey)
+        : undefined;
+      if (desiredNameDates && !desiredNameDates.has(row.date)) {
+        return false;
+      }
+
+      return true;
+    });
+
+    if (entries.length === existingEntries.length) {
+      continue;
+    }
+
+    await ctx.db.patch(row._id, {
+      episodes: serializeCompactScheduleEntries(entries),
+      lastUpdated: Date.now(),
+    });
+    rowsUpdated += 1;
+  }
+
+  return rowsUpdated;
 }
 
 async function upsertScheduleCacheEntry(
@@ -611,6 +813,7 @@ async function upsertScheduleCacheEntry(
   const mediaType = delta.mediaType;
   const showId = getRouteProviderShowId(delta);
   const routeProviderShowIds = getRouteProviderShowIds(delta);
+  const durableRouteProviderShowIds = getDurableRouteProviderShowIds(delta);
   const normalizedTitle = normalizeTitle(delta.title);
 
   const upcomingFacts =
@@ -654,6 +857,12 @@ async function upsertScheduleCacheEntry(
       factsByDate.set(date, existing);
     }
   }
+
+  rowsUpdated += await pruneMovedScheduleCacheEntries(ctx, {
+    mediaType,
+    durableRouteProviderShowIds,
+    factsByDate,
+  });
 
   for (const [date, dateFacts] of factsByDate) {
     const rows = await ctx.db
@@ -1059,6 +1268,21 @@ export const seedSyntheticDevCases = mutation({
         throw new Error(`Failed to read seeded synthetic case ${entry.key}`);
       }
       await patchProjectionForUserShow(ctx, userShow, show);
+
+      if (entry.key === "future" && typeof entry.anilistId === "number") {
+        await upsertSyntheticScheduleCacheEntry(ctx, {
+          date: "2026-05-15",
+          mediaType: "anime",
+          showId: `anilist:${entry.anilistId}`,
+          normalizedTitle: normalizeTitle(entry.title),
+          episode: {
+            seasonNumber: 1,
+            episodeNumber: 11,
+            name: "Episode 11",
+            airDate: "2026-05-15T09:00:00.000Z",
+          },
+        });
+      }
 
       created.push({
         key: entry.key,
