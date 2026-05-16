@@ -20,6 +20,8 @@ Agent-first documentation for ShowTracker.
 |-----|----------|
 | **[ADR-0001-overlay-detail-routes.md](ADR-0001-overlay-detail-routes.md)** | Show details use Overlay Detail Routes for in-app navigation while keeping direct URLs full-page |
 | **[ADR-0002-watchlist-schedule-cache-bridge.md](ADR-0002-watchlist-schedule-cache-bridge.md)** | Home uses same-day schedule cache facts as watchlist attention while keeping provider matching conservative |
+| **[ADR-0003-tracked-metadata-refresh-cost-gate.md](ADR-0003-tracked-metadata-refresh-cost-gate.md)** | Tracked detail metadata refresh skips broad user-library aggregate repair while preserving show-level projection refresh |
+| **[ADR-0004-tracked-ids-projection-read.md](ADR-0004-tracked-ids-projection-read.md)** | Discover and Recommendations read tracked identity state from feed projections instead of N+1 show hydration |
 
 ## Testing
 

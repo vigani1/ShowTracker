@@ -4058,8 +4058,25 @@ export const refreshTrackedShowMetadata = action({
       };
     }
 
+    const userShow: Doc<"userShows"> | null = await ctx.runQuery(
+      internal.shows.findUserShowByUserAndShowId,
+      {
+        userId,
+        showId: show._id,
+      }
+    );
+    if (!userShow) {
+      return {
+        refreshed: false,
+        repairedUsers: 0,
+        resumedUserShows: 0,
+        externalShowId: getShowRouteId(show),
+        reason: "not_tracked" as const,
+      };
+    }
+
     return refreshShowMetadataAndRepairTracking(ctx, show._id, {
-      repairUserId: userId,
+      skipBroadAggregateRepair: true,
     });
   },
 });
@@ -5232,8 +5249,8 @@ export const getTrackedIds = query({
     const typedUserId = userId as Id<"users">;
 
     const safeLimit = Math.max(1, Math.min(args.limit ?? 1000, 2000));
-    const userShows = await ctx.db
-      .query("userShows")
+    const projections = await ctx.db
+      .query("feedProjections")
       .withIndex("by_user", (q) => q.eq("userId", typedUserId))
       .take(safeLimit);
 
@@ -5271,24 +5288,24 @@ export const getTrackedIds = query({
 
     const deduped = new Map<string, TrackedProjection>();
 
-    for (const userShow of userShows) {
-      const show = await ctx.db.get(userShow.showId);
-      if (!show) continue;
-
-      const mediaType = show.mediaType;
+    for (const projection of projections) {
+      const mediaType = projection.mediaType;
       const key =
         mediaType === "anime"
-          ? `anime:${show.anilistId ?? show.malId ?? show._id}`
-          : `${mediaType}:${show.tmdbId ?? show._id}`;
+          ? `anime:${projection.anilistId ?? projection.malId ?? projection.showId}`
+          : `${mediaType}:${projection.tmdbId ?? projection.showId}`;
 
       const candidate = {
         mediaType,
-        tmdbId: show.tmdbId ?? null,
-        anilistId: show.anilistId ?? null,
-        status: userShow.status,
-        watchedEpisodesCount: Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0)),
-        totalEpisodes: show.totalEpisodes ?? null,
-        updatedAt: userShow.lastWatchedAt ?? userShow.statusChangedAt ?? userShow.addedAt,
+        tmdbId: projection.tmdbId ?? null,
+        anilistId: projection.anilistId ?? null,
+        status: projection.status,
+        watchedEpisodesCount: Math.max(0, Math.floor(projection.watchedEpisodesCount)),
+        totalEpisodes: projection.totalEpisodes ?? null,
+        updatedAt:
+          typeof projection.lastWatchedAt === "number"
+            ? projection.lastWatchedAt
+            : projection.updatedAt,
       };
       const existing = deduped.get(key);
 

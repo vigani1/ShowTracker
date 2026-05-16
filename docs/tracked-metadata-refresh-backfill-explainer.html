@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tracked Metadata Refresh Backfill Explainer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #171713;
+        --panel: #22231d;
+        --panel-strong: #2b2c24;
+        --text: #f3f0e6;
+        --muted: #bdb6a2;
+        --faint: #7f7763;
+        --line: #464433;
+        --hot: #ff695c;
+        --hot-soft: rgba(255, 105, 92, 0.18);
+        --ok: #57c98f;
+        --ok-soft: rgba(87, 201, 143, 0.16);
+        --warn: #f0b44f;
+        --warn-soft: rgba(240, 180, 79, 0.17);
+        --blue: #64a8ff;
+        --blue-soft: rgba(100, 168, 255, 0.15);
+        --ink: #080907;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          radial-gradient(circle at 18% 0%, rgba(240, 180, 79, 0.14), transparent 28rem),
+          radial-gradient(circle at 100% 12%, rgba(87, 201, 143, 0.11), transparent 26rem),
+          var(--bg);
+        background-size: 44px 44px, 44px 44px, auto, auto, auto;
+        color: var(--text);
+        font-family: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
+        letter-spacing: 0;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          repeating-linear-gradient(
+            0deg,
+            rgba(255, 255, 255, 0.03) 0,
+            rgba(255, 255, 255, 0.03) 1px,
+            transparent 1px,
+            transparent 5px
+          );
+        mix-blend-mode: overlay;
+        opacity: 0.16;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 56px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 0 22px;
+        color: var(--muted);
+        font-size: 13px;
+        text-transform: uppercase;
+      }
+
+      .topbar strong {
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .nav a {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 7px 10px;
+        text-decoration: none;
+        background: rgba(34, 35, 29, 0.78);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+        gap: 22px;
+        align-items: stretch;
+        margin-bottom: 24px;
+      }
+
+      .headline {
+        min-height: 360px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        padding: 24px 0;
+      }
+
+      .label {
+        width: fit-content;
+        border: 1px solid var(--warn);
+        border-radius: 999px;
+        color: #ffe4aa;
+        background: var(--warn-soft);
+        padding: 7px 12px;
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 780px;
+        margin: 26px 0 18px;
+        font-family: "Iowan Old Style", "Charter", "Palatino Linotype", serif;
+        font-size: clamp(42px, 7vw, 86px);
+        line-height: 0.93;
+        font-weight: 900;
+      }
+
+      .lede {
+        max-width: 760px;
+        color: var(--muted);
+        font-size: clamp(17px, 2.2vw, 23px);
+        line-height: 1.42;
+      }
+
+      .answer {
+        display: grid;
+        align-content: center;
+        gap: 18px;
+        border: 1px solid var(--line);
+        background: linear-gradient(145deg, rgba(43, 44, 36, 0.96), rgba(27, 28, 23, 0.96));
+        padding: 24px;
+        border-radius: 8px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+      }
+
+      .answer h2,
+      section h2 {
+        margin: 0;
+        font-family: "Iowan Old Style", "Charter", "Palatino Linotype", serif;
+        font-size: 30px;
+        line-height: 1.05;
+      }
+
+      .verdict {
+        border-left: 4px solid var(--hot);
+        padding: 0 0 0 14px;
+      }
+
+      .verdict p {
+        margin: 0;
+        color: var(--text);
+        font-size: 18px;
+        line-height: 1.45;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metric {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+        background: rgba(8, 9, 7, 0.23);
+        min-height: 112px;
+      }
+
+      .metric b {
+        display: block;
+        font-size: 25px;
+        margin-bottom: 6px;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.3;
+      }
+
+      section {
+        margin-top: 24px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(34, 35, 29, 0.86);
+        overflow: hidden;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 22px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(8, 9, 7, 0.2);
+      }
+
+      .section-head p {
+        max-width: 560px;
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+        padding: 22px;
+      }
+
+      .step {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-height: 210px;
+        padding: 16px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent),
+          var(--panel);
+      }
+
+      .step:not(:last-child)::after {
+        content: "->";
+        position: absolute;
+        right: -22px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 30px;
+        text-align: center;
+        color: var(--faint);
+        font-weight: 900;
+        z-index: 2;
+      }
+
+      .step.hot {
+        border-color: rgba(255, 105, 92, 0.65);
+        background:
+          linear-gradient(180deg, rgba(255, 105, 92, 0.14), transparent),
+          var(--panel);
+      }
+
+      .step.ok {
+        border-color: rgba(87, 201, 143, 0.58);
+        background:
+          linear-gradient(180deg, rgba(87, 201, 143, 0.12), transparent),
+          var(--panel);
+      }
+
+      .kicker {
+        color: var(--faint);
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+
+      .step h3 {
+        margin: 12px 0 8px;
+        font-size: 18px;
+        line-height: 1.15;
+      }
+
+      .step p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      code {
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 5px;
+        padding: 2px 5px;
+        background: rgba(0, 0, 0, 0.28);
+        color: #fff6d9;
+        font-family: "SFMono-Regular", "Cascadia Code", "Menlo", monospace;
+        font-size: 0.92em;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 16px;
+        padding: 22px;
+      }
+
+      .lane {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: rgba(8, 9, 7, 0.2);
+      }
+
+      .lane h3 {
+        margin: 0;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        font-size: 16px;
+      }
+
+      .lane.danger h3 {
+        color: #ffd1cd;
+        background: var(--hot-soft);
+      }
+
+      .lane.safe h3 {
+        color: #c9ffe1;
+        background: var(--ok-soft);
+      }
+
+      .lane ul,
+      .checklist {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      .lane li,
+      .checklist li {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 10px;
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        color: var(--muted);
+        line-height: 1.42;
+      }
+
+      .lane li:last-child,
+      .checklist li:last-child {
+        border-bottom: 0;
+      }
+
+      .badge {
+        display: inline-grid;
+        place-items: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        font-size: 12px;
+        font-weight: 900;
+        color: var(--ink);
+      }
+
+      .badge.hot {
+        background: var(--hot);
+      }
+
+      .badge.ok {
+        background: var(--ok);
+      }
+
+      .badge.warn {
+        background: var(--warn);
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 780px;
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        background: rgba(8, 9, 7, 0.23);
+      }
+
+      td {
+        color: var(--text);
+        line-height: 1.42;
+      }
+
+      td small {
+        display: block;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+
+      .fix {
+        padding: 22px;
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .code-panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #0d0f0c;
+        overflow: hidden;
+      }
+
+      .code-panel header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      pre {
+        margin: 0;
+        overflow-x: auto;
+        padding: 16px;
+        color: #f8f1d3;
+        font-family: "SFMono-Regular", "Cascadia Code", "Menlo", monospace;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .callout {
+        border: 1px solid rgba(240, 180, 79, 0.45);
+        background: var(--warn-soft);
+        border-radius: 8px;
+        padding: 16px;
+        color: #f7e5bd;
+        line-height: 1.45;
+      }
+
+      .mini-map {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .mini-row {
+        display: grid;
+        grid-template-columns: 130px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+      }
+
+      .mini-row span:first-child {
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .bar {
+        height: 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.24);
+        overflow: hidden;
+      }
+
+      .bar > i {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+      }
+
+      .bar.hot > i {
+        background: linear-gradient(90deg, var(--hot), #ffb36a);
+      }
+
+      .bar.blue > i {
+        background: linear-gradient(90deg, var(--blue), #7bd7ff);
+      }
+
+      .bar.warn > i {
+        background: linear-gradient(90deg, var(--warn), #ffe09b);
+      }
+
+      .footer-note {
+        margin: 22px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      @media (max-width: 920px) {
+        .hero,
+        .split,
+        .fix {
+          grid-template-columns: 1fr;
+        }
+
+        .flow {
+          grid-template-columns: 1fr;
+        }
+
+        .step:not(:last-child)::after {
+          content: "down";
+          right: 16px;
+          top: auto;
+          bottom: -22px;
+          transform: none;
+          color: var(--faint);
+        }
+
+        .metric-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .shell {
+          width: min(100% - 20px, 1180px);
+          padding-top: 18px;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .answer,
+        .section-head,
+        .flow,
+        .split,
+        .fix {
+          padding: 16px;
+        }
+
+        .headline {
+          min-height: 300px;
+        }
+
+        .mini-row {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="topbar">
+        <div><strong>ShowTrackerUS</strong> Convex I/O Incident Map</div>
+        <nav class="nav" aria-label="Page sections">
+          <a href="#path">Path</a>
+          <a href="#cost">Cost</a>
+          <a href="#fix">Fix</a>
+          <a href="#checks">Checks</a>
+        </nav>
+      </div>
+
+      <header class="hero">
+        <div class="headline">
+          <div>
+            <span class="label">Primary issue</span>
+            <h1>One detail page can rebuild the whole tracking library.</h1>
+          </div>
+          <p class="lede">
+            The expensive part is not opening a page by itself. The expensive part is the
+            hidden background metadata refresh that can jump from one tracked title into
+            full-user aggregate repair.
+          </p>
+        </div>
+
+        <aside class="answer" aria-label="Short answer">
+          <h2>Does it make sense?</h2>
+          <div class="verdict">
+            <p>
+              Yes. The dashboard spike matches the code path. The nuance is that the
+              rebuild happens when metadata refresh is not throttled, which is likely
+              after importing old records into the new US database.
+            </p>
+          </div>
+          <div class="metric-grid">
+            <div class="metric">
+              <b>103.53 MB</b>
+              <span>Database I/O from <code>backfillUserShowTrackingAggregatesBatch</code>.</span>
+            </div>
+            <div class="metric">
+              <b>42 calls</b>
+              <span>Enough calls to suggest a repeated repair path, not just one click.</span>
+            </div>
+            <div class="metric">
+              <b>1 hour</b>
+              <span>Current metadata throttle; imports with old timestamps bypass it.</span>
+            </div>
+          </div>
+        </aside>
+      </header>
+
+      <section id="path" aria-labelledby="path-title">
+        <div class="section-head">
+          <div>
+            <h2 id="path-title">The Accidental Runtime Path</h2>
+          </div>
+          <p>
+            The first two steps are normal. The fourth step is the cost bug: one show
+            refresh becomes a whole-library tracking rebuild.
+          </p>
+        </div>
+
+        <div class="flow" role="list" aria-label="Current expensive flow">
+          <article class="step" role="listitem">
+            <span class="kicker">Step 01</span>
+            <h3>Tracked detail page opens</h3>
+            <p>
+              <code>app/show/[id].tsx</code> sees authenticated tracking state and a
+              watchlisted title.
+            </p>
+          </article>
+
+          <article class="step" role="listitem">
+            <span class="kicker">Step 02</span>
+            <h3>Background metadata refresh fires</h3>
+            <p>
+              The effect calls <code>refreshTrackedShowMetadata(showLookupArgs)</code>.
+            </p>
+          </article>
+
+          <article class="step" role="listitem">
+            <span class="kicker">Step 03</span>
+            <h3>Backend resolves one show</h3>
+            <p>
+              <code>refreshTrackedShowMetadata</code> calls the shared metadata helper.
+            </p>
+          </article>
+
+          <article class="step hot" role="listitem">
+            <span class="kicker">Step 04</span>
+            <h3><code>repairUserId</code> turns on broad repair</h3>
+            <p>
+              The helper calls <code>rebuildUserShowTrackingAggregatesForUser</code>.
+            </p>
+          </article>
+
+          <article class="step hot" role="listitem">
+            <span class="kicker">Step 05</span>
+            <h3>Every tracked row is touched</h3>
+            <p>
+              The batch reads user shows, show docs, watched episodes, then patches
+              aggregates and feed projections.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="cost" aria-labelledby="cost-title">
+        <div class="section-head">
+          <div>
+            <h2 id="cost-title">Why The Cost Lands In Database I/O</h2>
+          </div>
+          <p>
+            Function calls and compute are small. The dominant cost is documents and
+            payloads read from Convex while recomputing derived state.
+          </p>
+        </div>
+
+        <div class="split">
+          <div class="lane danger">
+            <h3>Current hidden repair path</h3>
+            <ul>
+              <li>
+                <span class="badge hot">1</span>
+                <span>Reads a page of <code>userShows</code> for the current user.</span>
+              </li>
+              <li>
+                <span class="badge hot">2</span>
+                <span>Reads each linked <code>shows</code> document.</span>
+              </li>
+              <li>
+                <span class="badge hot">3</span>
+                <span>Collects all <code>watchedEpisodes</code> for every user/show pair.</span>
+              </li>
+              <li>
+                <span class="badge hot">4</span>
+                <span>Patches <code>userShows</code> and upserts <code>feedProjections</code>.</span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="lane safe">
+            <h3>What normal metadata refresh should do</h3>
+            <ul>
+              <li>
+                <span class="badge ok">1</span>
+                <span>Refresh provider metadata for the one show.</span>
+              </li>
+              <li>
+                <span class="badge ok">2</span>
+                <span>Patch the one <code>shows</code> document if metadata changed.</span>
+              </li>
+              <li>
+                <span class="badge ok">3</span>
+                <span>Run projection refresh for users tracking that show.</span>
+              </li>
+              <li>
+                <span class="badge ok">4</span>
+                <span>Leave aggregate repair to explicit user actions.</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="table-wrap" aria-label="Evidence table">
+          <table>
+            <thead>
+              <tr>
+                <th>Signal</th>
+                <th>What it means</th>
+                <th>Code explanation</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>backfillUserShowTrackingAggregatesBatch</code><small>103.53 MB</small></td>
+                <td>Whole-user tracking repair is running.</td>
+                <td>The batch collects watched episodes per tracked show and writes aggregates.</td>
+              </tr>
+              <tr>
+                <td><code>refreshTrackedShowMetadata</code><small>visible in compute</small></td>
+                <td>Normal detail-page refresh is involved.</td>
+                <td>The action currently passes <code>repairUserId</code> into the shared helper.</td>
+              </tr>
+              <tr>
+                <td><code>rebuildUserShowTrackingAggregatesForUser</code><small>visible in compute</small></td>
+                <td>The helper crossed from metadata refresh into repair.</td>
+                <td>That action paginates the user's library and calls the expensive batch.</td>
+              </tr>
+              <tr>
+                <td>New imported US DB<small>old row timestamps likely</small></td>
+                <td>The one-hour metadata throttle may not skip refreshes.</td>
+                <td>Old <code>lastUpdated</code> values make many detail pages eligible for refresh.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="fix" aria-labelledby="fix-title">
+        <div class="section-head">
+          <div>
+            <h2 id="fix-title">The Fix</h2>
+          </div>
+          <p>
+            Keep metadata refresh, remove the accidental aggregate repair. Manual repair
+            remains available from the existing targeted paths.
+          </p>
+        </div>
+
+        <div class="fix">
+          <div class="mini-map" aria-label="Before and after impact bars">
+            <div class="callout">
+              Change the routine show-detail path to opt out of broad repair by passing
+              <code>skipBroadAggregateRepair: true</code>.
+            </div>
+
+            <div class="mini-row">
+              <span>Before</span>
+              <div class="bar hot" aria-label="Before high I/O">
+                <i style="width: 94%"></i>
+              </div>
+            </div>
+            <div class="mini-row">
+              <span>After</span>
+              <div class="bar blue" aria-label="After bounded metadata I/O">
+                <i style="width: 28%"></i>
+              </div>
+            </div>
+            <div class="mini-row">
+              <span>Manual repair</span>
+              <div class="bar warn" aria-label="Manual repair still available">
+                <i style="width: 50%"></i>
+              </div>
+            </div>
+          </div>
+
+          <div class="code-panel">
+            <header>
+              <span>convex/shows.ts</span>
+              <span>routine detail-page refresh</span>
+            </header>
+            <pre><code>// Current shape: this can trigger whole-user repair.
+return refreshShowMetadataAndRepairTracking(ctx, show._id, {
+  repairUserId: userId,
+});
+
+// Safer shape: refresh metadata and projections only.
+return refreshShowMetadataAndRepairTracking(ctx, show._id, {
+  skipBroadAggregateRepair: true,
+});</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="checks" aria-labelledby="checks-title">
+        <div class="section-head">
+          <div>
+            <h2 id="checks-title">Fix Checklist</h2>
+          </div>
+          <p>
+            Use this to verify the code change actually removes the abnormal path.
+          </p>
+        </div>
+
+        <ul class="checklist">
+          <li>
+            <span class="badge ok">A</span>
+            <span>Update <code>refreshTrackedShowMetadata</code> to pass <code>skipBroadAggregateRepair: true</code>.</span>
+          </li>
+          <li>
+            <span class="badge ok">B</span>
+            <span>Open several tracked show detail pages after deploy.</span>
+          </li>
+          <li>
+            <span class="badge ok">C</span>
+            <span>Confirm <code>shows.backfillUserShowTrackingAggregatesBatch</code> does not increase in Convex usage.</span>
+          </li>
+          <li>
+            <span class="badge warn">D</span>
+            <span>Confirm manual <code>repairTrackingForShow</code> still repairs one show when intentionally clicked.</span>
+          </li>
+          <li>
+            <span class="badge warn">E</span>
+            <span>Update the older Convex audit doc after the code fix lands, because it currently describes this mitigation as already complete.</span>
+          </li>
+        </ul>
+      </section>
+
+      <p class="footer-note">
+        Related source plan:
+        <code>docs/TRACKED_METADATA_REFRESH_BACKFILL_FIX_PLAN.md</code>.
+        This HTML file is a visual explainer of that plan, not an implementation patch.
+      </p>
+    </main>
+  </body>
+</html>
