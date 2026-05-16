@@ -11,7 +11,9 @@ const SYNTHETIC_PREFIX = "SC Synthetic";
 const SYNTHETIC_NOW = Date.UTC(2026, 4, 14, 12, 0, 0);
 const SYNTHETIC_SCHEDULE_CACHE_DATES = [
   "2026-05-15",
+  "2026-05-16",
   "2026-05-20",
+  "2026-05-23",
   "2026-05-30",
 ];
 const SCHEDULE_MOVE_PRUNE_WINDOW_DAYS = 45;
@@ -66,6 +68,8 @@ const releaseDeltaValidator = v.object({
   nextScheduled: v.optional(episodeFactValidator),
   upcomingEpisodes: v.optional(v.array(episodeFactValidator)),
   clearStaleEpisodeSignal: v.optional(v.boolean()),
+  scheduleCacheMaintenance: v.optional(v.boolean()),
+  scheduleCacheMaintenanceVersion: v.optional(v.number()),
   sourceProvider: v.optional(v.string()),
   reconciledAt: v.number(),
 });
@@ -359,6 +363,7 @@ function getRouteProviderShowIds(delta: {
   if (delta.mediaType === "tv" || delta.mediaType === "movie") {
     if (typeof delta.providerIds.tmdbId === "number") {
       ids.add(`tmdb:${delta.mediaType}:${delta.providerIds.tmdbId}`);
+      ids.add(`tmdb:${delta.providerIds.tmdbId}`);
     }
   }
 
@@ -702,6 +707,8 @@ async function pruneMovedScheduleCacheEntries(
   ctx: MutationCtx,
   args: {
     mediaType: "tv" | "anime";
+    normalizedTitle: string;
+    totalEpisodes?: number;
     durableRouteProviderShowIds: Set<string>;
     factsByDate: Map<
       string,
@@ -750,24 +757,50 @@ async function pruneMovedScheduleCacheEntries(
     dates[dates.length - 1],
     SCHEDULE_MOVE_PRUNE_WINDOW_DAYS
   );
-  const rows = await ctx.db
-    .query("scheduleCache")
-    .withIndex("by_type_date", (q) =>
-      q.eq("mediaType", args.mediaType).gte("date", startDate).lte("date", endDate)
+  const mediaTypes =
+    args.mediaType === "tv"
+      ? (["tv", "anime"] as const)
+      : (["anime", "tv"] as const);
+  const rows = (
+    await Promise.all(
+      mediaTypes.map((mediaType) =>
+        ctx.db
+          .query("scheduleCache")
+          .withIndex("by_type_date", (q) =>
+            q.eq("mediaType", mediaType).gte("date", startDate).lte("date", endDate)
+          )
+          .collect()
+      )
     )
-    .collect();
+  ).flat();
 
   let rowsUpdated = 0;
   for (const row of rows) {
     const existingEntries = parseCompactScheduleEntries(row.episodes);
     const entries = existingEntries.filter((entry) => {
-      if (!args.durableRouteProviderShowIds.has(entry.showId)) {
+      const isDurableSameShow = args.durableRouteProviderShowIds.has(entry.showId);
+      const isExactTitleMatch =
+        entry.normalizedTitle === args.normalizedTitle &&
+        args.normalizedTitle.length > 0;
+
+      if (!isDurableSameShow && !isExactTitleMatch) {
         return true;
       }
 
       const episodeNumberKey = `${entry.episode.seasonNumber}:${entry.episode.episodeNumber}`;
+      if (
+        isExactTitleMatch &&
+        typeof args.totalEpisodes === "number" &&
+        entry.episode.episodeNumber > args.totalEpisodes
+      ) {
+        return false;
+      }
+
       const desiredNumberDates = desiredDatesByEpisodeNumber.get(episodeNumberKey);
-      if (desiredNumberDates && !desiredNumberDates.has(row.date)) {
+      if (isDurableSameShow && desiredNumberDates && !desiredNumberDates.has(row.date)) {
+        return false;
+      }
+      if (isExactTitleMatch && desiredNumberDates && !desiredNumberDates.has(row.date)) {
         return false;
       }
 
@@ -775,7 +808,10 @@ async function pruneMovedScheduleCacheEntries(
       const desiredNameDates = episodeNameKey
         ? desiredDatesByEpisodeName.get(episodeNameKey)
         : undefined;
-      if (desiredNameDates && !desiredNameDates.has(row.date)) {
+      if (isDurableSameShow && desiredNameDates && !desiredNameDates.has(row.date)) {
+        return false;
+      }
+      if (isExactTitleMatch && desiredNameDates && !desiredNameDates.has(row.date)) {
         return false;
       }
 
@@ -814,6 +850,7 @@ async function upsertScheduleCacheEntry(
       name?: string;
       airDate?: string;
     };
+    totalEpisodes?: number;
     nextScheduled?: {
       seasonNumber: number;
       episodeNumber: number;
@@ -881,6 +918,8 @@ async function upsertScheduleCacheEntry(
 
   rowsUpdated += await pruneMovedScheduleCacheEntries(ctx, {
     mediaType,
+    normalizedTitle,
+    totalEpisodes: delta.totalEpisodes,
     durableRouteProviderShowIds,
     factsByDate,
   });
@@ -1154,13 +1193,22 @@ export const applyReleaseDeltas = mutation({
       result.scheduleCacheRowsUpdated += scheduleCacheResult.updated;
       result.scheduleCacheRowsSkipped += scheduleCacheResult.skippedUnchanged;
 
+      const signalAt = delta.latestReleased
+        ? getEpisodeSignalAt(delta.latestReleased)
+        : null;
+      const shouldVisitUserShows =
+        Object.keys(showPatch).length > 0 ||
+        delta.clearStaleEpisodeSignal === true ||
+        delta.releaseState === "available_now";
+
+      if (!shouldVisitUserShows) {
+        continue;
+      }
+
       const userShows = await ctx.db
         .query("userShows")
         .withIndex("by_showId", (q) => q.eq("showId", show._id))
         .take(1000);
-      const signalAt = delta.latestReleased
-        ? getEpisodeSignalAt(delta.latestReleased)
-        : null;
 
       for (const userShow of userShows) {
         const watchedCount = Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0));
@@ -1312,6 +1360,33 @@ export const seedSyntheticDevCases = mutation({
             episodeNumber: 11,
             name: "Episode 11",
             airDate: "2026-05-15T09:00:00.000Z",
+          },
+        });
+      }
+
+      if (entry.key === "stale_future_signal") {
+        await upsertSyntheticScheduleCacheEntry(ctx, {
+          date: "2026-05-16",
+          mediaType: "anime",
+          showId: "anilist:999010",
+          normalizedTitle: normalizeTitle(entry.title),
+          episode: {
+            seasonNumber: 1,
+            episodeNumber: 1202,
+            name: "Break Week Return",
+            airDate: "2026-05-16T09:00:00.000Z",
+          },
+        });
+        await upsertSyntheticScheduleCacheEntry(ctx, {
+          date: "2026-05-23",
+          mediaType: "anime",
+          showId: "anilist:999010",
+          normalizedTitle: normalizeTitle(entry.title),
+          episode: {
+            seasonNumber: 1,
+            episodeNumber: 1203,
+            name: "Episode 1203",
+            airDate: "2026-05-23T09:00:00.000Z",
           },
         });
       }

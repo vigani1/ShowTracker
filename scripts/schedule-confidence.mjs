@@ -18,6 +18,7 @@ const defaultDevBeforePath = path.join(defaultWorkDir, "dev-before-snapshot.json
 const defaultDevAfterPath = path.join(defaultWorkDir, "dev-after-snapshot.json");
 const defaultDevWorkflowReportPath = path.join(defaultWorkDir, "dev-workflow-report.json");
 const dashboardHtmlPath = path.join(__dirname, "schedule-confidence-dashboard.html");
+const scheduleCacheMaintenanceVersion = 2;
 const syntheticPrefix = "SC Synthetic";
 const fixtureNowMs = Date.UTC(2026, 4, 14, 12, 0, 0);
 const scheduleLookaheadMs = 1000 * 60 * 60 * 24 * 120;
@@ -1400,8 +1401,29 @@ function shouldClearStaleEpisodeSignal(item, fact) {
   return watchedCount >= fact.releasedEpisodes;
 }
 
+function shouldRefreshScheduleCacheFromFact(item, fact) {
+  if (item.status !== "watching" && item.status !== "completed") {
+    return false;
+  }
+  if (fact.releaseState !== "upcoming") {
+    return false;
+  }
+  if (!fact.nextScheduled && (!fact.upcomingEpisodes || fact.upcomingEpisodes.length === 0)) {
+    return false;
+  }
+  if (typeof fact.releasedEpisodes !== "number") {
+    return false;
+  }
+  const watchedCount = Math.max(
+    0,
+    Math.floor(numberOrNull(item.watchedEpisodesCount ?? item.watched_episodes_count) ?? 0)
+  );
+  return watchedCount >= fact.releasedEpisodes;
+}
+
 function storeFactAndDelta(db, fact, item, createdAt) {
   const clearStaleEpisodeSignal = shouldClearStaleEpisodeSignal(item, fact);
+  const scheduleCacheMaintenance = shouldRefreshScheduleCacheFromFact(item, fact);
   const payload = {
     canonicalKey: fact.canonicalKey,
     showId: item.show_id,
@@ -1436,24 +1458,46 @@ function storeFactAndDelta(db, fact, item, createdAt) {
   if (clearStaleEpisodeSignal) {
     payload.clearStaleEpisodeSignal = true;
   }
+  if (scheduleCacheMaintenance) {
+    payload.scheduleCacheMaintenance = true;
+    payload.scheduleCacheMaintenanceVersion = scheduleCacheMaintenanceVersion;
+  }
   const stablePayload = {
     ...payload,
     reconciledAt: undefined,
     clearStaleEpisodeSignal: undefined,
+    scheduleCacheMaintenance: undefined,
+    scheduleCacheMaintenanceVersion: undefined,
   };
   delete stablePayload.reconciledAt;
   delete stablePayload.clearStaleEpisodeSignal;
+  delete stablePayload.scheduleCacheMaintenance;
+  delete stablePayload.scheduleCacheMaintenanceVersion;
   const checksum = hashJson(stablePayload);
-  const deltaChecksum = clearStaleEpisodeSignal
-    ? hashJson({ ...stablePayload, clearStaleEpisodeSignal: true })
-    : checksum;
+  const deltaChecksum =
+    clearStaleEpisodeSignal || scheduleCacheMaintenance
+      ? hashJson({
+          ...stablePayload,
+          ...(clearStaleEpisodeSignal ? { clearStaleEpisodeSignal: true } : {}),
+          ...(scheduleCacheMaintenance
+            ? {
+                scheduleCacheMaintenance: true,
+                scheduleCacheMaintenanceVersion,
+              }
+            : {}),
+        })
+      : checksum;
   const previousFact = db
     .prepare("SELECT checksum FROM release_facts WHERE canonical_key = ?")
     .get(fact.canonicalKey);
   const existingDelta = db
-    .prepare("SELECT applied_at FROM convex_deltas WHERE canonical_key = ?")
+    .prepare("SELECT checksum, applied_at FROM convex_deltas WHERE canonical_key = ?")
     .get(fact.canonicalKey);
   const changed = previousFact?.checksum !== checksum;
+  const maintenanceAlreadyApplied =
+    scheduleCacheMaintenance &&
+    existingDelta?.checksum === deltaChecksum &&
+    existingDelta.applied_at !== null;
 
   db.prepare(`
     INSERT INTO release_facts (
@@ -1492,7 +1536,11 @@ function storeFactAndDelta(db, fact, item, createdAt) {
     checksum
   );
 
-  if (changed || clearStaleEpisodeSignal) {
+  if (
+    changed ||
+    clearStaleEpisodeSignal ||
+    (scheduleCacheMaintenance && !maintenanceAlreadyApplied)
+  ) {
     db.prepare(`
       INSERT INTO convex_deltas (canonical_key, payload_json, checksum, created_at)
       VALUES (?, ?, ?, ?)
@@ -1502,7 +1550,7 @@ function storeFactAndDelta(db, fact, item, createdAt) {
         created_at = excluded.created_at,
         applied_at = NULL
     `).run(fact.canonicalKey, JSON.stringify(payload), deltaChecksum, createdAt);
-  } else if (!existingDelta || existingDelta.applied_at !== null) {
+  } else if (!scheduleCacheMaintenance && (!existingDelta || existingDelta.applied_at !== null)) {
     db.prepare("DELETE FROM convex_deltas WHERE canonical_key = ?").run(fact.canonicalKey);
   }
 
@@ -1756,7 +1804,9 @@ async function reconcile(db, options = {}) {
   );
   db.exec(`
     DELETE FROM audit_issues;
-    DELETE FROM convex_deltas WHERE applied_at IS NOT NULL;
+    DELETE FROM convex_deltas
+    WHERE applied_at IS NOT NULL
+      AND payload_json NOT LIKE '%"scheduleCacheMaintenance":true%';
   `);
 
   const items = getLibraryItems(db);
@@ -1849,7 +1899,9 @@ async function reconcile(db, options = {}) {
   }
 
   const auditCount = db.prepare("SELECT COUNT(*) AS count FROM audit_issues").get().count;
-  const deltaRows = db.prepare("SELECT payload_json FROM convex_deltas").all();
+  const deltaRows = db
+    .prepare("SELECT payload_json FROM convex_deltas WHERE applied_at IS NULL")
+    .all();
   const deltaPayloadBytes = deltaRows.reduce(
     (sum, row) => sum + Buffer.byteLength(row.payload_json, "utf8"),
     0
@@ -2565,10 +2617,14 @@ function validateDevWorkflowResults({
   assertValidation(
     firstProjection(staleFutureSignalBefore)?.remainingEpisodes === 0 &&
       typeof firstUserShow(staleFutureSignalBefore)?.newEpisodeSignalAt === "number" &&
+      hasScheduleEntry(staleFutureSignalBefore, "2026-05-16", "anime", 1202) &&
+      hasScheduleEntry(staleFutureSignalBefore, "2026-05-23", "anime", 1203) &&
       staleFutureSignalAfter?.releasedEpisodes === 1201 &&
       firstProjection(staleFutureSignalAfter)?.remainingEpisodes === 0 &&
       firstUserShow(staleFutureSignalAfter)?.newEpisodeSignalAt === null &&
       firstProjection(staleFutureSignalAfter)?.newEpisodeSignalAt === null &&
+      !hasScheduleEntry(staleFutureSignalAfter, "2026-05-16", "anime", 1202) &&
+      !hasScheduleEntry(staleFutureSignalAfter, "2026-05-23", "anime", 1203) &&
       hasScheduleEntry(staleFutureSignalAfter, "2026-05-30", "tv", 1202) &&
       applyTotals.clearedStaleEpisodeSignals >= 1,
     "Stale future signal dev case did not clear old Home attention while preserving the future schedule row."

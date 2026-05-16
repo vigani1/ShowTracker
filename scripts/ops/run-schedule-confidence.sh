@@ -19,5 +19,5 @@ cd "$APP_DIR"
   npm run schedule-confidence:import
   npm run schedule-confidence:reconcile:providers
   npm run schedule-confidence:audit
-  npm run schedule-confidence:apply
+  npm run schedule-confidence:apply -- --batch-size 1
 ) 9>"$LOCK_FILE"
