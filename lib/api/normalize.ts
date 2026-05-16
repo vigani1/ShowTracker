@@ -11,7 +11,11 @@ import type {
   TmdbShowDetails,
 } from "@/lib/api/tmdb";
 import type { AniListAiringSchedule, AniListMedia } from "@/lib/api/anilist";
-import type { TvMazeScheduleEntry } from "@/lib/api/tvmaze";
+import type {
+  TvMazeEpisode,
+  TvMazeScheduleEntry,
+  TvMazeShow,
+} from "@/lib/api/tvmaze";
 import type { JikanAnime, JikanAnimeEpisode } from "@/lib/api/jikan";
 import {
   normalizeStatus,
@@ -54,6 +58,15 @@ function normalizeDateString(value?: string | null) {
     return undefined;
   }
   return parsed.toISOString().slice(0, 10);
+}
+
+function stripHtml(value?: string | null) {
+  return value
+    ?.replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function getTmdbReleasedTvEpisodeCount(details: TmdbShowDetails) {
@@ -257,6 +270,104 @@ export function normalizeTmdbEpisode(episode: TmdbEpisode): NormalizedEpisode {
     airDate: episode.air_date ?? undefined,
     runtime: normalizedRuntime,
   };
+}
+
+export function normalizeTvMazeShow(
+  show: TvMazeShow,
+  episodes: TvMazeEpisode[] = []
+): NormalizedShow {
+  const realEpisodes = episodes.filter(
+    (episode) =>
+      Number.isFinite(episode.season) &&
+      episode.season > 0 &&
+      Number.isFinite(episode.number) &&
+      episode.number > 0
+  );
+  const nowMs = Date.now();
+  const releasedEpisodes = realEpisodes.filter((episode) => {
+    const airDate = episode.airstamp ?? episode.airdate;
+    if (!airDate) {
+      return false;
+    }
+    const parsed = Date.parse(airDate);
+    return Number.isFinite(parsed) && parsed <= nowMs;
+  });
+  const maxSeason = realEpisodes.reduce(
+    (max, episode) => Math.max(max, episode.season),
+    0
+  );
+
+  return {
+    id: `tvmaze:${show.id}`,
+    mediaType: "tv",
+    title: show.name,
+    overview: stripHtml(show.summary),
+    posterUrl: show.image?.original ?? show.image?.medium ?? undefined,
+    backdropUrl: show.image?.original ?? show.image?.medium ?? undefined,
+    genres: show.genres,
+    status: normalizeStatus(show.status),
+    totalEpisodes: realEpisodes.length || undefined,
+    releasedEpisodes: releasedEpisodes.length || undefined,
+    totalSeasons: maxSeason || undefined,
+    episodeRuntime:
+      typeof show.runtime === "number" && show.runtime > 0
+        ? show.runtime
+        : DEFAULTS.EPISODE_RUNTIME_MINUTES,
+    firstAired: normalizeDateString(show.premiered),
+    tvdbId: show.externals?.thetvdb ?? undefined,
+    tvmazeId: show.id,
+    imdbId: show.externals?.imdb ?? undefined,
+  };
+}
+
+export function normalizeTvMazeEpisode(episode: TvMazeEpisode): NormalizedEpisode {
+  return {
+    id: `tvmaze-episode:${episode.id}`,
+    seasonNumber: episode.season,
+    episodeNumber: episode.number,
+    name: episode.name?.trim() || `Episode ${episode.number}`,
+    overview: stripHtml(episode.summary),
+    stillUrl: episode.image?.original ?? episode.image?.medium ?? undefined,
+    airDate: episode.airstamp ?? episode.airdate ?? undefined,
+    runtime:
+      typeof episode.runtime === "number" && episode.runtime > 0
+        ? episode.runtime
+        : undefined,
+  };
+}
+
+export function normalizeTvMazeSeasons(
+  episodes: TvMazeEpisode[],
+  fallbackPosterUrl?: string
+): NormalizedSeason[] {
+  const bySeason = new Map<number, NormalizedEpisode[]>();
+
+  for (const episode of episodes) {
+    if (
+      !Number.isFinite(episode.season) ||
+      episode.season <= 0 ||
+      !Number.isFinite(episode.number) ||
+      episode.number <= 0
+    ) {
+      continue;
+    }
+
+    const seasonEpisodes = bySeason.get(episode.season) ?? [];
+    seasonEpisodes.push(normalizeTvMazeEpisode(episode));
+    bySeason.set(episode.season, seasonEpisodes);
+  }
+
+  return Array.from(bySeason.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([seasonNumber, seasonEpisodes]) => ({
+      seasonNumber,
+      name: `Season ${seasonNumber}`,
+      posterUrl: fallbackPosterUrl,
+      episodeCount: seasonEpisodes.length,
+      episodes: seasonEpisodes.sort(
+        (a, b) => a.episodeNumber - b.episodeNumber
+      ),
+    }));
 }
 
 export function normalizeAniListMedia(media: AniListMedia): NormalizedShow {

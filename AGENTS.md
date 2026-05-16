@@ -69,6 +69,34 @@ Build a fast, minimal show tracker that lets users: discover trending shows/anim
 - The agent should propose the exact doc/rule update and only apply it after explicit user confirmation.
 - After confirmation, update all relevant sources of truth consistently (e.g., `AGENTS.md`, rule files, review config, and `PROGRESS.md` when status changes).
 
+## Watchlist and Schedule Change Control (Critical)
+
+The watchlist, Home attention feed, schedule calendar, schedule cache, episode availability, and provider reconciliation paths are the highest-risk and most regression-prone part of this repo. Any change that can affect this base functionality requires an ADR. No exceptions.
+
+This applies to any code, data model, query, reconciler, import/export, route-id, provider matching, dedupe, filtering, sorting, count, status, projection, or UI behavior that can change what appears in:
+
+- Home watchlist sections, including active, paused, not-started, completed, dropped, and newly available rows.
+- Schedule views, including day/month calendar counts, selected-day rows, future weekly rows, and media filters.
+- Episode availability and progress signals, including `remainingEpisodes`, `releasedEpisodes`, `newEpisodeSignalAt`, `homeSortAt`, `watchlistAirtimeMode`, and completed-show reactivation.
+- Provider and identity matching, including TMDB, TVMaze, AniList, Jikan/MAL, IMDb, title fallback, anime season aliases, bridge IDs, route IDs, canonical keys, and low-confidence matches.
+- Duplicate prevention and cross-provider collapse logic, especially same-day entries, same-title TV/anime rows, long-running shows, season-number disagreements, and schedule-cache merges.
+- The external SQLite reconciler and Convex sync boundary when they affect schedule facts, release facts, watchlist rows, projections, or schedule-cache rows.
+
+Before or in the same PR as the code change, add a new `docs/ADR-####-short-title.md` entry. Do not rely only on commit messages, PR descriptions, chat history, inline comments, or memory. The ADR must make the reasoning durable enough that a future agent can understand why the behavior exists and avoid reintroducing old bugs.
+
+Each watchlist/schedule ADR must include:
+
+- **Context:** the exact bug, regression, product feature, or operational risk being addressed.
+- **Current behavior:** what the app does before the change, including the affected screens/functions/tables where relevant.
+- **Decision:** the behavior being introduced or preserved.
+- **Reasoning:** why this approach is safer than the alternatives, including duplicate/regression risks considered.
+- **Provider/data assumptions:** which providers and IDs are trusted, when title fallback is allowed, and when it is intentionally blocked.
+- **Edge cases:** completed shows with new releases, paused/dropped shows, planned/not-started shows, long-running shows, anime season aliases, missing providers, title fallbacks, same-day duplicate episodes, future weekly rows, and stale provider totals when applicable.
+- **Verification:** concrete commands, queries, screenshots, simulations, or known-show checks used to prove the change. Include specific show examples when the change is motivated by real titles.
+- **Rollback notes:** what to revert or watch if the change causes schedule/watchlist regressions.
+
+If an agent is unsure whether a change can affect watchlist or schedule behavior, treat it as affecting them and write the ADR. If a change is a quick hotfix, the ADR is still required in the same PR before merge.
+
 ## Feature Owner Mode
 
 - This mode is active only when the user explicitly says the agent is the "feature owner" (or equivalent wording).

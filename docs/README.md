@@ -19,6 +19,7 @@ Agent-first documentation for ShowTracker.
 | ADR | Decision |
 |-----|----------|
 | **[ADR-0001-overlay-detail-routes.md](ADR-0001-overlay-detail-routes.md)** | Show details use Overlay Detail Routes for in-app navigation while keeping direct URLs full-page |
+| **[ADR-0002-watchlist-schedule-cache-bridge.md](ADR-0002-watchlist-schedule-cache-bridge.md)** | Home uses same-day schedule cache facts as watchlist attention while keeping provider matching conservative |
 
 ## Testing
 

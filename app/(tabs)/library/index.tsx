@@ -103,6 +103,12 @@ function getRouteId(item: LibraryItem) {
   if (typeof item.malId === "number" && item.mediaType === "anime") {
     return `jikan:anime:${item.malId}`;
   }
+  if (typeof item.tvmazeId === "number" && item.mediaType === "tv") {
+    return `tvmaze:tv:${item.tvmazeId}`;
+  }
+  if (typeof item.imdbId === "string" && item.imdbId.trim()) {
+    return `imdb:${item.mediaType}:${item.imdbId.trim().toLowerCase()}`;
+  }
   return null;
 }
 

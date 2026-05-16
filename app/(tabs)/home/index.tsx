@@ -13,7 +13,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { Link } from "expo-router";
-import { useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { FlashList, type ListRenderItem } from "@shopify/flash-list";
 import { api } from "@/convex/_generated/api";
 import { FilterBar } from "@/components/FilterBar";
@@ -24,6 +24,7 @@ import { useHorizontalSectionSwipe } from "@/hooks/use-horizontal-section-swipe"
 import { useStableDisplayPair } from "@/hooks/use-stable-display-value";
 import type { MediaType } from "@/lib/api/types";
 import { toHttpsImageUrl } from "@/lib/image-url";
+import { parseShowRouteId } from "@/lib/show-route";
 
 type HomeTab = "watchlist" | "upcoming";
 type HomeMediaFilter = "all" | "tv" | "anime";
@@ -38,6 +39,8 @@ type WatchlistItem = {
   tmdbId: number | null;
   anilistId: number | null;
   malId: number | null;
+  tvmazeId?: number | null;
+  imdbId?: string | null;
   status: "watching" | "paused" | "dropped" | "completed" | "plan_to_watch";
   isAutoTracked: boolean;
   trackingState: "not_started" | "in_progress" | "upcoming" | "tba";
@@ -47,6 +50,12 @@ type WatchlistItem = {
   autoPausedAt?: number | null;
   lastWatchedAt?: number | null;
   newEpisodeSignalAt?: number | null;
+};
+
+type WatchlistScheduleCounts = {
+  availableCount: number;
+  futureCount: number;
+  unavailableCount: number;
 };
 
 type UpcomingEpisode = {
@@ -71,6 +80,7 @@ type UpcomingGroup = {
 const DAY_IN_MS = 1000 * 60 * 60 * 24;
 const GRID_GAP = 12;
 const WATCHLIST_FUTURE_LOOKAHEAD_DAYS = 90;
+const HOME_SCHEDULE_SIGNAL_SYNC_INTERVAL_MS = 1000 * 60 * 30;
 const homeModeOptions = [
   { value: "watchlist" as const, label: "Watchlist" },
   { value: "upcoming" as const, label: "Schedule" },
@@ -113,6 +123,24 @@ function getUpcomingDistanceLabel(daysUntil: number) {
   if (daysUntil === -1) return "Yesterday";
   if (daysUntil > 1) return `In ${daysUntil}d`;
   return `${Math.abs(daysUntil)}d ago`;
+}
+
+function getWatchlistScheduleAttentionCount(
+  counts: WatchlistScheduleCounts | undefined,
+  mode: WatchlistAirtimeMode
+) {
+  if (!counts) {
+    return 0;
+  }
+
+  if (mode === "after_airtime") {
+    return counts.availableCount;
+  }
+
+  return Math.max(
+    0,
+    counts.availableCount + (counts.unavailableCount - counts.futureCount)
+  );
 }
 
 function parseEpisodeAirtime(airDate?: string | null) {
@@ -266,6 +294,9 @@ function getInclusiveDayCount(startDate: string, endDate: string): number {
 }
 
 function getWatchlistRouteId(item: WatchlistItem) {
+  if (parseShowRouteId(item.id)) {
+    return item.id;
+  }
   if (
     typeof item.tmdbId === "number" &&
     (item.mediaType === "tv" || item.mediaType === "movie")
@@ -277,6 +308,12 @@ function getWatchlistRouteId(item: WatchlistItem) {
   }
   if (typeof item.malId === "number" && item.mediaType === "anime") {
     return `jikan:anime:${item.malId}`;
+  }
+  if (typeof item.tvmazeId === "number" && item.mediaType === "tv") {
+    return `tvmaze:tv:${item.tvmazeId}`;
+  }
+  if (typeof item.imdbId === "string" && item.imdbId.trim()) {
+    return `imdb:${item.mediaType}:${item.imdbId.trim().toLowerCase()}`;
   }
   return null;
 }
@@ -291,10 +328,12 @@ function WatchlistCard({
   item,
   isCompact,
   isSmallPhone,
+  scheduleAttentionCount = 0,
 }: {
   item: WatchlistItem;
   isCompact: boolean;
   isSmallPhone: boolean;
+  scheduleAttentionCount?: number;
 }) {
   const isFabricEnabled =
     "NativeFabricUIManager" in globalThis || "__turboModuleProxy" in globalThis;
@@ -318,9 +357,15 @@ function WatchlistCard({
       : item.watchedEpisodes;
   const hasRemainingEpisodes =
     typeof item.remainingEpisodes === "number" && item.remainingEpisodes > 0;
+  const scheduledAttentionEpisodes = Math.max(
+    0,
+    Math.floor(scheduleAttentionCount)
+  );
   const cornerLabel = hasRemainingEpisodes
     ? `${item.remainingEpisodes} left`
-    : item.status === "paused"
+    : scheduledAttentionEpisodes > 0
+      ? `${scheduledAttentionEpisodes} left`
+      : item.status === "paused"
       ? "Paused"
       : item.status === "plan_to_watch"
         ? item.trackingState === "tba"
@@ -1364,6 +1409,35 @@ export function HomeScreen() {
   );
   const homeFeedMediaFilter =
     mediaFilter === "all" ? undefined : mediaFilter;
+  const syncHomeCachedScheduleSignals = useAction(
+    api.schedule.syncHomeCachedScheduleSignals
+  );
+
+  useEffect(() => {
+    if (activeTab !== "watchlist") {
+      return;
+    }
+
+    let cancelled = false;
+    const runSync = () => {
+      void syncHomeCachedScheduleSignals({ todayDate: todayKey }).catch((error) => {
+        if (!cancelled) {
+          console.warn("Failed to sync cached home schedule signals", error);
+        }
+      });
+    };
+
+    runSync();
+    const interval = setInterval(
+      runSync,
+      HOME_SCHEDULE_SIGNAL_SYNC_INTERVAL_MS
+    );
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeTab, syncHomeCachedScheduleSignals, todayKey]);
 
   const watchlistLoadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [resolvedFutureCountsQueryKey, setResolvedFutureCountsQueryKey] = useState<
@@ -1403,6 +1477,16 @@ export function HomeScreen() {
     api.shows.getHomeActiveFeed,
     activeTab === "watchlist"
       ? {
+          limit: watchlistQueryLimit,
+          mediaFilter: homeFeedMediaFilter,
+        }
+      : "skip"
+  );
+  const todayScheduledWatchlistFeed = useQuery(
+    api.schedule.getTodayScheduledWatchlistFeed,
+    activeTab === "watchlist"
+      ? {
+          date: todayKey,
           limit: watchlistQueryLimit,
           mediaFilter: homeFeedMediaFilter,
         }
@@ -1455,8 +1539,22 @@ export function HomeScreen() {
     "same_day";
 
   const activeFeedItems = useMemo(
-    () => (activeFeed ?? []) as WatchlistItem[],
-    [activeFeed]
+    () => {
+      const merged = new Map<string, WatchlistItem>();
+
+      for (const item of (activeFeed ?? []) as WatchlistItem[]) {
+        merged.set(item.id, item);
+      }
+
+      for (const item of (todayScheduledWatchlistFeed ?? []) as WatchlistItem[]) {
+        if (!merged.has(item.id)) {
+          merged.set(item.id, item);
+        }
+      }
+
+      return Array.from(merged.values());
+    },
+    [activeFeed, todayScheduledWatchlistFeed]
   );
   const pausedFeedItems = useMemo(
     () => (pausedFeed ?? []) as WatchlistItem[],
@@ -1474,15 +1572,12 @@ export function HomeScreen() {
   const upcomingAvailabilityByRoute = useMemo(() => {
     const counts = new Map<
       string,
-      { availableCount: number; futureCount: number; unavailableCount: number }
+      WatchlistScheduleCounts
     >();
 
-    for (const entry of (watchlistFutureUpcomingCounts ?? []) as {
+    for (const entry of (watchlistFutureUpcomingCounts ?? []) as (WatchlistScheduleCounts & {
       routeId: string;
-      availableCount?: number;
-      futureCount: number;
-      unavailableCount?: number;
-    }[]) {
+    })[]) {
       counts.set(entry.routeId, {
         availableCount: entry.availableCount ?? 0,
         futureCount: entry.futureCount,
@@ -1492,6 +1587,15 @@ export function HomeScreen() {
 
     return counts;
   }, [watchlistFutureUpcomingCounts]);
+
+  const getScheduleAttentionCountForItem = useCallback(
+    (item: WatchlistItem) =>
+      getWatchlistScheduleAttentionCount(
+        upcomingAvailabilityByRoute.get(item.id),
+        watchlistAirtimeMode
+      ),
+    [upcomingAvailabilityByRoute, watchlistAirtimeMode]
+  );
 
   useEffect(() => {
     if (
@@ -1518,15 +1622,15 @@ export function HomeScreen() {
         watchlistAirtimeMode === "after_airtime"
           ? upcomingCounts?.unavailableCount ?? 0
           : upcomingCounts?.futureCount ?? 0;
-      const availableScheduleCount =
-        watchlistAirtimeMode === "after_airtime"
-          ? upcomingCounts?.availableCount ?? 0
-          : (upcomingCounts?.availableCount ?? 0) +
-            ((upcomingCounts?.unavailableCount ?? 0) -
-              (upcomingCounts?.futureCount ?? 0));
+      const availableScheduleCount = getWatchlistScheduleAttentionCount(
+        upcomingCounts,
+        watchlistAirtimeMode
+      );
       const hasAvailableScheduleSignal =
         typeof item.newEpisodeSignalAt === "number" &&
         item.newEpisodeSignalAt > (item.lastWatchedAt ?? 0);
+      const hasSameDayScheduleAttention =
+        watchlistAirtimeMode === "same_day" && availableScheduleCount > 0;
       const allRemainingEpisodesAreFuture =
         watchlistAirtimeMode === "after_airtime" &&
         typeof item.remainingEpisodes === "number" &&
@@ -1537,7 +1641,13 @@ export function HomeScreen() {
       if (item.status === "paused") return false;
       if (item.status === "dropped") return false;
       if (item.trackingState === "upcoming") return false;
-      if (item.status === "completed" && !hasAvailableScheduleSignal) return false;
+      if (
+        item.status === "completed" &&
+        !hasAvailableScheduleSignal &&
+        !hasSameDayScheduleAttention
+      ) {
+        return false;
+      }
       if (item.watchedEpisodes <= 0) {
         return false;
       }
@@ -1548,7 +1658,8 @@ export function HomeScreen() {
       if (
         typeof item.remainingEpisodes === "number" &&
         item.remainingEpisodes <= 0 &&
-        !hasAvailableScheduleSignal
+        !hasAvailableScheduleSignal &&
+        !hasSameDayScheduleAttention
       ) {
         return false;
       }
@@ -1988,11 +2099,12 @@ export function HomeScreen() {
             item={item}
             isCompact={isCompactHomeLayout}
             isSmallPhone={isSmallPhone}
+            scheduleAttentionCount={getScheduleAttentionCountForItem(item)}
           />
         </View>
       );
     },
-    [columns, isCompactHomeLayout, isSmallPhone]
+    [columns, getScheduleAttentionCountForItem, isCompactHomeLayout, isSmallPhone]
   );
 
   const watchlistHeader = (
@@ -2294,6 +2406,7 @@ export function HomeScreen() {
                             item={item}
                             isCompact={isCompactHomeLayout}
                             isSmallPhone={isSmallPhone}
+                            scheduleAttentionCount={getScheduleAttentionCountForItem(item)}
                           />
                         </View>
                       ))}

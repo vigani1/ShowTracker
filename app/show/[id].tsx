@@ -48,8 +48,19 @@ import {
 import {
   normalizeTmdbSeason,
   normalizeTmdbShowDetails,
+  normalizeTvMazeSeasons,
+  normalizeTvMazeShow,
 } from "@/lib/api/normalize";
-import { getTmdbSeasonDetails, getTmdbShowDetails } from "@/lib/api/tmdb";
+import {
+  findTmdbByImdbId,
+  getTmdbSeasonDetails,
+  getTmdbShowDetails,
+} from "@/lib/api/tmdb";
+import {
+  getTvMazeShow,
+  getTvMazeShowEpisodes,
+  lookupTvMazeShowByImdb,
+} from "@/lib/api/tvmaze";
 import type {
   NormalizedEpisode,
   NormalizedSeason,
@@ -339,6 +350,14 @@ function createAnimeSeason(
       })),
     },
   ] as NormalizedSeason[];
+}
+
+function createTvMazeSeasonPlaceholders(totalSeasons?: number) {
+  const seasonCount = Math.max(1, Math.min(totalSeasons ?? 1, 80));
+  return Array.from({ length: seasonCount }, (_, index) => ({
+    seasonNumber: index + 1,
+    name: `Season ${index + 1}`,
+  })) as NormalizedSeason[];
 }
 
 function buildShowPayload(show: NormalizedShow) {
@@ -1809,6 +1828,84 @@ export function ShowDetailScreen() {
             );
           }
           return;
+        }
+
+        if (parsedId.source === "tvmaze") {
+          const [tvMazeShow, tvMazeEpisodes] = await Promise.all([
+            getTvMazeShow(parsedId.externalId),
+            getTvMazeShowEpisodes(parsedId.externalId).catch((episodeError) => {
+              console.warn("Could not load TVMaze episodes", episodeError);
+              return [] as Awaited<ReturnType<typeof getTvMazeShowEpisodes>>;
+            }),
+          ]);
+          if (isCancelled) return;
+
+          const normalized = normalizeTvMazeShow(tvMazeShow, tvMazeEpisodes);
+          setShow(normalized);
+          const normalizedSeasons = normalizeTvMazeSeasons(
+            tvMazeEpisodes,
+            normalized.posterUrl
+          );
+          setSeasons(
+            normalizedSeasons.length > 0
+              ? normalizedSeasons
+              : createTvMazeSeasonPlaceholders(normalized.totalSeasons)
+          );
+          return;
+        }
+
+        if (parsedId.source === "imdb") {
+          const tmdbResult = await findTmdbByImdbId(parsedId.externalId);
+          const tmdbMatch = tmdbResult?.items.find(
+            (item) => item.mediaType === parsedId.mediaType
+          );
+
+          if (tmdbMatch?.tmdbId) {
+            const details = await getTmdbShowDetails(
+              tmdbMatch.mediaType === "movie" ? "movie" : "tv",
+              tmdbMatch.tmdbId
+            );
+            if (isCancelled) return;
+
+            const normalized = normalizeTmdbShowDetails(
+              tmdbMatch.mediaType === "movie" ? "movie" : "tv",
+              details
+            );
+            setShow(normalized);
+
+            if (tmdbMatch.mediaType === "tv") {
+              setSeasons(
+                createSeasonPlaceholders(normalized.totalSeasons ?? 0, details.seasons)
+              );
+            }
+            return;
+          }
+
+          if (parsedId.mediaType === "tv") {
+            const tvMazeShow = await lookupTvMazeShowByImdb(parsedId.externalId);
+            const tvMazeEpisodes = await getTvMazeShowEpisodes(tvMazeShow.id).catch(
+              (episodeError) => {
+                console.warn("Could not load TVMaze episodes for IMDb route", episodeError);
+                return [] as Awaited<ReturnType<typeof getTvMazeShowEpisodes>>;
+              }
+            );
+            if (isCancelled) return;
+
+            const normalized = normalizeTvMazeShow(tvMazeShow, tvMazeEpisodes);
+            setShow(normalized);
+            const normalizedSeasons = normalizeTvMazeSeasons(
+              tvMazeEpisodes,
+              normalized.posterUrl
+            );
+            setSeasons(
+              normalizedSeasons.length > 0
+                ? normalizedSeasons
+                : createTvMazeSeasonPlaceholders(normalized.totalSeasons)
+            );
+            return;
+          }
+
+          throw new Error("Show not found for IMDb route.");
         }
 
         if (parsedId.source === "anilist") {

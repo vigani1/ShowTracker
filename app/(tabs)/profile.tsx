@@ -106,6 +106,8 @@ function getRouteId(args: {
   tmdbId?: number | null;
   anilistId?: number | null;
   malId?: number | null;
+  tvmazeId?: number | null;
+  imdbId?: string | null;
 }) {
   if (
     typeof args.tmdbId === "number" &&
@@ -118,6 +120,12 @@ function getRouteId(args: {
   }
   if (typeof args.malId === "number" && args.mediaType === "anime") {
     return `jikan:anime:${args.malId}`;
+  }
+  if (typeof args.tvmazeId === "number" && args.mediaType === "tv") {
+    return `tvmaze:tv:${args.tvmazeId}`;
+  }
+  if (typeof args.imdbId === "string" && args.imdbId.trim()) {
+    return `imdb:${args.mediaType}:${args.imdbId.trim().toLowerCase()}`;
   }
   return null;
 }
@@ -730,6 +738,8 @@ export default function ProfileScreen() {
             tmdbId: entry.tmdbId,
             anilistId: entry.anilistId,
             malId: entry.malId,
+            tvmazeId: entry.tvmazeId,
+            imdbId: entry.imdbId,
           }),
           title: entry.title,
           posterUrl: entry.posterUrl,
@@ -753,6 +763,8 @@ export default function ProfileScreen() {
             tmdbId: entry.tmdbId,
             anilistId: entry.anilistId,
             malId: entry.malId,
+            tvmazeId: entry.tvmazeId,
+            imdbId: entry.imdbId,
           }),
           title: entry.title,
           posterUrl: entry.posterUrl,
@@ -777,6 +789,8 @@ export default function ProfileScreen() {
           tmdbId: entry.tmdbId,
           anilistId: entry.anilistId,
           malId: entry.malId,
+          tvmazeId: entry.tvmazeId,
+          imdbId: entry.imdbId,
         }),
         title: entry.title,
         posterUrl: entry.posterUrl,

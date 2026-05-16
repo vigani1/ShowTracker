@@ -1645,6 +1645,7 @@ function getShowRouteId(show: {
   anilistId?: number | null;
   malId?: number | null;
   tvmazeId?: number | null;
+  imdbId?: string | null;
 }) {
   if (show.mediaType === "anime") {
     if (typeof show.anilistId === "number") {
@@ -1661,6 +1662,10 @@ function getShowRouteId(show: {
 
   if (show.mediaType === "tv" && typeof show.tvmazeId === "number") {
     return `tvmaze:tv:${show.tvmazeId}`;
+  }
+
+  if (typeof show.imdbId === "string" && show.imdbId.trim()) {
+    return `imdb:${show.mediaType}:${show.imdbId.trim().toLowerCase()}`;
   }
 
   return null;

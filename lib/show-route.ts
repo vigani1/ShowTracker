@@ -1,12 +1,20 @@
 import type { MediaType, NormalizedShow } from "@/lib/api/types";
 
-type ShowSource = "tmdb" | "anilist" | "jikan";
+type NumericShowSource = "tmdb" | "anilist" | "jikan" | "tvmaze";
+type StringShowSource = "imdb";
+type ShowSource = NumericShowSource | StringShowSource;
 
-export type ShowRouteId = {
-  source: ShowSource;
-  mediaType: MediaType;
-  externalId: number;
-};
+export type ShowRouteId =
+  | {
+      source: NumericShowSource;
+      mediaType: MediaType;
+      externalId: number;
+    }
+  | {
+      source: StringShowSource;
+      mediaType: MediaType;
+      externalId: string;
+    };
 
 function parseNumericSuffix(value: string, prefix: string) {
   if (!value.startsWith(prefix)) {
@@ -40,6 +48,14 @@ export function createShowRouteId(show: NormalizedShow): string {
     return `jikan:anime:${jikanId}`;
   }
 
+  if (show.tvmazeId && show.mediaType === "tv") {
+    return `tvmaze:tv:${show.tvmazeId}`;
+  }
+
+  if (show.imdbId?.trim()) {
+    return `imdb:${show.mediaType}:${show.imdbId.trim().toLowerCase()}`;
+  }
+
   throw new Error(`Unsupported show id format: ${show.id}`);
 }
 
@@ -53,12 +69,31 @@ export function parseShowRouteId(value: string | null | undefined): ShowRouteId 
     return null;
   }
 
-  if (source !== "tmdb" && source !== "anilist" && source !== "jikan") {
+  if (
+    source !== "tmdb" &&
+    source !== "anilist" &&
+    source !== "jikan" &&
+    source !== "tvmaze" &&
+    source !== "imdb"
+  ) {
     return null;
   }
 
   if (mediaType !== "tv" && mediaType !== "anime" && mediaType !== "movie") {
     return null;
+  }
+
+  if (source === "imdb") {
+    const normalizedImdbId = externalId.trim();
+    if (!/^tt\d+$/i.test(normalizedImdbId)) {
+      return null;
+    }
+
+    return {
+      source,
+      mediaType,
+      externalId: normalizedImdbId.toLowerCase(),
+    };
   }
 
   if (!/^\d+$/.test(externalId)) {
