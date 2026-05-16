@@ -25,6 +25,7 @@ Agent-first documentation for ShowTracker.
 | **[ADR-0005-server-owned-schedule-refresh.md](ADR-0005-server-owned-schedule-refresh.md)** | Nightly schedule-confidence owns schedule freshness and prunes moved episode cache rows |
 | **[ADR-0006-clear-stale-release-signals.md](ADR-0006-clear-stale-release-signals.md)** | Server reconciliation clears stale Home release signals when trusted facts say the user is caught up |
 | **[ADR-0007-prune-stale-title-schedule-rows.md](ADR-0007-prune-stale-title-schedule-rows.md)** | Provider-backed break-week moves prune stale same-title schedule rows from other schedule sources |
+| **[ADR-0008-utc-overnight-scheduler-window.md](ADR-0008-utc-overnight-scheduler-window.md)** | Scheduled maintenance runs after UTC day rollover |
 
 ## Testing
 

@@ -2,7 +2,7 @@
 Description=Run ShowTracker schedule confidence reconciler nightly
 
 [Timer]
-OnCalendar=*-*-* 03:20:00 UTC
+OnCalendar=*-*-* 00:15:00 UTC
 RandomizedDelaySec=10m
 Persistent=true
 Unit=showtracker-schedule-confidence.service

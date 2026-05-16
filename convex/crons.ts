@@ -9,11 +9,11 @@ import { internal } from "@/convex/_generated/api";
 
 const crons = cronJobs();
 
-// Cron syntax: minute hour day month dayOfWeek
-// "45 1 * * *" = Every day at 1:45 AM UTC
+// Cron syntax: minute hour day month dayOfWeek, evaluated in UTC.
+// Keep maintenance after the UTC schedule day has rolled over.
 crons.cron(
   "autoPauseInactiveShows",
-  "45 1 * * *",
+  "45 0 * * *",
   internal.shows.autoPauseInactiveShows
 );
 
