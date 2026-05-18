@@ -401,6 +401,16 @@ export const rebuildFeedProjectionsForUser = internalMutation({
   },
 });
 
+export const refreshProjectionForUserShow = internalMutation({
+  args: {
+    userShowId: v.id("userShows"),
+  },
+  handler: async (ctx, args) => {
+    const updated = await upsertFeedProjectionForUserShow(ctx, args.userShowId);
+    return { updated: updated === true };
+  },
+});
+
 export const refreshProjectionsForShow = internalMutation({
   args: {
     showId: v.id("shows"),
@@ -1358,6 +1368,25 @@ type HomeFeedProjectionItem = {
   autoPausedAt: number | null;
 };
 
+function getWatchableProjectionTotalEpisodes(args: {
+  watchedEpisodes: number;
+  totalEpisodes: number | null;
+  remainingEpisodes: number | null;
+}) {
+  if (typeof args.remainingEpisodes !== "number") {
+    return args.totalEpisodes;
+  }
+
+  const watchableTotal = args.watchedEpisodes + args.remainingEpisodes;
+  if (watchableTotal <= 0) {
+    return args.totalEpisodes;
+  }
+
+  return typeof args.totalEpisodes === "number"
+    ? Math.min(args.totalEpisodes, watchableTotal)
+    : watchableTotal;
+}
+
 function hydrateHomeFeedProjection(
   projection: Doc<"feedProjections">
 ): HomeFeedProjectionItem | null {
@@ -1369,14 +1398,19 @@ function hydrateHomeFeedProjection(
   const watchedCount = projection.watchedEpisodesCount;
   const totalEpisodes = projection.totalEpisodes ?? null;
   const remainingEpisodes = projection.remainingEpisodes ?? null;
+  const watchableTotalEpisodes = getWatchableProjectionTotalEpisodes({
+    watchedEpisodes: watchedCount,
+    totalEpisodes,
+    remainingEpisodes,
+  });
 
   const progressPercent =
-    totalEpisodes && totalEpisodes > 0
-      ? Math.min(100, Math.round((watchedCount / totalEpisodes) * 100))
+    watchableTotalEpisodes && watchableTotalEpisodes > 0
+      ? Math.min(100, Math.round((watchedCount / watchableTotalEpisodes) * 100))
       : null;
 
   const trackingState =
-    totalEpisodes === null
+    watchableTotalEpisodes === null
       ? watchedCount > 0
         ? "in_progress"
         : "tba"
@@ -1405,7 +1439,7 @@ function hydrateHomeFeedProjection(
     animeSeason: projection.animeSeason ?? null,
     animeSeasonYear: projection.animeSeasonYear ?? null,
     watchedEpisodes: watchedCount,
-    totalEpisodes,
+    totalEpisodes: watchableTotalEpisodes,
     remainingEpisodes,
     progressPercent,
     lastWatchedAt: projection.lastWatchedAt,
@@ -2451,6 +2485,25 @@ function getReleasedEpisodeCountForResume(show: NormalizedShow) {
   }
 
   return null;
+}
+
+function shouldBypassTrackedShowMetadataRefreshThrottle(show: Doc<"shows">) {
+  if (show.mediaType !== "tv") {
+    return false;
+  }
+
+  if (
+    typeof show.releasedEpisodes !== "number" ||
+    !Number.isFinite(show.releasedEpisodes) ||
+    show.releasedEpisodes < 0
+  ) {
+    return true;
+  }
+
+  return (
+    typeof show.totalEpisodes === "number" &&
+    show.releasedEpisodes > show.totalEpisodes
+  );
 }
 
 function shouldResumeForNewContent(
@@ -3880,6 +3933,7 @@ async function refreshShowMetadataAndRepairTracking(
   showId: Id<"shows">,
   options?: {
     repairUserId?: Id<"users">;
+    projectionUserShowId?: Id<"userShows">;
     skipBroadAggregateRepair?: boolean;
     force?: boolean;
   }
@@ -3914,7 +3968,18 @@ async function refreshShowMetadataAndRepairTracking(
     };
   }
 
-  if (options?.force !== true && Date.now() - show.lastUpdated < REFRESH_THROTTLE_MS) {
+  const bypassThrottle = shouldBypassTrackedShowMetadataRefreshThrottle(show);
+  if (
+    options?.force !== true &&
+    !bypassThrottle &&
+    Date.now() - show.lastUpdated < REFRESH_THROTTLE_MS
+  ) {
+    if (options?.projectionUserShowId !== undefined) {
+      await ctx.runMutation(internal.shows.refreshProjectionForUserShow, {
+        userShowId: options.projectionUserShowId,
+      });
+    }
+
     console.info("Skipping tracked show metadata refresh because show was updated recently", {
       showId,
       lastUpdated: show.lastUpdated,
@@ -4076,6 +4141,7 @@ export const refreshTrackedShowMetadata = action({
     }
 
     return refreshShowMetadataAndRepairTracking(ctx, show._id, {
+      projectionUserShowId: userShow._id,
       skipBroadAggregateRepair: true,
     });
   },

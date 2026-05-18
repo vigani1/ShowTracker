@@ -777,6 +777,25 @@ function getWatchlistIdForProjection(p: {
   return null;
 }
 
+function getWatchableProjectionTotalEpisodes(args: {
+  watchedEpisodes: number;
+  totalEpisodes: number | null;
+  remainingEpisodes: number | null;
+}) {
+  if (typeof args.remainingEpisodes !== "number") {
+    return args.totalEpisodes;
+  }
+
+  const watchableTotal = args.watchedEpisodes + args.remainingEpisodes;
+  if (watchableTotal <= 0) {
+    return args.totalEpisodes;
+  }
+
+  return typeof args.totalEpisodes === "number"
+    ? Math.min(args.totalEpisodes, watchableTotal)
+    : watchableTotal;
+}
+
 function serializeScheduledWatchlistItem(
   projection: Doc<"feedProjections">
 ): ScheduledWatchlistItem | null {
@@ -791,8 +810,14 @@ function serializeScheduledWatchlistItem(
 
   const watchedEpisodes = projection.watchedEpisodesCount;
   const totalEpisodes = projection.totalEpisodes ?? null;
+  const remainingEpisodes = projection.remainingEpisodes ?? null;
+  const watchableTotalEpisodes = getWatchableProjectionTotalEpisodes({
+    watchedEpisodes,
+    totalEpisodes,
+    remainingEpisodes,
+  });
   const trackingState =
-    totalEpisodes === null
+    watchableTotalEpisodes === null
       ? watchedEpisodes > 0
         ? "in_progress"
         : "tba"
@@ -813,9 +838,9 @@ function serializeScheduledWatchlistItem(
     status: projection.status,
     isAutoTracked: projection.isAutoTracked ?? false,
     trackingState,
-    remainingEpisodes: projection.remainingEpisodes ?? null,
+    remainingEpisodes,
     watchedEpisodes,
-    totalEpisodes,
+    totalEpisodes: watchableTotalEpisodes,
     autoPausedAt: projection.autoPausedAt ?? null,
     lastWatchedAt: projection.lastWatchedAt,
     newEpisodeSignalAt: projection.newEpisodeSignalAt ?? null,
