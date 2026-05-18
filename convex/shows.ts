@@ -255,7 +255,11 @@ function buildFeedProjectionFields(
   };
 }
 
-type FeedProjectionFields = ReturnType<typeof buildFeedProjectionFields>;
+type BaseFeedProjectionFields = ReturnType<typeof buildFeedProjectionFields>;
+type FeedProjectionFields = BaseFeedProjectionFields & {
+  scheduleProjectionKey: string;
+  scheduleProjectionUpdatedAt: number;
+};
 
 const FEED_PROJECTION_COMPARE_KEYS: Array<
   keyof Omit<FeedProjectionFields, "updatedAt">
@@ -286,6 +290,21 @@ const FEED_PROJECTION_COMPARE_KEYS: Array<
   "newEpisodeSignalAt",
   "homeSortAt",
   "autoPausedAt",
+  "scheduleProjectionKey",
+  "scheduleProjectionUpdatedAt",
+];
+
+const SCHEDULE_PROJECTION_IDENTITY_KEYS: Array<keyof BaseFeedProjectionFields> = [
+  "showId",
+  "userShowId",
+  "title",
+  "mediaType",
+  "tmdbId",
+  "anilistId",
+  "malId",
+  "tvmazeId",
+  "imdbId",
+  "firstAired",
 ];
 
 function hasFeedProjectionChanges(
@@ -293,6 +312,37 @@ function hasFeedProjectionChanges(
   fields: FeedProjectionFields
 ) {
   return FEED_PROJECTION_COMPARE_KEYS.some((key) => existing[key] !== fields[key]);
+}
+
+function buildScheduleProjectionKey(fields: BaseFeedProjectionFields) {
+  return JSON.stringify(
+    SCHEDULE_PROJECTION_IDENTITY_KEYS.map((key) => fields[key] ?? null)
+  );
+}
+
+function hasScheduleProjectionIdentityChanges(
+  existing: Doc<"feedProjections">,
+  fields: BaseFeedProjectionFields
+) {
+  return SCHEDULE_PROJECTION_IDENTITY_KEYS.some((key) => existing[key] !== fields[key]);
+}
+
+function withScheduleProjectionStamp(
+  fields: BaseFeedProjectionFields,
+  existing?: Doc<"feedProjections"> | null
+): FeedProjectionFields {
+  const scheduleProjectionKey = buildScheduleProjectionKey(fields);
+  const identityChanged = existing
+    ? hasScheduleProjectionIdentityChanges(existing, fields)
+    : true;
+
+  return {
+    ...fields,
+    scheduleProjectionKey,
+    scheduleProjectionUpdatedAt: identityChanged
+      ? fields.updatedAt
+      : existing?.scheduleProjectionUpdatedAt ?? 0,
+  };
 }
 
 async function upsertFeedProjectionForUserShowDoc(
@@ -305,7 +355,10 @@ async function upsertFeedProjectionForUserShowDoc(
     .withIndex("by_userShow", (q) => q.eq("userShowId", userShow._id))
     .unique();
 
-  const fields = buildFeedProjectionFields(userShow, show);
+  const fields = withScheduleProjectionStamp(
+    buildFeedProjectionFields(userShow, show),
+    existing
+  );
 
   if (existing) {
     if (!hasFeedProjectionChanges(existing, fields)) {

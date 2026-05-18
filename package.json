@@ -24,6 +24,7 @@
     "schedule-confidence:apply": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs apply-convex",
     "schedule-confidence:apply-projections": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs apply-schedule-projections",
     "schedule-confidence:compare-projections": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs compare-schedule-projections",
+    "schedule-confidence:diagnose-projections": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs diagnose-projections",
     "schedule-confidence:dev:seed": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs seed-dev-cases",
     "schedule-confidence:dev:snapshot": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs snapshot-dev-cases",
     "schedule-confidence:dev:cleanup": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs cleanup-dev-cases",

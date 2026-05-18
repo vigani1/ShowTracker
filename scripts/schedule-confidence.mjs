@@ -22,7 +22,7 @@ const scheduleCacheMaintenanceVersion = 2;
 const syntheticPrefix = "SC Synthetic";
 const fixtureNowMs = Date.UTC(2026, 4, 14, 12, 0, 0);
 const scheduleLookaheadMs = 1000 * 60 * 60 * 24 * 120;
-const scheduleProjectionPastDays = 14;
+const scheduleProjectionPastDays = 45;
 const scheduleProjectionFutureDays = 120;
 const watchlistFutureCountDays = 90;
 
@@ -2741,6 +2741,27 @@ async function snapshotDevCases(options) {
   });
 }
 
+async function diagnoseScheduleProjection(options) {
+  const { client, makeFunctionReference, importToken } = await getConvexClient(options);
+  const userId = options.userId;
+  if (!userId) {
+    throw new Error("Pass --user-id <Convex user id>.");
+  }
+  const todayKey = dateKeyFromValue(new Date(options.nowMs ?? Date.now()).toISOString());
+  return client.query(
+    makeFunctionReference("scheduleConfidence:getScheduleProjectionDiagnostics"),
+    {
+      importToken,
+      userId,
+      startDate: options.startDate ?? todayKey,
+      endDate: options.endDate ?? addDaysToDateKey(todayKey, 21),
+      ...(options.mediaFilter && options.mediaFilter !== "all"
+        ? { mediaFilter: options.mediaFilter }
+        : {}),
+    }
+  );
+}
+
 async function exportScheduleCacheWindowForProjection(clientBundle, windows) {
   const exportScheduleCacheWindow = clientBundle.makeFunctionReference(
     "scheduleConfidence:exportScheduleCacheWindow"
@@ -3709,6 +3730,7 @@ Commands:
                                Also applies user schedule projections unless --skip-schedule-projections is set.
   apply-schedule-projections   Apply only user schedule projections to Convex from the local SQLite state.
   compare-schedule-projections Compare generated projection rows with legacy provider-event matching.
+  diagnose-projections         Explain whether a user's date range uses projections or falls back.
   seed-dev-cases               Seed token-protected synthetic rows into dev Convex.
   snapshot-dev-cases           Print token-protected synthetic dev row state.
   cleanup-dev-cases            Delete token-protected synthetic dev rows.
@@ -3908,6 +3930,20 @@ async function main() {
       if (!ok) {
         process.exitCode = 1;
       }
+      return;
+    }
+    if (command === "diagnose-projections") {
+      console.log(JSON.stringify(await diagnoseScheduleProjection({
+        convexUrl: getFlag(flags, "convex-url", undefined),
+        importToken: getFlag(flags, "token", undefined),
+        userId: getFlag(flags, "user-id", undefined),
+        startDate: getFlag(flags, "start-date", undefined),
+        endDate: getFlag(flags, "end-date", undefined),
+        mediaFilter: getFlag(flags, "media-filter", "all"),
+        nowMs: flags.has("now-ms")
+          ? Number(getFlag(flags, "now-ms", Date.now()))
+          : undefined,
+      }), null, 2));
       return;
     }
     if (command === "seed-dev-cases") {

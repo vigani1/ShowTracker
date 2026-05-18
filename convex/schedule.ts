@@ -85,6 +85,21 @@ type ScheduledWatchlistItem = {
 
 type ScheduleMediaFilter = "tv" | "anime";
 
+type ScheduleProjectionReason =
+  | "active"
+  | "missing_window"
+  | "outside_window"
+  | "stale_schedule_identity";
+
+type ScheduleProjectionStatus = {
+  active: boolean;
+  reason: ScheduleProjectionReason;
+  latestScheduleProjectionUpdatedAt: number;
+  latestFeedProjectionUpdatedAt: number;
+  window: Doc<"userScheduleProjectionWindows"> | null;
+  windowCount: number;
+};
+
 type UpcomingScheduleEpisode = {
   routeId: string | null;
   showTitle: string;
@@ -868,7 +883,7 @@ function serializeScheduledWatchlistItem(
   };
 }
 
-async function getLatestScheduleFeedProjectionUpdatedAt(
+async function getLatestFeedProjectionUpdatedAt(
   ctx: QueryCtx,
   userId: Id<"users">,
   mediaFilter?: ScheduleMediaFilter
@@ -904,7 +919,46 @@ async function getLatestScheduleFeedProjectionUpdatedAt(
   return Math.max(tvProjection?.updatedAt ?? 0, animeProjection?.updatedAt ?? 0);
 }
 
-async function getFreshScheduleProjectionWindow(
+async function getLatestScheduleProjectionIdentityUpdatedAt(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  mediaFilter?: ScheduleMediaFilter
+) {
+  if (mediaFilter) {
+    const projection = await ctx.db
+      .query("feedProjections")
+      .withIndex("by_user_media_scheduleProjectionUpdatedAt", (q) =>
+        q.eq("userId", userId).eq("mediaType", mediaFilter)
+      )
+      .order("desc")
+      .first();
+    return projection?.scheduleProjectionUpdatedAt ?? 0;
+  }
+
+  const [tvProjection, animeProjection] = await Promise.all([
+    ctx.db
+      .query("feedProjections")
+      .withIndex("by_user_media_scheduleProjectionUpdatedAt", (q) =>
+        q.eq("userId", userId).eq("mediaType", "tv")
+      )
+      .order("desc")
+      .first(),
+    ctx.db
+      .query("feedProjections")
+      .withIndex("by_user_media_scheduleProjectionUpdatedAt", (q) =>
+        q.eq("userId", userId).eq("mediaType", "anime")
+      )
+      .order("desc")
+      .first(),
+  ]);
+
+  return Math.max(
+    tvProjection?.scheduleProjectionUpdatedAt ?? 0,
+    animeProjection?.scheduleProjectionUpdatedAt ?? 0
+  );
+}
+
+async function getScheduleProjectionStatus(
   ctx: QueryCtx,
   args: {
     userId: Id<"users">;
@@ -912,7 +966,7 @@ async function getFreshScheduleProjectionWindow(
     endDate: string;
     mediaFilter?: ScheduleMediaFilter;
   }
-): Promise<Doc<"userScheduleProjectionWindows"> | null> {
+): Promise<ScheduleProjectionStatus> {
   const windows = await ctx.db
     .query("userScheduleProjectionWindows")
     .withIndex("by_user", (q) => q.eq("userId", args.userId))
@@ -925,19 +979,59 @@ async function getFreshScheduleProjectionWindow(
           window.scheduleEndDate >= args.endDate
       )
       .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
+  const [latestScheduleProjectionUpdatedAt, latestFeedProjectionUpdatedAt] =
+    await Promise.all([
+      getLatestScheduleProjectionIdentityUpdatedAt(
+        ctx,
+        args.userId,
+        args.mediaFilter
+      ),
+      getLatestFeedProjectionUpdatedAt(ctx, args.userId, args.mediaFilter),
+    ]);
 
   if (!coveredWindow) {
-    return null;
+    return {
+      active: false,
+      reason: windows.length === 0 ? "missing_window" : "outside_window",
+      latestScheduleProjectionUpdatedAt,
+      latestFeedProjectionUpdatedAt,
+      window: null,
+      windowCount: windows.length,
+    };
   }
 
-  const latestProjectionUpdate = await getLatestScheduleFeedProjectionUpdatedAt(
-    ctx,
-    args.userId,
-    args.mediaFilter
-  );
-  return latestProjectionUpdate > coveredWindow.projectionUpdatedAt
-    ? null
-    : coveredWindow;
+  if (latestScheduleProjectionUpdatedAt > coveredWindow.projectionUpdatedAt) {
+    return {
+      active: false,
+      reason: "stale_schedule_identity",
+      latestScheduleProjectionUpdatedAt,
+      latestFeedProjectionUpdatedAt,
+      window: coveredWindow,
+      windowCount: windows.length,
+    };
+  }
+
+  return {
+    active: true,
+    reason: "active",
+    latestScheduleProjectionUpdatedAt,
+    latestFeedProjectionUpdatedAt,
+    window: coveredWindow,
+    windowCount: windows.length,
+  };
+}
+
+async function getFreshScheduleProjectionWindow(
+  ctx: QueryCtx,
+  args: {
+    userId: Id<"users">;
+    startDate: string;
+    endDate: string;
+    mediaFilter?: ScheduleMediaFilter;
+  }
+): Promise<Doc<"userScheduleProjectionWindows"> | null> {
+  const status = await getScheduleProjectionStatus(ctx, args);
+  return status.active ? status.window : null;
 }
 
 async function getProjectedScheduleEvents(
@@ -1011,6 +1105,73 @@ async function filterProjectedRowsToCurrentFeedProjections(
 
   return rows.filter((row) => currentProjectionIds.has(row.feedProjectionId));
 }
+
+export const getScheduleProjectionDiagnostics = query({
+  args: {
+    startDate: v.string(),
+    endDate: v.string(),
+    mediaFilter: v.optional(v.union(v.literal("tv"), v.literal("anime"))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return {
+        authenticated: false,
+        active: false,
+        reason: "unauthenticated",
+        queryPath: "fallback",
+      };
+    }
+
+    const range = getScheduleRangeKeys(args.startDate, args.endDate);
+    const typedUserId = userId as Id<"users">;
+    const status = await getScheduleProjectionStatus(ctx, {
+      userId: typedUserId,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      mediaFilter: args.mediaFilter,
+    });
+    const projectedRows = await getProjectedScheduleEvents(ctx, {
+      userId: typedUserId,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      mediaFilter: args.mediaFilter,
+    });
+    const currentRows = await filterProjectedRowsToCurrentFeedProjections(
+      ctx,
+      typedUserId,
+      projectedRows
+    );
+
+    return {
+      authenticated: true,
+      active: status.active,
+      reason: status.reason,
+      queryPath: status.active ? "projection" : "fallback",
+      requestedStartDate: range.startDate,
+      requestedEndDate: range.endDate,
+      mediaFilter: args.mediaFilter ?? "all",
+      latestScheduleProjectionUpdatedAt: status.latestScheduleProjectionUpdatedAt,
+      latestFeedProjectionUpdatedAt: status.latestFeedProjectionUpdatedAt,
+      windowCount: status.windowCount,
+      coveredWindow: status.window
+        ? {
+            scheduleStartDate: status.window.scheduleStartDate,
+            scheduleEndDate: status.window.scheduleEndDate,
+            countWindowStartDate: status.window.countWindowStartDate,
+            countWindowEndDate: status.window.countWindowEndDate,
+            generatedAt: status.window.generatedAt,
+            projectionUpdatedAt: status.window.projectionUpdatedAt,
+            eventCount: status.window.eventCount,
+            countRowCount: status.window.countRowCount,
+            runId: status.window.runId,
+          }
+        : null,
+      projectedRowsInRange: projectedRows.length,
+      currentProjectedRowsInRange: currentRows.length,
+    };
+  },
+});
 
 function serializeProjectedUpcomingSchedule(
   rows: Doc<"userScheduleEvents">[],

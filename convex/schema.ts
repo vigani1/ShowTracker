@@ -222,6 +222,8 @@ export default defineSchema({
     newEpisodeSignalAt: v.optional(v.number()),
     homeSortAt: v.optional(v.number()),
     autoPausedAt: v.optional(v.number()),
+    scheduleProjectionKey: v.optional(v.string()),
+    scheduleProjectionUpdatedAt: v.optional(v.number()),
 
     // Timestamps
     updatedAt: v.number(),
@@ -229,6 +231,11 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_user_media", ["userId", "mediaType"])
     .index("by_user_media_updatedAt", ["userId", "mediaType", "updatedAt"])
+    .index("by_user_media_scheduleProjectionUpdatedAt", [
+      "userId",
+      "mediaType",
+      "scheduleProjectionUpdatedAt",
+    ])
     .index("by_user_media_status_lastWatched", ["userId", "mediaType", "status", "lastWatchedAt"])
     .index("by_user_media_status_homeSortAt", ["userId", "mediaType", "status", "homeSortAt"])
     .index("by_user_media_status_autoPausedAt", ["userId", "mediaType", "status", "autoPausedAt"])
