@@ -22,6 +22,9 @@ const scheduleCacheMaintenanceVersion = 2;
 const syntheticPrefix = "SC Synthetic";
 const fixtureNowMs = Date.UTC(2026, 4, 14, 12, 0, 0);
 const scheduleLookaheadMs = 1000 * 60 * 60 * 24 * 120;
+const scheduleProjectionPastDays = 14;
+const scheduleProjectionFutureDays = 120;
+const watchlistFutureCountDays = 90;
 
 const directFixtureDate = "2026-05-13T21:00:00.000Z";
 const bridgedFixtureDate = "2026-05-14T18:00:00.000Z";
@@ -565,6 +568,7 @@ function initDb(db) {
       title TEXT NOT NULL,
       normalized_title TEXT NOT NULL,
       media_type TEXT NOT NULL,
+      poster_url TEXT,
       status TEXT NOT NULL,
       watched_episodes_count INTEGER NOT NULL DEFAULT 0,
       total_episodes INTEGER,
@@ -690,6 +694,7 @@ function initDb(db) {
   addColumnIfMissing(db, "library_items", "last_watched_at", "INTEGER");
   addColumnIfMissing(db, "library_items", "remaining_episodes", "INTEGER");
   addColumnIfMissing(db, "library_items", "new_episode_signal_at", "INTEGER");
+  addColumnIfMissing(db, "library_items", "poster_url", "TEXT");
   addColumnIfMissing(db, "audit_issues", "run_id", "TEXT");
   addColumnIfMissing(db, "audit_issues", "issue_key", "TEXT");
   db.exec(`
@@ -780,6 +785,91 @@ function yearFromDateValue(value) {
   return dateKey ? Number(dateKey.slice(0, 4)) : null;
 }
 
+function addDaysToDateKey(dateKey, days) {
+  const parsed = new Date(`${dateKey}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new Error(`Invalid date key: ${dateKey}`);
+  }
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function compareDateKeys(a, b) {
+  return String(a).localeCompare(String(b));
+}
+
+function compactDefinedFields(record) {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== null && value !== undefined && value !== "")
+  );
+}
+
+function routeIdForLibraryItem(item) {
+  if (item.media_type === "anime") {
+    if (item.anilist_id !== null && item.anilist_id !== undefined) {
+      return `anilist:anime:${item.anilist_id}`;
+    }
+    if (item.mal_id !== null && item.mal_id !== undefined) {
+      return `jikan:anime:${item.mal_id}`;
+    }
+  }
+  if (item.tmdb_id !== null && item.tmdb_id !== undefined) {
+    return `tmdb:${item.media_type}:${item.tmdb_id}`;
+  }
+  if (item.tvmaze_id !== null && item.tvmaze_id !== undefined) {
+    return `tvmaze:tv:${item.tvmaze_id}`;
+  }
+  if (item.imdb_id) {
+    return `imdb:${item.media_type}:${String(item.imdb_id).trim().toLowerCase()}`;
+  }
+  return null;
+}
+
+function scheduleSeriesDedupeTitle(normalizedTitle) {
+  return String(normalizedTitle ?? "").replace(
+    /(?:s\d+|season\d*|\d+(?:st|nd|rd|th)?season|part\d*|cour\d*|finalseason)$/,
+    ""
+  );
+}
+
+function isAnimeSeasonTitleVariant(scheduleNormalizedTitle, trackedNormalizedTitle) {
+  if (
+    !scheduleNormalizedTitle ||
+    !trackedNormalizedTitle ||
+    scheduleNormalizedTitle === trackedNormalizedTitle ||
+    !scheduleNormalizedTitle.startsWith(trackedNormalizedTitle)
+  ) {
+    return false;
+  }
+
+  const suffix = scheduleNormalizedTitle.slice(trackedNormalizedTitle.length);
+  return /^(?:s\d+|season\d*|\d+(?:st|nd|rd|th)?season|part\d*|cour\d*|finalseason)/.test(
+    suffix
+  );
+}
+
+function scheduleEpisodeDedupeKeyFromEvent(row) {
+  const normalizedName = normalizeTitle(row.name ?? "");
+  if (normalizedName && !isGenericEpisodeName(row.name)) {
+    return `name:${normalizedName}`;
+  }
+  return `number:${row.season_number}:${row.episode_number}`;
+}
+
+function getEpisodeAirtimeTimestampForCounts(airDate) {
+  const trimmed = String(airDate ?? "").trim();
+  if (
+    !trimmed ||
+    /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ||
+    !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)
+  ) {
+    return null;
+  }
+
+  const parsed = new Date(trimmed);
+  return Number.isFinite(parsed.getTime()) ? parsed.getTime() : null;
+}
+
 function hashJson(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -818,11 +908,11 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
   db.prepare(`
     INSERT INTO library_items (
       id, user_id, show_id, projection_id, user_show_id, title, normalized_title,
-      media_type, status, watched_episodes_count, total_episodes, released_episodes,
+      media_type, poster_url, status, watched_episodes_count, total_episodes, released_episodes,
       remaining_episodes, new_episode_signal_at, tmdb_id, tvmaze_id, anilist_id,
       mal_id, imdb_id, first_aired, last_watched_at, imported_at
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(id) DO UPDATE SET
       user_id = excluded.user_id,
@@ -832,6 +922,7 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
       title = excluded.title,
       normalized_title = excluded.normalized_title,
       media_type = excluded.media_type,
+      poster_url = excluded.poster_url,
       status = excluded.status,
       watched_episodes_count = excluded.watched_episodes_count,
       total_episodes = excluded.total_episodes,
@@ -855,6 +946,7 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
     item.title,
     normalizeTitle(item.title),
     item.mediaType ?? item.media_type,
+    stringOrNull(item.posterUrl ?? item.poster_url),
     item.status,
     Math.max(0, Math.floor(numberOrNull(item.watchedEpisodesCount ?? item.watched_episodes_count) ?? 0)),
     numberOrNull(item.totalEpisodes ?? item.total_episodes),
@@ -990,7 +1082,11 @@ function seedFixtures(db) {
   initDb(db);
   clearFixtures(db);
   for (const item of fixtureLibrary) {
-    upsertLibraryItem(db, item, fixtureNowMs);
+    upsertLibraryItem(db, {
+      projectionId: `projection-${item.showId}`,
+      userShowId: `user-show-${item.showId}`,
+      ...item,
+    }, fixtureNowMs);
   }
   for (const event of fixtureProviderEvents) {
     upsertProviderEvent(db, { ...event, id: `fixture-${event.providerShowId}-${event.episodeNumber}` }, fixtureNowMs);
@@ -1952,6 +2048,569 @@ function exportDeltas(db, deltaPath = defaultDeltaPath) {
   return { path: deltaPath, deltas: payload.deltas.length, payloadBytes };
 }
 
+function projectionStatusPriority(status) {
+  switch (status) {
+    case "watching":
+      return 5;
+    case "completed":
+      return 4;
+    case "paused":
+      return 3;
+    case "plan_to_watch":
+      return 2;
+    case "dropped":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function projectedEventAirDatePrecision(event) {
+  return String(event.payload.airDate ?? "").includes("T") ? 1 : 0;
+}
+
+function shouldCollapseProjectedSameTrackedShowDay(next, current) {
+  const nextName = normalizeTitle(next.payload.episodeName ?? "");
+  const currentName = normalizeTitle(current.payload.episodeName ?? "");
+  const sameNonGenericName =
+    nextName.length > 0 &&
+    nextName === currentName &&
+    !isGenericEpisodeName(next.payload.episodeName) &&
+    !isGenericEpisodeName(current.payload.episodeName);
+
+  if (sameNonGenericName) {
+    return true;
+  }
+
+  const differentSource = next.payload.sourceProvider !== current.payload.sourceProvider;
+  if (!differentSource) {
+    return false;
+  }
+
+  return (
+    isGenericEpisodeName(next.payload.episodeName) ||
+    isGenericEpisodeName(current.payload.episodeName) ||
+    projectedEventAirDatePrecision(next) !== projectedEventAirDatePrecision(current)
+  );
+}
+
+function preferProjectedScheduleCandidate(next, current) {
+  if (next.payload.sourceMatchesTracked !== current.payload.sourceMatchesTracked) {
+    return next.payload.sourceMatchesTracked;
+  }
+
+  const statusDelta = projectionStatusPriority(next.status) - projectionStatusPriority(current.status);
+  if (statusDelta !== 0) {
+    return statusDelta > 0;
+  }
+
+  const watchedDelta = (next.lastWatchedAt ?? 0) - (current.lastWatchedAt ?? 0);
+  if (watchedDelta !== 0) {
+    return watchedDelta > 0;
+  }
+
+  const sourceDelta =
+    eventSourcePriority({ source_provider: next.payload.sourceProvider }) -
+    eventSourcePriority({ source_provider: current.payload.sourceProvider });
+  if (sourceDelta !== 0) {
+    return sourceDelta > 0;
+  }
+
+  const precisionDelta = projectedEventAirDatePrecision(next) - projectedEventAirDatePrecision(current);
+  if (precisionDelta !== 0) {
+    return precisionDelta > 0;
+  }
+
+  return next.payload.airtimeMs < current.payload.airtimeMs;
+}
+
+function createScheduleProjectionCandidate(item, row, matchConfidence, windows, generatedAt) {
+  if (item.media_type !== "tv" && item.media_type !== "anime") {
+    return null;
+  }
+  if (row.media_type !== "tv" && row.media_type !== "anime") {
+    return null;
+  }
+  if (!item.user_id || !item.projection_id || !item.user_show_id) {
+    return null;
+  }
+
+  const routeId = routeIdForLibraryItem(item);
+  const date = dateKeyFromValue(row.air_date);
+  if (
+    !routeId ||
+    !date ||
+    compareDateKeys(date, windows.scheduleStartDate) < 0 ||
+    compareDateKeys(date, windows.scheduleEndDate) > 0
+  ) {
+    return null;
+  }
+
+  const seasonNumber = Number(row.season_number);
+  const episodeNumber = Number(row.episode_number);
+  const airtimeMs = Number(row.air_timestamp);
+  if (
+    !Number.isFinite(seasonNumber) ||
+    !Number.isFinite(episodeNumber) ||
+    !Number.isFinite(airtimeMs)
+  ) {
+    return null;
+  }
+
+  const itemTitle = item.normalized_title ?? normalizeTitle(item.title);
+  const rowTitle = row.normalized_title ?? normalizeTitle(row.title);
+  const seriesDedupeSource = itemTitle.length <= rowTitle.length ? itemTitle : rowTitle;
+  const providerIds = compactDefinedFields({
+    tmdbId: numberOrNull(item.tmdb_id ?? row.tmdb_id),
+    anilistId: numberOrNull(item.anilist_id ?? row.anilist_id),
+    malId: numberOrNull(item.mal_id ?? row.mal_id),
+    tvmazeId: numberOrNull(item.tvmaze_id ?? row.tvmaze_id),
+    imdbId: stringOrNull(item.imdb_id ?? row.imdb_id),
+  });
+  const projectionUpdatedAt = numberOrNull(item.imported_at) ?? generatedAt;
+  const payload = compactDefinedFields({
+    showId: item.show_id,
+    userShowId: item.user_show_id,
+    feedProjectionId: item.projection_id,
+    date,
+    routeId,
+    mediaType: item.media_type,
+    sourceMediaType: row.media_type,
+    sourceProvider: stringOrNull(row.source_provider),
+    showTitle: item.title,
+    posterUrl: stringOrNull(item.poster_url),
+    ...providerIds,
+    seasonNumber,
+    episodeNumber,
+    episodeName: stringOrNull(row.name),
+    airDate: stringOrNull(row.air_date),
+    airtimeMs,
+    seriesDedupeKey: scheduleSeriesDedupeTitle(seriesDedupeSource),
+    episodeDedupeKey: scheduleEpisodeDedupeKeyFromEvent(row),
+    sameTrackedShowDayKey: `${routeId}:${date}`,
+    sourceMatchesTracked: row.media_type === item.media_type,
+    matchConfidence,
+    projectionUpdatedAt,
+    reconciledAt: generatedAt,
+    updatedAt: generatedAt,
+  });
+
+  return {
+    payload,
+    status: item.status,
+    lastWatchedAt: numberOrNull(item.last_watched_at) ?? 0,
+  };
+}
+
+function replaceProjectedScheduleCandidate(state, index, uniqueKey, sameDayKey, candidate) {
+  for (const [key, value] of state.unique.entries()) {
+    if (value.index === index) {
+      state.unique.delete(key);
+    }
+  }
+  for (const [key, value] of state.sameDay.entries()) {
+    if (value.index === index) {
+      state.sameDay.delete(key);
+    }
+  }
+  state.events[index] = candidate;
+  state.unique.set(uniqueKey, { index });
+  state.sameDay.set(sameDayKey, { index });
+}
+
+function addProjectedScheduleCandidate(state, candidate) {
+  const uniqueKey = [
+    candidate.payload.routeId,
+    candidate.payload.date,
+    candidate.payload.seriesDedupeKey,
+    candidate.payload.episodeDedupeKey,
+  ].join(":");
+  const sameDayKey = candidate.payload.sameTrackedShowDayKey;
+  const existingSameDay = state.sameDay.get(sameDayKey);
+
+  if (
+    existingSameDay &&
+    shouldCollapseProjectedSameTrackedShowDay(candidate, state.events[existingSameDay.index])
+  ) {
+    if (preferProjectedScheduleCandidate(candidate, state.events[existingSameDay.index])) {
+      replaceProjectedScheduleCandidate(
+        state,
+        existingSameDay.index,
+        uniqueKey,
+        sameDayKey,
+        candidate
+      );
+    }
+    return;
+  }
+
+  const existing = state.unique.get(uniqueKey);
+  if (existing) {
+    if (preferProjectedScheduleCandidate(candidate, state.events[existing.index])) {
+      replaceProjectedScheduleCandidate(state, existing.index, uniqueKey, sameDayKey, candidate);
+    }
+    return;
+  }
+
+  state.events.push(candidate);
+  const index = state.events.length - 1;
+  state.unique.set(uniqueKey, { index });
+  state.sameDay.set(sameDayKey, { index });
+}
+
+function buildCountProjectionRows(events, windows, nowMs) {
+  const todayKey = dateKeyFromValue(new Date(nowMs).toISOString());
+  const today = new Date(`${todayKey}T00:00:00.000Z`);
+  const countsByFilter = new Map([
+    ["all", new Map()],
+    ["tv", new Map()],
+    ["anime", new Map()],
+  ]);
+
+  for (const event of events) {
+    const payload = event.payload;
+    if (
+      compareDateKeys(payload.date, windows.countWindowStartDate) < 0 ||
+      compareDateKeys(payload.date, windows.countWindowEndDate) > 0
+    ) {
+      continue;
+    }
+
+    const bucketDate = new Date(`${payload.date}T00:00:00.000Z`);
+    const daysUntil = Math.floor((bucketDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    const airtimeMs = getEpisodeAirtimeTimestampForCounts(payload.airDate);
+    const isFutureDay = daysUntil > 0;
+    const isTodayBeforeAirtime = daysUntil === 0 && airtimeMs !== null && airtimeMs > nowMs;
+
+    for (const filter of ["all", payload.mediaType]) {
+      const counts = countsByFilter.get(filter);
+      const existing = counts.get(payload.routeId) ?? {
+        availableCount: 0,
+        futureCount: 0,
+        unavailableCount: 0,
+        projectionUpdatedAt: payload.projectionUpdatedAt,
+        reconciledAt: payload.reconciledAt,
+        updatedAt: payload.updatedAt,
+      };
+
+      if (!isFutureDay && !isTodayBeforeAirtime) {
+        existing.availableCount += 1;
+      } else {
+        if (isFutureDay) {
+          existing.futureCount += 1;
+        }
+        existing.unavailableCount += 1;
+      }
+      existing.projectionUpdatedAt = Math.max(existing.projectionUpdatedAt, payload.projectionUpdatedAt);
+      existing.reconciledAt = Math.max(existing.reconciledAt, payload.reconciledAt);
+      existing.updatedAt = Math.max(existing.updatedAt, payload.updatedAt);
+      counts.set(payload.routeId, existing);
+    }
+  }
+
+  return Array.from(countsByFilter.entries()).flatMap(([mediaFilter, rows]) =>
+    Array.from(rows.entries())
+      .sort(([routeIdA], [routeIdB]) => routeIdA.localeCompare(routeIdB))
+      .map(([routeId, row]) => ({
+        mediaFilter,
+        routeId,
+        ...row,
+      }))
+  );
+}
+
+function getScheduleProjectionWindows(options = {}) {
+  const generatedAt = options.generatedAt ?? Date.now();
+  const nowMs = options.nowMs ?? generatedAt;
+  const todayKey = dateKeyFromValue(new Date(nowMs).toISOString());
+  return {
+    generatedAt,
+    nowMs,
+    scheduleStartDate:
+      options.scheduleStartDate ?? addDaysToDateKey(todayKey, -scheduleProjectionPastDays),
+    scheduleEndDate:
+      options.scheduleEndDate ?? addDaysToDateKey(todayKey, scheduleProjectionFutureDays),
+    countWindowStartDate: options.countWindowStartDate ?? todayKey,
+    countWindowEndDate:
+      options.countWindowEndDate ?? addDaysToDateKey(todayKey, watchlistFutureCountDays),
+  };
+}
+
+function parseScheduleCacheProjectionRows(scheduleRows, windows) {
+  const rows = [];
+  for (const scheduleRow of scheduleRows ?? []) {
+    const date = dateKeyFromValue(scheduleRow.date);
+    if (
+      !date ||
+      compareDateKeys(date, windows.scheduleStartDate) < 0 ||
+      compareDateKeys(date, windows.scheduleEndDate) > 0
+    ) {
+      continue;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(scheduleRow.episodes);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) {
+      continue;
+    }
+
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const entry = item;
+      const episode =
+        entry.episode && typeof entry.episode === "object" ? entry.episode : null;
+      const providerShowId = typeof entry.showId === "string" ? entry.showId : "";
+      const normalizedTitle =
+        typeof entry.normalizedTitle === "string"
+          ? entry.normalizedTitle
+          : normalizeTitle(typeof entry.showTitle === "string" ? entry.showTitle : "");
+      const seasonNumber = Number(episode?.seasonNumber);
+      const episodeNumber = Number(episode?.episodeNumber);
+      if (
+        !providerShowId ||
+        !normalizedTitle ||
+        !Number.isFinite(seasonNumber) ||
+        !Number.isFinite(episodeNumber)
+      ) {
+        continue;
+      }
+      const airDate =
+        typeof episode.airDate === "string" && episode.airDate ? episode.airDate : date;
+      const timestamp =
+        getEpisodeAirtimeTimestampForCounts(airDate) ??
+        new Date(`${date}T00:00:00.000Z`).getTime();
+
+      rows.push({
+        provider_show_id: providerShowId,
+        media_type: scheduleRow.mediaType,
+        source_provider: providerShowId.split(":")[0] || null,
+        normalized_title: normalizedTitle,
+        title: typeof entry.showTitle === "string" ? entry.showTitle : normalizedTitle,
+        season_number: seasonNumber,
+        episode_number: episodeNumber,
+        name: typeof episode.name === "string" && episode.name ? episode.name : null,
+        air_date: airDate,
+        air_timestamp: timestamp,
+        tmdb_id: null,
+        tvmaze_id: null,
+        anilist_id: null,
+        mal_id: null,
+        imdb_id: null,
+      });
+    }
+  }
+  return rows;
+}
+
+function buildScheduleProjectionPayload(db, options = {}) {
+  if (options.scheduleCacheRows) {
+    return buildScheduleCacheProjectionPayload(db, options);
+  }
+  return buildLegacyScheduleProjectionPayload(db, options);
+}
+
+function buildLegacyScheduleProjectionPayload(db, options = {}) {
+  initDb(db);
+  const windows = getScheduleProjectionWindows(options);
+  return buildScheduleProjectionPayloadFromRows(db, getProviderEvents(db), windows);
+}
+
+function buildScheduleCacheProjectionPayload(db, options = {}) {
+  initDb(db);
+  const windows = getScheduleProjectionWindows(options);
+  return buildScheduleProjectionPayloadFromRows(
+    db,
+    parseScheduleCacheProjectionRows(options.scheduleCacheRows, windows),
+    windows
+  );
+}
+
+function buildScheduleProjectionPayloadFromRows(db, sourceRows, windows) {
+  initDb(db);
+  const itemsByUser = new Map();
+  for (const item of getLibraryItems(db)) {
+    if (item.media_type !== "tv" && item.media_type !== "anime") {
+      continue;
+    }
+    if (!item.user_id || !routeIdForLibraryItem(item)) {
+      continue;
+    }
+    const current = itemsByUser.get(item.user_id) ?? [];
+    current.push(applyManualProviderLink(db, item));
+    itemsByUser.set(item.user_id, current);
+  }
+
+  const users = [];
+  const providerRows = sourceRows.filter((row) => {
+    const date = dateKeyFromValue(row.air_date);
+    return (
+      date &&
+      compareDateKeys(date, windows.scheduleStartDate) >= 0 &&
+      compareDateKeys(date, windows.scheduleEndDate) <= 0
+    );
+  });
+
+  for (const [userId, items] of Array.from(itemsByUser.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+    const state = {
+      events: [],
+      unique: new Map(),
+      sameDay: new Map(),
+    };
+    const byExternalKey = new Map();
+    for (const item of items) {
+      if (item.anilist_id !== null && item.anilist_id !== undefined) {
+        byExternalKey.set(`anilist:${item.anilist_id}`, item);
+      }
+      if (item.tmdb_id !== null && item.tmdb_id !== undefined) {
+        byExternalKey.set(`tmdb:${item.media_type}:${item.tmdb_id}`, item);
+      }
+      if (item.tvmaze_id !== null && item.tvmaze_id !== undefined) {
+        byExternalKey.set(`tvmaze:${item.tvmaze_id}`, item);
+      }
+    }
+
+    for (const row of providerRows) {
+      let matchedItem = byExternalKey.get(row.provider_show_id) ?? null;
+      let confidence = matchedItem ? "direct_id" : "title_fallback";
+      if (!matchedItem && row.media_type !== "anime") {
+        const candidates = items
+          .filter(
+            (item) =>
+              item.media_type === row.media_type &&
+              item.normalized_title === row.normalized_title
+          )
+          .sort((a, b) => {
+            const statusDelta = projectionStatusPriority(b.status) - projectionStatusPriority(a.status);
+            if (statusDelta !== 0) {
+              return statusDelta;
+            }
+            return (numberOrNull(b.last_watched_at) ?? 0) - (numberOrNull(a.last_watched_at) ?? 0);
+          });
+        matchedItem = candidates[0] ?? null;
+      }
+
+      if (!matchedItem && row.media_type === "anime") {
+        const candidates = items
+          .filter(
+            (item) =>
+              item.media_type === "tv" ||
+              item.media_type === "anime"
+          )
+          .filter(
+            (item) =>
+              row.normalized_title === item.normalized_title ||
+              isAnimeSeasonTitleVariant(row.normalized_title, item.normalized_title)
+          )
+          .sort((a, b) => {
+            const statusDelta = projectionStatusPriority(b.status) - projectionStatusPriority(a.status);
+            if (statusDelta !== 0) {
+              return statusDelta;
+            }
+            return (numberOrNull(b.last_watched_at) ?? 0) - (numberOrNull(a.last_watched_at) ?? 0);
+          });
+        matchedItem = candidates[0] ?? null;
+      }
+
+      if (!matchedItem) {
+        continue;
+      }
+
+      const candidate = createScheduleProjectionCandidate(
+        matchedItem,
+        row,
+        confidence,
+        windows,
+        windows.generatedAt
+      );
+      if (candidate) {
+        addProjectedScheduleCandidate(state, candidate);
+      }
+    }
+
+    const events = state.events.sort((a, b) => {
+      const dateDelta = a.payload.date.localeCompare(b.payload.date);
+      if (dateDelta !== 0) {
+        return dateDelta;
+      }
+      if (a.payload.airtimeMs !== b.payload.airtimeMs) {
+        return a.payload.airtimeMs - b.payload.airtimeMs;
+      }
+      return a.payload.showTitle.localeCompare(b.payload.showTitle);
+    });
+    users.push({
+      userId,
+      events: events.map((event) => event.payload),
+      counts: buildCountProjectionRows(events, windows, windows.nowMs),
+    });
+  }
+
+  const eventCount = users.reduce((sum, user) => sum + user.events.length, 0);
+  const countRowCount = users.reduce((sum, user) => sum + user.counts.length, 0);
+  return {
+    generatedAt: windows.generatedAt,
+    ...windows,
+    metrics: {
+      users: users.length,
+      eventCount,
+      countRowCount,
+      payloadBytes: Buffer.byteLength(JSON.stringify(users), "utf8"),
+    },
+    users,
+  };
+}
+
+function projectionEventParityKey(event) {
+  return [
+    event.userId ?? "",
+    event.routeId,
+    event.date,
+    event.seasonNumber,
+    event.episodeNumber,
+    event.episodeName ?? "",
+  ].join("|");
+}
+
+function projectionCountParityKey(row) {
+  return [
+    row.mediaFilter,
+    row.routeId,
+    row.availableCount,
+    row.futureCount,
+    row.unavailableCount,
+  ].join("|");
+}
+
+function compareProjectionParity(newPayload, legacyPayload) {
+  const newEvents = new Set(
+    newPayload.users.flatMap((user) =>
+      user.events.map((event) => projectionEventParityKey({ ...event, userId: user.userId }))
+    )
+  );
+  const legacyEvents = new Set(
+    legacyPayload.users.flatMap((user) =>
+      user.events.map((event) => projectionEventParityKey({ ...event, userId: user.userId }))
+    )
+  );
+  const newCounts = new Set(
+    newPayload.users.flatMap((user) => user.counts.map((row) => `${user.userId}|${projectionCountParityKey(row)}`))
+  );
+  const legacyCounts = new Set(
+    legacyPayload.users.flatMap((user) => user.counts.map((row) => `${user.userId}|${projectionCountParityKey(row)}`))
+  );
+  return {
+    missingEvents: Array.from(legacyEvents).filter((key) => !newEvents.has(key)),
+    extraEvents: Array.from(newEvents).filter((key) => !legacyEvents.has(key)),
+    missingCounts: Array.from(legacyCounts).filter((key) => !newCounts.has(key)),
+    extraCounts: Array.from(newCounts).filter((key) => !legacyCounts.has(key)),
+  };
+}
+
 function auditReport(db, auditPath = defaultAuditPath) {
   const issues = db.prepare("SELECT * FROM audit_issues ORDER BY severity, issue_type, title").all();
   const facts = db.prepare("SELECT * FROM release_facts ORDER BY title").all();
@@ -1996,6 +2655,7 @@ async function importConvex(db, options) {
   const exportTrackedLibrary = makeFunctionReference("scheduleConfidence:exportTrackedLibrary");
   let cursor = null;
   let imported = 0;
+  const importedAt = Date.now();
   do {
     const page = await client.query(exportTrackedLibrary, {
       importToken,
@@ -2013,6 +2673,7 @@ async function importConvex(db, options) {
         userShowId: item.userShowId,
         title: item.title,
         mediaType: item.mediaType,
+        posterUrl: item.posterUrl,
         status: item.status,
         watchedEpisodesCount: item.watchedEpisodesCount,
         totalEpisodes: item.totalEpisodes,
@@ -2032,12 +2693,15 @@ async function importConvex(db, options) {
         imdbId: item.imdbId,
         firstAired: item.firstAired,
         lastWatchedAt: item.lastWatchedAt,
-      });
+      }, importedAt);
       imported += 1;
     }
     cursor = page.isDone ? null : page.continueCursor;
   } while (cursor);
-  return { imported };
+  const staleDeleted = db
+    .prepare("DELETE FROM library_items WHERE imported_at < ?")
+    .run(importedAt).changes;
+  return { imported, staleDeleted };
 }
 
 async function getConvexClient(options) {
@@ -2075,6 +2739,129 @@ async function snapshotDevCases(options) {
   return client.query(makeFunctionReference("scheduleConfidence:getSyntheticDevCaseState"), {
     importToken,
   });
+}
+
+async function exportScheduleCacheWindowForProjection(clientBundle, windows) {
+  const exportScheduleCacheWindow = clientBundle.makeFunctionReference(
+    "scheduleConfidence:exportScheduleCacheWindow"
+  );
+  const rows = [];
+  let cursor = null;
+  do {
+    const page = await clientBundle.client.query(exportScheduleCacheWindow, {
+      importToken: clientBundle.importToken,
+      startDate: windows.scheduleStartDate,
+      endDate: windows.scheduleEndDate,
+      paginationOpts: {
+        cursor,
+        numItems: 200,
+      },
+    });
+    rows.push(...page.page);
+    cursor = page.isDone ? null : page.continueCursor;
+  } while (cursor);
+  return rows;
+}
+
+async function applyScheduleProjections(db, options) {
+  if (options.allowUnappliedDeltas !== true) {
+    const pendingDeltas =
+      db
+        .prepare("SELECT COUNT(*) AS count FROM convex_deltas WHERE applied_at IS NULL")
+        .get()?.count ?? 0;
+    if (pendingDeltas > 0) {
+      throw new Error(
+        `Refusing to apply schedule projections with ${pendingDeltas} unapplied release deltas. ` +
+          "Run apply-convex first, or pass --allow-unapplied-deltas only for an intentional rollback/test."
+      );
+    }
+  }
+
+  const clientBundle =
+    options.client && options.makeFunctionReference && options.importToken
+      ? {
+          client: options.client,
+          makeFunctionReference: options.makeFunctionReference,
+          importToken: options.importToken,
+        }
+      : await getConvexClient(options);
+  const projectionOptions = {
+    ...options,
+    generatedAt: options.generatedAt ?? Date.now(),
+  };
+  const windows = getScheduleProjectionWindows(projectionOptions);
+  const scheduleCacheRows = await exportScheduleCacheWindowForProjection(
+    clientBundle,
+    windows
+  );
+  const projectionPayload = buildScheduleProjectionPayload(db, {
+    generatedAt: projectionOptions.generatedAt,
+    nowMs: projectionOptions.nowMs,
+    scheduleStartDate: projectionOptions.scheduleStartDate,
+    scheduleEndDate: projectionOptions.scheduleEndDate,
+    countWindowStartDate: projectionOptions.countWindowStartDate,
+    countWindowEndDate: projectionOptions.countWindowEndDate,
+    scheduleCacheRows,
+  });
+  const replaceUserScheduleProjectionWindow = clientBundle.makeFunctionReference(
+    "scheduleConfidence:replaceUserScheduleProjectionWindow"
+  );
+  const runId = options.runId ?? `projection-${projectionPayload.generatedAt}`;
+  const results = [];
+  const oversizedUser = projectionPayload.users.find(
+    (user) => user.events.length > 1000 || user.counts.length > 1000
+  );
+  if (oversizedUser) {
+    throw new Error(
+      `Projection payload for user ${oversizedUser.userId} exceeds Convex apply limits: ` +
+        `${oversizedUser.events.length} events, ${oversizedUser.counts.length} count rows.`
+    );
+  }
+
+  for (const user of projectionPayload.users) {
+    const result = await clientBundle.client.mutation(replaceUserScheduleProjectionWindow, {
+      importToken: clientBundle.importToken,
+      runId,
+      generatedAt: projectionPayload.generatedAt,
+      userId: user.userId,
+      scheduleStartDate: projectionPayload.scheduleStartDate,
+      scheduleEndDate: projectionPayload.scheduleEndDate,
+      countWindowStartDate: projectionPayload.countWindowStartDate,
+      countWindowEndDate: projectionPayload.countWindowEndDate,
+      events: user.events,
+      counts: user.counts,
+    });
+    results.push(result);
+  }
+
+  return {
+    runId,
+    generatedAt: projectionPayload.generatedAt,
+    scheduleStartDate: projectionPayload.scheduleStartDate,
+    scheduleEndDate: projectionPayload.scheduleEndDate,
+    countWindowStartDate: projectionPayload.countWindowStartDate,
+    countWindowEndDate: projectionPayload.countWindowEndDate,
+    metrics: projectionPayload.metrics,
+    appliedUsers: results.length,
+    totals: results.reduce(
+      (sum, result) => {
+        sum.deletedEvents += result.deletedEvents ?? 0;
+        sum.deletedCounts += result.deletedCounts ?? 0;
+        sum.deletedWindows += result.deletedWindows ?? 0;
+        sum.insertedEvents += result.insertedEvents ?? 0;
+        sum.insertedCounts += result.insertedCounts ?? 0;
+        return sum;
+      },
+      {
+        deletedEvents: 0,
+        deletedCounts: 0,
+        deletedWindows: 0,
+        insertedEvents: 0,
+        insertedCounts: 0,
+      }
+    ),
+    results,
+  };
 }
 
 async function applyConvex(deltaPath, options) {
@@ -2139,9 +2926,20 @@ async function applyConvex(deltaPath, options) {
         Buffer.byteLength(JSON.stringify(payload.deltas), "utf8"),
     }
   );
+  const scheduleProjections =
+    options.applyScheduleProjections === false || !options.db
+      ? null
+      : await applyScheduleProjections(options.db, {
+          client,
+          makeFunctionReference,
+          importToken,
+          runId: options.runId ?? `local-${payload.generatedAt}`,
+          generatedAt: Date.now(),
+        });
   return {
     batches: results.length,
     totals,
+    scheduleProjections,
     results,
   };
 }
@@ -2752,6 +3550,7 @@ async function runDevWorkflow(db, options) {
     applyResult: {
       batches: applyResult.batches,
       totals: validated.applyTotals,
+      scheduleProjections: applyResult.scheduleProjections,
     },
     validated,
   };
@@ -2781,6 +3580,19 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     .map((row) => JSON.parse(row.payload_json));
   const byShowId = new Map(deltas.map((delta) => [delta.simulatedProjection.showId, delta]));
   const exportedDeltas = readJson(deltaPath).deltas;
+  const projectionPayload = buildScheduleProjectionPayload(db, {
+    nowMs: fixtureNowMs,
+    generatedAt: fixtureNowMs,
+  });
+  const legacyProjectionPayload = buildLegacyScheduleProjectionPayload(db, {
+    nowMs: fixtureNowMs,
+    generatedAt: fixtureNowMs,
+  });
+  const projectionParity = compareProjectionParity(
+    projectionPayload,
+    legacyProjectionPayload
+  );
+  const fixtureUserProjection = projectionPayload.users.find((user) => user.userId === "fixture-user");
 
   assertValidation(
     facts.get("show-direct")?.match_confidence === "direct_id",
@@ -2840,12 +3652,43 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     exportedDeltas.every((delta) => !("simulatedProjection" in delta) && !("showId" in delta)),
     "Exported Convex deltas contain local-only metadata."
   );
+  assertValidation(
+    fixtureUserProjection?.events.some((event) => event.showId === "show-direct"),
+    "Schedule projection did not include the direct provider-ID fixture event.",
+    projectionPayload.metrics
+  );
+  assertValidation(
+    fixtureUserProjection?.counts.some(
+      (row) =>
+        row.mediaFilter === "anime" &&
+        row.routeId === "anilist:anime:8004" &&
+        row.futureCount >= 1 &&
+        row.unavailableCount >= 1
+    ),
+    "Schedule projection did not include the future anime count row.",
+    fixtureUserProjection?.counts ?? []
+  );
+  assertValidation(
+    projectionPayload.metrics.users === 1 && projectionPayload.metrics.eventCount > 0,
+    "Schedule projection payload did not generate covered user rows.",
+    projectionPayload.metrics
+  );
+  assertValidation(
+    projectionParity.missingEvents.length === 0 &&
+      projectionParity.extraEvents.length === 0 &&
+      projectionParity.missingCounts.length === 0 &&
+      projectionParity.extraCounts.length === 0,
+    "Schedule projection parity check diverged from legacy provider-event matching.",
+    projectionParity
+  );
 
   return {
-    checks: 11,
+    checks: 15,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,
+    projectedEvents: projectionPayload.metrics.eventCount,
+    projectedCountRows: projectionPayload.metrics.countRowCount,
   };
 }
 
@@ -2863,6 +3706,9 @@ Commands:
   audit                        Write an audit report JSON.
   dashboard                    Start local internal audit dashboard.
   apply-convex                 Apply exported compact deltas to Convex.
+                               Also applies user schedule projections unless --skip-schedule-projections is set.
+  apply-schedule-projections   Apply only user schedule projections to Convex from the local SQLite state.
+  compare-schedule-projections Compare generated projection rows with legacy provider-event matching.
   seed-dev-cases               Seed token-protected synthetic rows into dev Convex.
   snapshot-dev-cases           Print token-protected synthetic dev row state.
   cleanup-dev-cases            Delete token-protected synthetic dev rows.
@@ -3004,8 +3850,64 @@ async function main() {
         importToken: getFlag(flags, "token", undefined),
         batchSize: Number(getFlag(flags, "batch-size", 25)),
         runId: getFlag(flags, "run-id", undefined),
+        applyScheduleProjections: !flags.has("skip-schedule-projections"),
         db,
       }), null, 2));
+      return;
+    }
+    if (command === "apply-schedule-projections") {
+      console.log(JSON.stringify(await applyScheduleProjections(db, {
+        convexUrl: getFlag(flags, "convex-url", undefined),
+        importToken: getFlag(flags, "token", undefined),
+        runId: getFlag(flags, "run-id", undefined),
+        generatedAt: flags.has("generated-at")
+          ? Number(getFlag(flags, "generated-at", Date.now()))
+          : undefined,
+        nowMs: flags.has("now-ms")
+          ? Number(getFlag(flags, "now-ms", Date.now()))
+          : undefined,
+        scheduleStartDate: getFlag(flags, "schedule-start-date", undefined),
+        scheduleEndDate: getFlag(flags, "schedule-end-date", undefined),
+        countWindowStartDate: getFlag(flags, "count-window-start-date", undefined),
+        countWindowEndDate: getFlag(flags, "count-window-end-date", undefined),
+        allowUnappliedDeltas: flags.has("allow-unapplied-deltas"),
+      }), null, 2));
+      return;
+    }
+    if (command === "compare-schedule-projections") {
+      const projectionOptions = {
+        generatedAt: flags.has("generated-at")
+          ? Number(getFlag(flags, "generated-at", Date.now()))
+          : undefined,
+        nowMs: flags.has("now-ms")
+          ? Number(getFlag(flags, "now-ms", Date.now()))
+          : undefined,
+        scheduleStartDate: getFlag(flags, "schedule-start-date", undefined),
+        scheduleEndDate: getFlag(flags, "schedule-end-date", undefined),
+        countWindowStartDate: getFlag(flags, "count-window-start-date", undefined),
+        countWindowEndDate: getFlag(flags, "count-window-end-date", undefined),
+      };
+      const projected = buildScheduleProjectionPayload(db, projectionOptions);
+      const legacy = buildLegacyScheduleProjectionPayload(db, projectionOptions);
+      const parity = compareProjectionParity(projected, legacy);
+      const ok =
+        parity.missingEvents.length === 0 &&
+        parity.extraEvents.length === 0 &&
+        parity.missingCounts.length === 0 &&
+        parity.extraCounts.length === 0;
+      console.log(JSON.stringify({
+        ok,
+        projected: projected.metrics,
+        legacy: legacy.metrics,
+        scheduleStartDate: projected.scheduleStartDate,
+        scheduleEndDate: projected.scheduleEndDate,
+        countWindowStartDate: projected.countWindowStartDate,
+        countWindowEndDate: projected.countWindowEndDate,
+        parity,
+      }, null, 2));
+      if (!ok) {
+        process.exitCode = 1;
+      }
       return;
     }
     if (command === "seed-dev-cases") {

@@ -228,11 +228,100 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_user_media", ["userId", "mediaType"])
+    .index("by_user_media_updatedAt", ["userId", "mediaType", "updatedAt"])
     .index("by_user_media_status_lastWatched", ["userId", "mediaType", "status", "lastWatchedAt"])
     .index("by_user_media_status_homeSortAt", ["userId", "mediaType", "status", "homeSortAt"])
     .index("by_user_media_status_autoPausedAt", ["userId", "mediaType", "status", "autoPausedAt"])
     .index("by_user_show", ["userId", "showId"])
     .index("by_userShow", ["userShowId"]),
+
+  userScheduleEvents: defineTable({
+    userId: v.id("users"),
+    showId: v.id("shows"),
+    userShowId: v.id("userShows"),
+    feedProjectionId: v.id("feedProjections"),
+    date: v.string(),
+    routeId: v.string(),
+    mediaType: v.union(v.literal("tv"), v.literal("anime")),
+    sourceMediaType: v.union(v.literal("tv"), v.literal("anime")),
+    sourceProvider: v.optional(v.string()),
+    showTitle: v.string(),
+    posterUrl: v.optional(v.string()),
+    tmdbId: v.optional(v.number()),
+    anilistId: v.optional(v.number()),
+    malId: v.optional(v.number()),
+    tvmazeId: v.optional(v.number()),
+    imdbId: v.optional(v.string()),
+    seasonNumber: v.number(),
+    episodeNumber: v.number(),
+    episodeName: v.optional(v.string()),
+    airDate: v.optional(v.string()),
+    airtimeMs: v.number(),
+    seriesDedupeKey: v.string(),
+    episodeDedupeKey: v.string(),
+    sameTrackedShowDayKey: v.string(),
+    sourceMatchesTracked: v.boolean(),
+    matchConfidence: v.union(
+      v.literal("direct_id"),
+      v.literal("bridged_id"),
+      v.literal("verified_title"),
+      v.literal("title_fallback")
+    ),
+    projectionUpdatedAt: v.number(),
+    reconciledAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_date", ["userId", "date"])
+    .index("by_user_media_date", ["userId", "mediaType", "date"])
+    .index("by_user_route_date", ["userId", "routeId", "date"])
+    .index("by_user_projection_date", ["userId", "feedProjectionId", "date"]),
+
+  watchlistFutureCountProjections: defineTable({
+    userId: v.id("users"),
+    windowStartDate: v.string(),
+    windowEndDate: v.string(),
+    mediaFilter: v.union(v.literal("all"), v.literal("tv"), v.literal("anime")),
+    routeId: v.string(),
+    availableCount: v.number(),
+    futureCount: v.number(),
+    unavailableCount: v.number(),
+    projectionUpdatedAt: v.number(),
+    reconciledAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_window", ["userId", "windowStartDate", "windowEndDate"])
+    .index("by_user_window_filter", [
+      "userId",
+      "windowStartDate",
+      "windowEndDate",
+      "mediaFilter",
+    ])
+    .index("by_user_window_filter_route", [
+      "userId",
+      "windowStartDate",
+      "windowEndDate",
+      "mediaFilter",
+      "routeId",
+    ]),
+
+  userScheduleProjectionWindows: defineTable({
+    userId: v.id("users"),
+    scheduleStartDate: v.string(),
+    scheduleEndDate: v.string(),
+    countWindowStartDate: v.string(),
+    countWindowEndDate: v.string(),
+    runId: v.string(),
+    generatedAt: v.number(),
+    projectionUpdatedAt: v.number(),
+    eventCount: v.number(),
+    countRowCount: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_schedule_window", ["userId", "scheduleStartDate", "scheduleEndDate"])
+    .index("by_user_count_window", ["userId", "countWindowStartDate", "countWindowEndDate"]),
 
   rateLimits: defineTable({
     key: v.string(),

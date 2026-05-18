@@ -6,6 +6,9 @@ import { v } from "convex/values";
 
 const IMPORT_BATCH_LIMIT = 200;
 const APPLY_DELTA_LIMIT = 50;
+const SCHEDULE_PROJECTION_EVENT_LIMIT = 1000;
+const SCHEDULE_PROJECTION_COUNT_LIMIT = 1000;
+const SCHEDULE_PROJECTION_MAX_WINDOW_DAYS = 150;
 const SCHEDULE_CONFIDENCE_TOKEN_ENV = "SCHEDULE_CONFIDENCE_IMPORT_TOKEN";
 const SYNTHETIC_PREFIX = "SC Synthetic";
 const SYNTHETIC_NOW = Date.UTC(2026, 4, 14, 12, 0, 0);
@@ -72,6 +75,55 @@ const releaseDeltaValidator = v.object({
   scheduleCacheMaintenanceVersion: v.optional(v.number()),
   sourceProvider: v.optional(v.string()),
   reconciledAt: v.number(),
+});
+
+const projectionMediaTypeValidator = v.union(v.literal("tv"), v.literal("anime"));
+
+const scheduleProjectionEventValidator = v.object({
+  showId: v.id("shows"),
+  userShowId: v.id("userShows"),
+  feedProjectionId: v.id("feedProjections"),
+  date: v.string(),
+  routeId: v.string(),
+  mediaType: projectionMediaTypeValidator,
+  sourceMediaType: projectionMediaTypeValidator,
+  sourceProvider: v.optional(v.string()),
+  showTitle: v.string(),
+  posterUrl: v.optional(v.string()),
+  tmdbId: v.optional(v.number()),
+  anilistId: v.optional(v.number()),
+  malId: v.optional(v.number()),
+  tvmazeId: v.optional(v.number()),
+  imdbId: v.optional(v.string()),
+  seasonNumber: v.number(),
+  episodeNumber: v.number(),
+  episodeName: v.optional(v.string()),
+  airDate: v.optional(v.string()),
+  airtimeMs: v.number(),
+  seriesDedupeKey: v.string(),
+  episodeDedupeKey: v.string(),
+  sameTrackedShowDayKey: v.string(),
+  sourceMatchesTracked: v.boolean(),
+  matchConfidence: v.union(
+    v.literal("direct_id"),
+    v.literal("bridged_id"),
+    v.literal("verified_title"),
+    v.literal("title_fallback")
+  ),
+  projectionUpdatedAt: v.number(),
+  reconciledAt: v.number(),
+  updatedAt: v.number(),
+});
+
+const watchlistFutureCountProjectionValidator = v.object({
+  mediaFilter: v.union(v.literal("all"), v.literal("tv"), v.literal("anime")),
+  routeId: v.string(),
+  availableCount: v.number(),
+  futureCount: v.number(),
+  unavailableCount: v.number(),
+  projectionUpdatedAt: v.number(),
+  reconciledAt: v.number(),
+  updatedAt: v.number(),
 });
 
 type SyntheticCase = {
@@ -258,6 +310,38 @@ function parseDateKey(value: string | undefined) {
     return null;
   }
   return parsed.toISOString().slice(0, 10);
+}
+
+function parseStrictDateKey(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString().slice(0, 10) === value ? parsed : null;
+}
+
+function getDateKeySpanDays(startDate: string, endDate: string) {
+  const start = parseStrictDateKey(startDate);
+  const end = parseStrictDateKey(endDate);
+  if (!start || !end) {
+    return null;
+  }
+  return Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+}
+
+function assertProjectionWindow(startDate: string, endDate: string, label: string) {
+  const spanDays = getDateKeySpanDays(startDate, endDate);
+  if (spanDays === null || spanDays < 1) {
+    throw new Error(`Invalid ${label} projection window.`);
+  }
+  if (spanDays > SCHEDULE_PROJECTION_MAX_WINDOW_DAYS) {
+    throw new Error(
+      `${label} projection window cannot exceed ${SCHEDULE_PROJECTION_MAX_WINDOW_DAYS} days.`
+    );
+  }
 }
 
 function addDaysToDateKey(dateKey: string, days: number) {
@@ -1092,6 +1176,7 @@ export const exportTrackedLibrary = query({
         userShowId: projection.userShowId,
         title: projection.title,
         mediaType: projection.mediaType,
+        posterUrl: projection.posterUrl ?? null,
         status: projection.status,
         watchedEpisodesCount: projection.watchedEpisodesCount,
         totalEpisodes: projection.totalEpisodes ?? null,
@@ -1105,6 +1190,174 @@ export const exportTrackedLibrary = query({
         lastWatchedAt: projection.lastWatchedAt,
         newEpisodeSignalAt: projection.newEpisodeSignalAt ?? null,
       })),
+    };
+  },
+});
+
+export const exportScheduleCacheWindow = query({
+  args: {
+    importToken: v.string(),
+    startDate: v.string(),
+    endDate: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    requireImportToken(args.importToken);
+    assertProjectionWindow(args.startDate, args.endDate, "schedule cache export");
+
+    const page = await ctx.db
+      .query("scheduleCache")
+      .withIndex("by_date", (q) =>
+        q.gte("date", args.startDate).lte("date", args.endDate)
+      )
+      .paginate({
+        ...args.paginationOpts,
+        numItems: Math.min(args.paginationOpts.numItems, IMPORT_BATCH_LIMIT),
+      });
+
+    return {
+      ...page,
+      page: page.page.map((row) => ({
+        date: row.date,
+        mediaType: row.mediaType,
+        episodes: row.episodes,
+        lastUpdated: row.lastUpdated,
+      })),
+    };
+  },
+});
+
+export const replaceUserScheduleProjectionWindow = mutation({
+  args: {
+    importToken: v.string(),
+    runId: v.string(),
+    generatedAt: v.number(),
+    userId: v.id("users"),
+    scheduleStartDate: v.string(),
+    scheduleEndDate: v.string(),
+    countWindowStartDate: v.string(),
+    countWindowEndDate: v.string(),
+    events: v.array(scheduleProjectionEventValidator),
+    counts: v.array(watchlistFutureCountProjectionValidator),
+  },
+  handler: async (ctx, args) => {
+    requireImportToken(args.importToken);
+    assertProjectionWindow(args.scheduleStartDate, args.scheduleEndDate, "schedule");
+    assertProjectionWindow(args.countWindowStartDate, args.countWindowEndDate, "count");
+
+    if (args.events.length > SCHEDULE_PROJECTION_EVENT_LIMIT) {
+      throw new Error(
+        `Apply at most ${SCHEDULE_PROJECTION_EVENT_LIMIT} schedule projection events per user.`
+      );
+    }
+    if (args.counts.length > SCHEDULE_PROJECTION_COUNT_LIMIT) {
+      throw new Error(
+        `Apply at most ${SCHEDULE_PROJECTION_COUNT_LIMIT} future count projection rows per user.`
+      );
+    }
+
+    let projectionUpdatedAt = args.generatedAt;
+    for (const event of args.events) {
+      if (!parseStrictDateKey(event.date)) {
+        throw new Error(`Invalid schedule projection event date: ${event.date}`);
+      }
+      if (event.date < args.scheduleStartDate || event.date > args.scheduleEndDate) {
+        throw new Error(`Schedule projection event date is outside the generated window.`);
+      }
+      if (!event.routeId.trim()) {
+        throw new Error("Schedule projection event routeId cannot be empty.");
+      }
+      if (!Number.isFinite(event.airtimeMs)) {
+        throw new Error("Schedule projection event airtimeMs must be finite.");
+      }
+      if (!Number.isFinite(event.seasonNumber) || !Number.isFinite(event.episodeNumber)) {
+        throw new Error("Schedule projection event episode numbers must be finite.");
+      }
+      projectionUpdatedAt = Math.max(projectionUpdatedAt, event.projectionUpdatedAt);
+    }
+
+    for (const count of args.counts) {
+      if (!count.routeId.trim()) {
+        throw new Error("Future count projection routeId cannot be empty.");
+      }
+      for (const value of [
+        count.availableCount,
+        count.futureCount,
+        count.unavailableCount,
+      ]) {
+        if (!Number.isFinite(value) || value < 0) {
+          throw new Error("Future count projection counts must be non-negative finite numbers.");
+        }
+      }
+      projectionUpdatedAt = Math.max(projectionUpdatedAt, count.projectionUpdatedAt);
+    }
+
+    const existingEvents = await ctx.db
+      .query("userScheduleEvents")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const row of existingEvents) {
+      await ctx.db.delete(row._id);
+    }
+
+    const existingCounts = await ctx.db
+      .query("watchlistFutureCountProjections")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const row of existingCounts) {
+      await ctx.db.delete(row._id);
+    }
+
+    const existingWindows = await ctx.db
+      .query("userScheduleProjectionWindows")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const row of existingWindows) {
+      await ctx.db.delete(row._id);
+    }
+
+    for (const event of args.events) {
+      await ctx.db.insert("userScheduleEvents", {
+        userId: args.userId,
+        ...event,
+      });
+    }
+
+    for (const count of args.counts) {
+      await ctx.db.insert("watchlistFutureCountProjections", {
+        userId: args.userId,
+        windowStartDate: args.countWindowStartDate,
+        windowEndDate: args.countWindowEndDate,
+        ...count,
+      });
+    }
+
+    await ctx.db.insert("userScheduleProjectionWindows", {
+      userId: args.userId,
+      scheduleStartDate: args.scheduleStartDate,
+      scheduleEndDate: args.scheduleEndDate,
+      countWindowStartDate: args.countWindowStartDate,
+      countWindowEndDate: args.countWindowEndDate,
+      runId: args.runId,
+      generatedAt: args.generatedAt,
+      projectionUpdatedAt,
+      eventCount: args.events.length,
+      countRowCount: args.counts.length,
+      updatedAt: Date.now(),
+    });
+
+    return {
+      runId: args.runId,
+      userId: args.userId,
+      deletedEvents: existingEvents.length,
+      deletedCounts: existingCounts.length,
+      deletedWindows: existingWindows.length,
+      insertedEvents: args.events.length,
+      insertedCounts: args.counts.length,
+      scheduleStartDate: args.scheduleStartDate,
+      scheduleEndDate: args.scheduleEndDate,
+      countWindowStartDate: args.countWindowStartDate,
+      countWindowEndDate: args.countWindowEndDate,
     };
   },
 });

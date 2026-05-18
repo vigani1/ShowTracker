@@ -83,6 +83,27 @@ type ScheduledWatchlistItem = {
   newEpisodeSignalAt?: number | null;
 };
 
+type ScheduleMediaFilter = "tv" | "anime";
+
+type UpcomingScheduleEpisode = {
+  routeId: string | null;
+  showTitle: string;
+  mediaType: "tv" | "anime";
+  posterUrl?: string;
+  daysUntil: number;
+  episode: {
+    seasonNumber: number;
+    episodeNumber: number;
+    name?: string;
+    airDate?: string;
+  };
+};
+
+type UpcomingScheduleGroup = {
+  date: string;
+  episodes: UpcomingScheduleEpisode[];
+};
+
 type HomeScheduleSignalMatch = {
   userShowId: Id<"userShows">;
   feedProjectionId: Id<"feedProjections">;
@@ -845,6 +866,446 @@ function serializeScheduledWatchlistItem(
     lastWatchedAt: projection.lastWatchedAt,
     newEpisodeSignalAt: projection.newEpisodeSignalAt ?? null,
   };
+}
+
+async function getLatestScheduleFeedProjectionUpdatedAt(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  mediaFilter?: ScheduleMediaFilter
+) {
+  if (mediaFilter) {
+    const projection = await ctx.db
+      .query("feedProjections")
+      .withIndex("by_user_media_updatedAt", (q) =>
+        q.eq("userId", userId).eq("mediaType", mediaFilter)
+      )
+      .order("desc")
+      .first();
+    return projection?.updatedAt ?? 0;
+  }
+
+  const [tvProjection, animeProjection] = await Promise.all([
+    ctx.db
+      .query("feedProjections")
+      .withIndex("by_user_media_updatedAt", (q) =>
+        q.eq("userId", userId).eq("mediaType", "tv")
+      )
+      .order("desc")
+      .first(),
+    ctx.db
+      .query("feedProjections")
+      .withIndex("by_user_media_updatedAt", (q) =>
+        q.eq("userId", userId).eq("mediaType", "anime")
+      )
+      .order("desc")
+      .first(),
+  ]);
+
+  return Math.max(tvProjection?.updatedAt ?? 0, animeProjection?.updatedAt ?? 0);
+}
+
+async function getFreshScheduleProjectionWindow(
+  ctx: QueryCtx,
+  args: {
+    userId: Id<"users">;
+    startDate: string;
+    endDate: string;
+    mediaFilter?: ScheduleMediaFilter;
+  }
+): Promise<Doc<"userScheduleProjectionWindows"> | null> {
+  const windows = await ctx.db
+    .query("userScheduleProjectionWindows")
+    .withIndex("by_user", (q) => q.eq("userId", args.userId))
+    .collect();
+  const coveredWindow =
+    windows
+      .filter(
+        (window) =>
+          window.scheduleStartDate <= args.startDate &&
+          window.scheduleEndDate >= args.endDate
+      )
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
+
+  if (!coveredWindow) {
+    return null;
+  }
+
+  const latestProjectionUpdate = await getLatestScheduleFeedProjectionUpdatedAt(
+    ctx,
+    args.userId,
+    args.mediaFilter
+  );
+  return latestProjectionUpdate > coveredWindow.projectionUpdatedAt
+    ? null
+    : coveredWindow;
+}
+
+async function getProjectedScheduleEvents(
+  ctx: QueryCtx,
+  args: {
+    userId: Id<"users">;
+    startDate: string;
+    endDate: string;
+    mediaFilter?: ScheduleMediaFilter;
+  }
+) {
+  if (args.mediaFilter) {
+    return ctx.db
+      .query("userScheduleEvents")
+      .withIndex("by_user_media_date", (q) =>
+        q
+          .eq("userId", args.userId)
+          .eq("mediaType", args.mediaFilter!)
+          .gte("date", args.startDate)
+          .lte("date", args.endDate)
+      )
+      .collect();
+  }
+
+  return ctx.db
+    .query("userScheduleEvents")
+    .withIndex("by_user_date", (q) =>
+      q.eq("userId", args.userId).gte("date", args.startDate).lte("date", args.endDate)
+    )
+    .collect();
+}
+
+function projectedScheduleEntryFromRow(
+  row: Doc<"userScheduleEvents">
+): CompactScheduleEntry {
+  return {
+    showId: `${row.sourceProvider ?? "projection"}:${row.routeId}`,
+    normalizedTitle: normalizeTitle(row.showTitle),
+    episode: {
+      seasonNumber: row.seasonNumber,
+      episodeNumber: row.episodeNumber,
+      ...(row.episodeName ? { name: row.episodeName } : {}),
+      ...(row.airDate ? { airDate: row.airDate } : {}),
+    },
+  };
+}
+
+async function filterProjectedRowsToCurrentFeedProjections(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  rows: Doc<"userScheduleEvents">[]
+) {
+  if (rows.length === 0) {
+    return rows;
+  }
+
+  const projectionIds = Array.from(new Set(rows.map((row) => row.feedProjectionId)));
+  const projections = await Promise.all(
+    projectionIds.map((projectionId) => ctx.db.get(projectionId))
+  );
+  const currentProjectionIds = new Set(
+    projections
+      .filter(
+        (projection): projection is Doc<"feedProjections"> =>
+          !!projection &&
+          projection.userId === userId &&
+          (projection.mediaType === "tv" || projection.mediaType === "anime")
+      )
+      .map((projection) => projection._id)
+  );
+
+  return rows.filter((row) => currentProjectionIds.has(row.feedProjectionId));
+}
+
+function serializeProjectedUpcomingSchedule(
+  rows: Doc<"userScheduleEvents">[],
+  today: Date
+): UpcomingScheduleGroup[] {
+  const grouped = new Map<string, UpcomingScheduleEpisode[]>();
+
+  for (const row of rows) {
+    const bucketDate = parseScheduleDateKey(row.date);
+    if (!bucketDate) {
+      continue;
+    }
+
+    const daysUntil = Math.floor(
+      (startOfDay(bucketDate).getTime() - today.getTime()) / DAY_MS
+    );
+    const episode: UpcomingScheduleEpisode = {
+      routeId: row.routeId,
+      showTitle: row.showTitle,
+      mediaType: row.mediaType,
+      ...(row.posterUrl ? { posterUrl: row.posterUrl } : {}),
+      daysUntil,
+      episode: {
+        seasonNumber: row.seasonNumber,
+        episodeNumber: row.episodeNumber,
+        ...(row.episodeName ? { name: row.episodeName } : {}),
+        ...(row.airDate ? { airDate: row.airDate } : {}),
+      },
+    };
+    const dayEpisodes = grouped.get(row.date) ?? [];
+    dayEpisodes.push(episode);
+    grouped.set(row.date, dayEpisodes);
+  }
+
+  return Array.from(grouped.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, episodes]) => ({
+      date,
+      episodes: episodes.sort((a, b) => {
+        const aAirtime = getEpisodeAirtimeTimestamp(a.episode.airDate);
+        const bAirtime = getEpisodeAirtimeTimestamp(b.episode.airDate);
+
+        if (aAirtime !== null && bAirtime !== null && aAirtime !== bAirtime) {
+          return aAirtime - bAirtime;
+        }
+
+        if (aAirtime !== null || bAirtime !== null) {
+          return aAirtime === null ? 1 : -1;
+        }
+
+        return a.showTitle.localeCompare(b.showTitle);
+      }),
+    }));
+}
+
+async function getProjectedUpcomingSchedule(
+  ctx: QueryCtx,
+  args: {
+    userId: Id<"users">;
+    startDate: string;
+    endDate: string;
+    mediaFilter?: ScheduleMediaFilter;
+  }
+): Promise<UpcomingScheduleGroup[] | null> {
+  const coveredWindow = await getFreshScheduleProjectionWindow(ctx, args);
+  if (!coveredWindow) {
+    return null;
+  }
+
+  const rows = await getProjectedScheduleEvents(ctx, args);
+  const currentRows = await filterProjectedRowsToCurrentFeedProjections(
+    ctx,
+    args.userId,
+    rows
+  );
+  return serializeProjectedUpcomingSchedule(currentRows, startOfDay(new Date()));
+}
+
+async function getProjectedFutureUpcomingCountsForUser(
+  ctx: QueryCtx,
+  args: {
+    userId: Id<"users">;
+    startDate: string;
+    endDate: string;
+    mediaFilter?: ScheduleMediaFilter;
+  }
+): Promise<WatchlistFutureCountRow[] | null> {
+  const coveredWindow = await getFreshScheduleProjectionWindow(ctx, args);
+  if (!coveredWindow) {
+    return null;
+  }
+
+  const rows = await getProjectedScheduleEvents(ctx, args);
+  const currentRows = await filterProjectedRowsToCurrentFeedProjections(
+    ctx,
+    args.userId,
+    rows
+  );
+  const counts = new Map<
+    string,
+    { availableCount: number; futureCount: number; unavailableCount: number }
+  >();
+  const nowMs = Date.now();
+  const today = startOfDay(new Date());
+
+  for (const row of currentRows) {
+    const bucketDate = parseScheduleDateKey(row.date);
+    if (!bucketDate) {
+      continue;
+    }
+    const daysUntil = Math.floor(
+      (startOfDay(bucketDate).getTime() - today.getTime()) / DAY_MS
+    );
+    const airtimeMs = getEpisodeAirtimeTimestamp(row.airDate);
+    const isFutureDay = daysUntil > 0;
+    const isTodayBeforeAirtime = daysUntil === 0 && airtimeMs !== null && airtimeMs > nowMs;
+    const existing = counts.get(row.routeId) ?? {
+      availableCount: 0,
+      futureCount: 0,
+      unavailableCount: 0,
+    };
+
+    if (!isFutureDay && !isTodayBeforeAirtime) {
+      existing.availableCount += 1;
+      counts.set(row.routeId, existing);
+      continue;
+    }
+
+    if (isFutureDay) {
+      existing.futureCount += 1;
+    }
+    existing.unavailableCount += 1;
+    counts.set(row.routeId, existing);
+  }
+
+  return Array.from(counts.entries())
+    .sort(([routeIdA], [routeIdB]) => routeIdA.localeCompare(routeIdB))
+    .map(([routeId, count]) => ({
+      routeId,
+      availableCount: count.availableCount,
+      futureCount: count.futureCount,
+      unavailableCount: count.unavailableCount,
+    }));
+}
+
+async function getProjectedTodayScheduledWatchlistFeed(
+  ctx: QueryCtx,
+  args: {
+    userId: Id<"users">;
+    date: string;
+    mediaFilter?: ScheduleMediaFilter;
+    limit: number;
+  }
+): Promise<ScheduledWatchlistItem[] | null> {
+  const coveredWindow = await getFreshScheduleProjectionWindow(ctx, {
+    userId: args.userId,
+    startDate: args.date,
+    endDate: args.date,
+    mediaFilter: args.mediaFilter,
+  });
+  if (!coveredWindow) {
+    return null;
+  }
+
+  const rows = await getProjectedScheduleEvents(ctx, {
+    userId: args.userId,
+    startDate: args.date,
+    endDate: args.date,
+    mediaFilter: args.mediaFilter,
+  });
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const projectionIds = Array.from(new Set(rows.map((row) => row.feedProjectionId)));
+  const projections = await Promise.all(
+    projectionIds.map((projectionId) => ctx.db.get(projectionId))
+  );
+  const projectionById = new Map(
+    projections
+      .filter(
+        (projection): projection is Doc<"feedProjections"> =>
+          !!projection && projection.userId === args.userId
+      )
+      .map((projection) => [projection._id, projection])
+  );
+
+  const candidates: Array<{
+    row: Doc<"userScheduleEvents">;
+    entry: CompactScheduleEntry;
+    tracked: {
+      projection: Doc<"feedProjections">;
+      watchlistId: string;
+      showId: Id<"shows">;
+      mediaType: "tv" | "anime";
+      status: string;
+      lastWatchedAt: number;
+    };
+  }> = [];
+
+  for (const row of rows) {
+    const projection = projectionById.get(row.feedProjectionId);
+    if (!projection) {
+      continue;
+    }
+    if (projection.mediaType !== "tv" && projection.mediaType !== "anime") {
+      continue;
+    }
+    if (args.mediaFilter && projection.mediaType !== args.mediaFilter) {
+      continue;
+    }
+    if (
+      (projection.status !== "watching" && projection.status !== "completed") ||
+      projection.watchedEpisodesCount <= 0
+    ) {
+      continue;
+    }
+    const watchlistId = getWatchlistIdForProjection(projection);
+    if (!watchlistId) {
+      continue;
+    }
+    candidates.push({
+      row,
+      entry: projectedScheduleEntryFromRow(row),
+      tracked: {
+        projection,
+        watchlistId,
+        showId: projection.showId,
+        mediaType: projection.mediaType,
+        status: projection.status,
+        lastWatchedAt: projection.lastWatchedAt,
+      },
+    });
+  }
+
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  const candidateShowIds = Array.from(
+    new Set(candidates.map((candidate) => candidate.tracked.showId))
+  );
+  const watchedEpisodeKeys = new Set<string>();
+  await Promise.all(
+    candidateShowIds.map(async (showId) => {
+      const watchedEpisodes = await ctx.db
+        .query("watchedEpisodes")
+        .withIndex("by_user_show", (q) =>
+          q.eq("userId", args.userId).eq("showId", showId)
+        )
+        .collect();
+
+      for (const watched of watchedEpisodes) {
+        watchedEpisodeKeys.add(`${showId}:${watched.season}:${watched.episode}`);
+      }
+    })
+  );
+
+  const selectedByRoute = new Map<string, (typeof candidates)[number]>();
+  for (const candidate of candidates) {
+    if (
+      watchedEpisodeKeys.has(
+        `${candidate.tracked.showId}:${candidate.row.seasonNumber}:${candidate.row.episodeNumber}`
+      )
+    ) {
+      continue;
+    }
+
+    const existing = selectedByRoute.get(candidate.tracked.watchlistId);
+    if (!existing) {
+      selectedByRoute.set(candidate.tracked.watchlistId, candidate);
+      continue;
+    }
+
+    const shouldReplace =
+      (!existing.row.sourceMatchesTracked && candidate.row.sourceMatchesTracked) ||
+      (existing.row.sourceMatchesTracked === candidate.row.sourceMatchesTracked &&
+        (shouldPreferScheduleCandidate(candidate.tracked, existing.tracked) ||
+          shouldPreferSameTrackedShowDayEpisode(candidate.entry, existing.entry)));
+
+    if (shouldReplace) {
+      selectedByRoute.set(candidate.tracked.watchlistId, candidate);
+    }
+  }
+
+  return Array.from(selectedByRoute.values())
+    .sort((a, b) => {
+      if (a.row.airtimeMs !== b.row.airtimeMs) {
+        return a.row.airtimeMs - b.row.airtimeMs;
+      }
+      return a.tracked.projection.title.localeCompare(b.tracked.projection.title);
+    })
+    .slice(0, args.limit)
+    .map((candidate) => serializeScheduledWatchlistItem(candidate.tracked.projection))
+    .filter((item): item is ScheduledWatchlistItem => item !== null);
 }
 
 function getUnixRangeForDate(dateString: string) {
@@ -1946,19 +2407,31 @@ export const getTodayScheduledWatchlistFeed = query({
     );
     const safeLimit = Math.max(1, Math.min(args.limit ?? 64, 128));
     const mediaFilter = args.mediaFilter;
+    const typedUserId = userId as Id<"users">;
+    const projectedFeed = await getProjectedTodayScheduledWatchlistFeed(ctx, {
+      userId: typedUserId,
+      date: dateKey,
+      mediaFilter,
+      limit: safeLimit,
+    });
+
+    if (projectedFeed !== null) {
+      return projectedFeed;
+    }
+
     const projections =
       mediaFilter === "tv"
         ? await ctx.db
             .query("feedProjections")
             .withIndex("by_user_media", (q) =>
-              q.eq("userId", userId as Id<"users">).eq("mediaType", "tv")
+              q.eq("userId", typedUserId).eq("mediaType", "tv")
             )
             .collect()
         : mediaFilter === "anime"
           ? await ctx.db
               .query("feedProjections")
               .withIndex("by_user_media", (q) =>
-                q.eq("userId", userId as Id<"users">).eq("mediaType", "anime")
+                q.eq("userId", typedUserId).eq("mediaType", "anime")
               )
               .collect()
           : (
@@ -1966,14 +2439,14 @@ export const getTodayScheduledWatchlistFeed = query({
                 ctx.db
                   .query("feedProjections")
                   .withIndex("by_user_media", (q) =>
-                    q.eq("userId", userId as Id<"users">).eq("mediaType", "tv")
+                    q.eq("userId", typedUserId).eq("mediaType", "tv")
                   )
                   .collect(),
                 ctx.db
                   .query("feedProjections")
                   .withIndex("by_user_media", (q) =>
                     q
-                      .eq("userId", userId as Id<"users">)
+                      .eq("userId", typedUserId)
                       .eq("mediaType", "anime")
                   )
                   .collect(),
@@ -2073,7 +2546,7 @@ export const getTodayScheduledWatchlistFeed = query({
         const watchedEpisodes = await ctx.db
           .query("watchedEpisodes")
           .withIndex("by_user_show", (q) =>
-            q.eq("userId", userId as Id<"users">).eq("showId", showId)
+            q.eq("userId", typedUserId).eq("showId", showId)
           )
           .collect();
 
@@ -2149,6 +2622,16 @@ export const getUpcomingSchedule = query({
     // Each projection already has the denormalized show metadata we need.
     // Query only TV/Anime projections to avoid scanning movie rows.
     const mediaFilter = args.mediaFilter;
+    const projectedSchedule = await getProjectedUpcomingSchedule(ctx, {
+      userId: typedUserId,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      mediaFilter,
+    });
+
+    if (projectedSchedule !== null) {
+      return projectedSchedule;
+    }
 
     const nonMovieProjections = mediaFilter === "tv"
       ? await ctx.db
@@ -2447,6 +2930,16 @@ async function getFutureUpcomingCountsForUser(
     const range = getScheduleRangeKeys(args.startDate, args.endDate);
     const today = startOfDay(new Date());
     const mediaFilter = args.mediaFilter;
+    const projectedCounts = await getProjectedFutureUpcomingCountsForUser(ctx, {
+      userId: args.userId,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      mediaFilter,
+    });
+
+    if (projectedCounts !== null) {
+      return projectedCounts;
+    }
 
     const nonMovieProjections = mediaFilter === "tv"
       ? await ctx.db
