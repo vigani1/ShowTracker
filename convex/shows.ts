@@ -8107,8 +8107,8 @@ function shouldAutoPause(
   return daysSinceLastWatch >= INACTIVITY_THRESHOLD_DAYS;
 }
 
-function isCaughtUpOnOngoingShow(
-  show: Pick<Doc<"shows">, "mediaType" | "status" | "totalEpisodes">,
+function hasWatchedKnownEpisodeTotal(
+  show: Pick<Doc<"shows">, "mediaType" | "totalEpisodes">,
   watchedEpisodesCount: number
 ) {
   if (show.mediaType === "movie") {
@@ -8124,7 +8124,7 @@ function isCaughtUpOnOngoingShow(
     return false;
   }
 
-  return !isTerminalLifecycleStatus(show.status);
+  return true;
 }
 
 /**
@@ -8146,13 +8146,15 @@ export const autoPauseInactiveShows = internalMutation({
       .collect();
     
     let pausedCount = 0;
+    let skippedFullyWatchedCount = 0;
     
     for (const userShow of showsToPause) {
       const show = await ctx.db.get(userShow.showId);
       if (
         show &&
-        isCaughtUpOnOngoingShow(show, Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0)))
+        hasWatchedKnownEpisodeTotal(show, Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0)))
       ) {
+        skippedFullyWatchedCount++;
         continue;
       }
 
@@ -8176,7 +8178,7 @@ export const autoPauseInactiveShows = internalMutation({
       }
     }
     
-    return { pausedCount };
+    return { pausedCount, skippedFullyWatchedCount };
   },
 });
 

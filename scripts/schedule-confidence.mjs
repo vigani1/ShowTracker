@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { constants as zlibConstants, gunzipSync } from "node:zlib";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -1653,23 +1654,36 @@ function storeFactAndDelta(db, fact, item, createdAt) {
   return { payload, changed };
 }
 
+async function readJsonResponseText(response) {
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+  if (isGzip) {
+    return gunzipSync(bytes, { finishFlush: zlibConstants.Z_SYNC_FLUSH }).toString("utf8");
+  }
+  return bytes.toString("utf8");
+}
+
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
+  const bodyText = await readJsonResponseText(response);
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`${response.status} ${response.statusText}: ${body.slice(0, 300)}`);
+    throw new Error(`${response.status} ${response.statusText}: ${bodyText.slice(0, 300)}`);
   }
-  return response.json();
+  try {
+    return JSON.parse(bodyText);
+  } catch (error) {
+    throw new Error(`Invalid JSON response: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function getTmdbAuth() {
   const token = process.env.EXPO_PUBLIC_TMDB_READ_ACCESS_TOKEN?.trim();
   const key = process.env.EXPO_PUBLIC_TMDB_API_KEY?.trim();
-  if (key && !key.startsWith("your_")) {
-    return { headers: {}, apiKey: key };
-  }
   if (token && !token.startsWith("your_")) {
     return { headers: { Authorization: `Bearer ${token}` }, apiKey: null };
+  }
+  if (key && !key.startsWith("your_")) {
+    return { headers: {}, apiKey: key };
   }
   return null;
 }

@@ -211,7 +211,7 @@ function buildUrl(path: string, params: Record<string, string | number> = {}) {
   const normalizedPath = path.replace(/^\/+/, "");
   const base = tmdbBaseUrl.replace(/\/+$/, "");
   const url = new URL(`${base}/${normalizedPath}`);
-  if (tmdbApiKey) {
+  if (!tmdbReadAccessToken && tmdbApiKey) {
     url.searchParams.set("api_key", tmdbApiKey);
   }
   Object.entries(params).forEach(([key, value]) => {
@@ -233,8 +233,9 @@ async function request<T>(
   const url = buildUrl(path, params);
   const maxAttempts = 4;
   const baseDelayMs = 500;
-  // Prefer API key query auth when available to avoid browser preflight/CORS issues.
-  const headers: HeadersInit = !tmdbApiKey && tmdbReadAccessToken
+  // Prefer bearer auth because TMDB's API-key path can return gzip bytes that
+  // browser/Node fetch expose as an undecoded JSON body.
+  const headers: HeadersInit = tmdbReadAccessToken
     ? {
         Authorization: `Bearer ${tmdbReadAccessToken}`,
       }
