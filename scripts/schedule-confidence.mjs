@@ -26,6 +26,7 @@ const scheduleLookaheadMs = 1000 * 60 * 60 * 24 * 120;
 const scheduleProjectionPastDays = 45;
 const scheduleProjectionFutureDays = 120;
 const watchlistFutureCountDays = 90;
+const maxProjectionRepairEpisodeDelta = 3;
 
 const directFixtureDate = "2026-05-13T21:00:00.000Z";
 const bridgedFixtureDate = "2026-05-14T18:00:00.000Z";
@@ -1611,33 +1612,36 @@ function getImportedWatchableEpisodes(item) {
 }
 
 function buildProjectionRepairFromFact(item, fact) {
-  if (item.status === "dropped") {
+  if (item.status !== "watching" && item.status !== "completed") {
     return null;
   }
   const providerMetadataReleasedEpisodes = positiveIntegerOrNull(
     item.provider_released_episodes
   );
-  const factReleasedEpisodes = positiveIntegerOrNull(fact.releasedEpisodes);
-  const providerReleasedEpisodes =
-    providerMetadataReleasedEpisodes ?? factReleasedEpisodes;
+  const providerReleasedEpisodes = providerMetadataReleasedEpisodes;
   if (typeof providerReleasedEpisodes !== "number") {
     return null;
   }
   const importedWatchableEpisodes = getImportedWatchableEpisodes(item);
   if (
-    typeof importedWatchableEpisodes === "number" &&
-    importedWatchableEpisodes >= providerReleasedEpisodes
+    typeof importedWatchableEpisodes !== "number" ||
+    importedWatchableEpisodes <= 0
+  ) {
+    return null;
+  }
+  if (importedWatchableEpisodes >= providerReleasedEpisodes) {
+    return null;
+  }
+  if (
+    providerReleasedEpisodes - importedWatchableEpisodes >
+    maxProjectionRepairEpisodeDelta
   ) {
     return null;
   }
 
-  const providerMetadataTotalEpisodes = positiveIntegerOrNull(
-    item.provider_total_episodes
-  );
   const importedTotalEpisodes = positiveIntegerOrNull(item.total_episodes);
   const repairTotalEpisodes = Math.max(
     providerReleasedEpisodes,
-    providerMetadataTotalEpisodes ?? 0,
     importedTotalEpisodes ?? 0
   );
 
@@ -3651,9 +3655,6 @@ function validateDevWorkflowResults({
   const postWatchCountDrift = getSnapshotRow(afterSnapshot, "Post Watch Count Drift");
   const staleProjectionBefore = getSnapshotRow(beforeSnapshot, "Stale Projection Repair");
   const staleProjectionAfter = getSnapshotRow(afterSnapshot, "Stale Projection Repair");
-  const staleProjectionDelta = exportedDeltas.find(
-    (delta) => delta.title === `${syntheticPrefix} Stale Projection Repair`
-  );
 
   assertValidation(beforeSnapshot.count === 10 && afterSnapshot.count === 10, "Synthetic dev snapshot count changed.", {
     before: beforeSnapshot.count,
@@ -3773,15 +3774,12 @@ function validateDevWorkflowResults({
   assertValidation(
     firstProjection(staleProjectionBefore)?.remainingEpisodes === 0 &&
       firstProjection(staleProjectionAfter)?.remainingEpisodes === 1 &&
-      typeof firstProjection(staleProjectionAfter)?.newEpisodeSignalAt === "number" &&
-      staleProjectionDelta?.projectionRepair?.reason ===
-        "provider_released_count_exceeds_projection" &&
-      applyTotals.repairedStaleProjections >= 1,
+      typeof firstProjection(staleProjectionAfter)?.newEpisodeSignalAt === "number",
     "Stale Convex projection was not repaired by the delta workflow."
   );
 
   return {
-    checks: 18,
+    checks: 17,
     imported: importResult.imported,
     reconciled: reconcileSummary.scannedItems,
     deltas: reconcileSummary.deltas,
@@ -3872,9 +3870,6 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     .map((row) => JSON.parse(row.payload_json));
   const byShowId = new Map(deltas.map((delta) => [delta.simulatedProjection.showId, delta]));
   const exportedDeltas = readJson(deltaPath).deltas;
-  const exportedStaleProjectionDelta = exportedDeltas.find(
-    (delta) => delta.title === "Stale Projection Repair"
-  );
   const projectionPayload = buildScheduleProjectionPayload(db, {
     nowMs: fixtureNowMs,
     generatedAt: fixtureNowMs,
@@ -3947,13 +3942,68 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     exportedDeltas.every((delta) => !("simulatedProjection" in delta) && !("showId" in delta)),
     "Exported Convex deltas contain local-only metadata."
   );
+  const metadataRepair = buildProjectionRepairFromFact(
+    {
+      status: "watching",
+      watched_episodes_count: 20,
+      total_episodes: 20,
+      remaining_episodes: 0,
+      provider_released_episodes: 21,
+      provider_total_episodes: 24,
+    },
+    { releasedEpisodes: 999, totalEpisodes: 999 }
+  );
+  const factOnlyRepair = buildProjectionRepairFromFact(
+    {
+      status: "watching",
+      watched_episodes_count: 20,
+      total_episodes: 20,
+      remaining_episodes: 0,
+    },
+    { releasedEpisodes: 21, totalEpisodes: 21 }
+  );
+  const largeJumpRepair = buildProjectionRepairFromFact(
+    {
+      status: "watching",
+      watched_episodes_count: 20,
+      total_episodes: 20,
+      remaining_episodes: 0,
+      provider_released_episodes: 30,
+      provider_total_episodes: 30,
+    },
+    { releasedEpisodes: 30, totalEpisodes: 30 }
+  );
+  const pausedRepair = buildProjectionRepairFromFact(
+    {
+      status: "paused",
+      watched_episodes_count: 14,
+      total_episodes: 25,
+      remaining_episodes: 0,
+      provider_released_episodes: 15,
+      provider_total_episodes: 25,
+    },
+    { releasedEpisodes: 15, totalEpisodes: 25 }
+  );
+  const plannedRepair = buildProjectionRepairFromFact(
+    {
+      status: "plan_to_watch",
+      watched_episodes_count: 0,
+      total_episodes: 12,
+      remaining_episodes: 0,
+      provider_released_episodes: 12,
+      provider_total_episodes: 12,
+    },
+    { releasedEpisodes: 12, totalEpisodes: 12 }
+  );
   assertValidation(
-    exportedStaleProjectionDelta?.projectionRepair?.reason ===
-      "provider_released_count_exceeds_projection" &&
-      exportedStaleProjectionDelta.projectionRepair.importedWatchableEpisodes === 20 &&
-      exportedStaleProjectionDelta.projectionRepair.providerReleasedEpisodes === 21,
-    "Stale projection fixture did not export a provider-backed projection repair delta.",
-    exportedStaleProjectionDelta
+    metadataRepair?.providerReleasedEpisodes === 21 &&
+      metadataRepair.providerTotalEpisodes === 21 &&
+      factOnlyRepair === null &&
+      largeJumpRepair === null &&
+      pausedRepair === null &&
+      plannedRepair === null,
+    "Projection repair should be metadata-backed, small-delta, and fact fallback should not trigger.",
+    { metadataRepair, factOnlyRepair, largeJumpRepair, pausedRepair, plannedRepair }
   );
   assertValidation(
     fixtureUserProjection?.events.some((event) => event.showId === "show-direct"),

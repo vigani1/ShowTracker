@@ -25,7 +25,15 @@ Keep provider metadata refresh owned by the external backend job.
 
 The server reconciler now carries provider catalogue counts alongside provider schedule events when real provider fetching is enabled. TMDB and AniList metadata are used to compute provider-backed released and total episode counts; TVMaze full episode lists can contribute released counts. These catalogue counts do not replace the general release-fact calculation. They are only used as a bounded repair input when the imported user-specific watchable count from `watchedEpisodesCount + remainingEpisodes` is behind.
 
-When the provider-backed released count is higher than the imported watchable count, the server emits a compact `projectionRepair` delta. Convex treats that as permission to visit the matched show's `userShows` rows and rebuild the affected `feedProjections`, even if the `shows` document itself does not need a patch.
+When the provider metadata released count is slightly higher than the imported watchable count, the server emits a compact `projectionRepair` delta. Convex treats that as permission to visit the matched show's `userShows` rows and rebuild the affected `feedProjections`, even if the `shows` document itself does not need a patch.
+
+The repair is intentionally narrow:
+
+- only `watching` and `completed` rows are eligible;
+- the imported watchable count must already be positive;
+- the provider metadata released count must be ahead by at most three episodes;
+- schedule-derived release facts without provider metadata do not trigger `projectionRepair`;
+- provider catalogue total is diagnostic only and does not make the applied total jump beyond `max(importedTotalEpisodes, providerReleasedEpisodes)`.
 
 Convex still does not fetch providers in this path. It only applies compact deltas and projection rebuilds for matched provider-ID rows.
 
@@ -33,7 +41,7 @@ Convex still does not fetch providers in this path. It only applies compact delt
 
 The Home card denominator should be repaired by the same controlled backend job that already owns provider reconciliation. This avoids reintroducing user-triggered Convex provider fetches or broad Convex scans.
 
-Using `releasedEpisodes` as the repair gate is safer than blindly copying schedule totals. Schedule providers can list future episodes beyond the current watchable count, and some rows use season-local episode numbers. A future schedule total should not make Home display unreleased backlog. The repair signal only changes the delta payload for rows where provider metadata or the existing trusted fact says the released/watchable count is ahead of the imported projection.
+Using metadata-backed `releasedEpisodes` as the repair gate is safer than blindly copying schedule totals. Schedule providers can list future episodes beyond the current watchable count, and some rows use season-local episode numbers. A future schedule total should not make Home display unreleased backlog. The repair signal only changes the delta payload for rows where provider metadata says the released/watchable count is slightly ahead of the imported projection.
 
 The delta includes diagnostic details, including the imported watchable count and provider-backed released count. If the repair path fires unexpectedly, the next audit can explain why without guessing from function names.
 
@@ -71,7 +79,7 @@ Planned verification:
 - `npx expo lint`
 - `git diff --check`
 
-Synthetic coverage should include the stale projection case where the show row already has the correct released count but the imported feed projection is behind. The expected result is a `projectionRepair` delta and a repaired `feedProjections.remainingEpisodes` after apply.
+Synthetic coverage should include the stale projection case where the feed projection is behind and the existing show patch path still repairs it. Helper coverage should prove that `projectionRepair` only fires with provider metadata, does not fire from schedule facts alone, and rejects large jumps.
 
 Known-show checks after deployment should include the Home cards that originally changed only after opening detail pages: Euphoria, The Boys, The Beginning After the End, Dorohedoro, and Classroom of the Elite.
 
