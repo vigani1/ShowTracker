@@ -1481,6 +1481,15 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const futureEvents = allFutureEvents.filter((row) => row.air_timestamp <= nowMs + scheduleLookaheadMs);
   const latestReleased = releasedEvents.at(-1);
   const nextScheduled = futureEvents[0];
+  const watchedEpisodesCount = Math.max(
+    0,
+    Math.floor(numberOrNull(item.watched_episodes_count) ?? 0)
+  );
+  const importedRemainingEpisodes = numberOrNull(item.remaining_episodes);
+  const importedWatchableEpisodes =
+    typeof importedRemainingEpisodes === "number" && importedRemainingEpisodes > 0
+      ? watchedEpisodesCount + Math.floor(importedRemainingEpisodes)
+      : null;
   const providerIds = compactProviderIds({
     tmdbId: item.tmdb_id,
     tvmazeId: item.tvmaze_id ?? match.rows.find((row) => row.tvmaze_id !== null)?.tvmaze_id,
@@ -1498,22 +1507,32 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     releasedEvents.length <= 1 &&
     latestReleaseIsAlreadyWatched;
   const rawReleasedEpisodes = hasKnownFutureEvents
-    ? Math.max(item.watched_episodes_count ?? 0, releasedEvents.length)
+    ? Math.max(watchedEpisodesCount, releasedEvents.length)
     : hasSparseOldReleaseHistory
-      ? Math.max(item.watched_episodes_count ?? 0, releasedEvents.length)
+      ? Math.max(watchedEpisodesCount, releasedEvents.length)
       : Math.max(
           item.released_episodes ?? 0,
-          item.watched_episodes_count ?? 0,
+          watchedEpisodesCount,
           item.total_episodes ?? 0,
           releasedEvents.length,
           ...releasedEvents.map((row) => row.episode_number)
         );
-  const releasedEpisodes =
+  const timestampCappedReleasedEpisodes =
     latestReleaseIsAlreadyWatched &&
-    (releasedEvents.length <= (item.watched_episodes_count ?? 0) ||
-      rawReleasedEpisodes - (item.watched_episodes_count ?? 0) <= 1)
-      ? item.watched_episodes_count ?? rawReleasedEpisodes
+    (releasedEvents.length <= watchedEpisodesCount ||
+      rawReleasedEpisodes - watchedEpisodesCount <= 1)
+      ? watchedEpisodesCount
       : rawReleasedEpisodes;
+  const providerReleasedCeilingForImportedRemaining = Math.max(
+    rawReleasedEpisodes,
+    releasedEvents.length,
+    ...releasedEvents.map((row) => row.episode_number)
+  );
+  const releasedEpisodes =
+    typeof importedWatchableEpisodes === "number" &&
+    providerReleasedCeilingForImportedRemaining >= importedWatchableEpisodes
+      ? Math.max(timestampCappedReleasedEpisodes, importedWatchableEpisodes)
+      : timestampCappedReleasedEpisodes;
   const totalEpisodes = Math.max(
     item.total_episodes ?? 0,
     releasedEpisodes,
@@ -4004,6 +4023,80 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
       plannedRepair === null,
     "Projection repair should be metadata-backed, small-delta, and fact fallback should not trigger.",
     { metadataRepair, factOnlyRepair, largeJumpRepair, pausedRepair, plannedRepair }
+  );
+  const postAirWatchedAt = Date.UTC(2026, 4, 20, 12, 0, 0);
+  const latestEpisodeTimestamp = Date.UTC(2026, 4, 18, 0, 0, 0);
+  const remainingPreservedFact = buildReleaseFact(
+    {
+      show_id: "show-imported-remaining-preserved",
+      title: "Imported Remaining Preserved",
+      media_type: "tv",
+      status: "watching",
+      watched_episodes_count: 456,
+      total_episodes: 457,
+      remaining_episodes: 1,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 9017,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tvmaze",
+          air_timestamp: latestEpisodeTimestamp,
+          air_date: "2026-05-18T00:00:00.000Z",
+          season_number: 24,
+          episode_number: 457,
+          name: "Latest Released",
+          tmdb_id: 9017,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+      ],
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
+  const timestampCappedFact = buildReleaseFact(
+    {
+      show_id: "show-imported-remaining-missing",
+      title: "Imported Remaining Missing",
+      media_type: "tv",
+      status: "watching",
+      watched_episodes_count: 456,
+      total_episodes: 457,
+      remaining_episodes: 0,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 9018,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tvmaze",
+          air_timestamp: latestEpisodeTimestamp,
+          air_date: "2026-05-18T00:00:00.000Z",
+          season_number: 24,
+          episode_number: 457,
+          name: "Latest Released",
+          tmdb_id: 9018,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+      ],
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
+  assertValidation(
+    remainingPreservedFact.releasedEpisodes === 457 &&
+      timestampCappedFact.releasedEpisodes === 456,
+    "Imported remaining episodes should prevent timestamp-only release capping.",
+    { remainingPreservedFact, timestampCappedFact }
   );
   assertValidation(
     fixtureUserProjection?.events.some((event) => event.showId === "show-direct"),
