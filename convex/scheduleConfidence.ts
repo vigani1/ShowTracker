@@ -61,6 +61,13 @@ const episodeFactValidator = v.object({
   airTimestamp: v.optional(v.number()),
 });
 
+const projectionRepairValidator = v.object({
+  reason: v.string(),
+  importedWatchableEpisodes: v.optional(v.number()),
+  providerReleasedEpisodes: v.optional(v.number()),
+  providerTotalEpisodes: v.optional(v.number()),
+});
+
 const releaseDeltaValidator = v.object({
   canonicalKey: v.string(),
   title: v.string(),
@@ -76,6 +83,7 @@ const releaseDeltaValidator = v.object({
   clearStaleEpisodeSignal: v.optional(v.boolean()),
   scheduleCacheMaintenance: v.optional(v.boolean()),
   scheduleCacheMaintenanceVersion: v.optional(v.number()),
+  projectionRepair: v.optional(projectionRepairValidator),
   sourceProvider: v.optional(v.string()),
   reconciledAt: v.number(),
 });
@@ -235,8 +243,8 @@ const syntheticCases: SyntheticCase[] = [
     mediaType: "tv",
     status: "watching",
     watchedEpisodesCount: 20,
-    totalEpisodes: 20,
-    releasedEpisodes: 20,
+    totalEpisodes: 21,
+    releasedEpisodes: 21,
     tmdbId: 981006,
     tvmazeId: 991006,
     firstAired: "2010-02-05",
@@ -1639,6 +1647,7 @@ export const applyReleaseDeltas = mutation({
       patchedFeedProjections: 0,
       resumedCompletedShows: 0,
       clearedStaleEpisodeSignals: 0,
+      repairedStaleProjections: 0,
       scheduleCacheRowsUpdated: 0,
       scheduleCacheRowsSkipped: 0,
       skippedTitleFallback: 0,
@@ -1705,6 +1714,7 @@ export const applyReleaseDeltas = mutation({
       const shouldVisitUserShows =
         Object.keys(showPatch).length > 0 ||
         delta.clearStaleEpisodeSignal === true ||
+        Boolean(delta.projectionRepair) ||
         delta.releaseState === "available_now";
 
       if (!shouldVisitUserShows) {
@@ -1755,8 +1765,16 @@ export const applyReleaseDeltas = mutation({
         }
 
         const patchedUserShow = { ...userShow, ...userPatch };
-        if (await patchProjectionForUserShow(ctx, patchedUserShow, patchedShow)) {
+        const projectionPatched = await patchProjectionForUserShow(
+          ctx,
+          patchedUserShow,
+          patchedShow
+        );
+        if (projectionPatched) {
           result.patchedFeedProjections += 1;
+          if (delta.projectionRepair) {
+            result.repairedStaleProjections += 1;
+          }
         } else {
           result.skippedUnchangedFeedProjections += 1;
         }
@@ -1854,6 +1872,20 @@ export const seedSyntheticDevCases = mutation({
         throw new Error(`Failed to read seeded synthetic case ${entry.key}`);
       }
       await patchProjectionForUserShow(ctx, userShow, show);
+
+      if (entry.key === "stale_projection") {
+        const projection = await ctx.db
+          .query("feedProjections")
+          .withIndex("by_userShow", (q) => q.eq("userShowId", userShow._id))
+          .unique();
+        if (projection) {
+          await ctx.db.patch(projection._id, {
+            totalEpisodes: 20,
+            remainingEpisodes: 0,
+            updatedAt: now,
+          });
+        }
+      }
 
       if (entry.key === "future" && typeof entry.anilistId === "number") {
         await upsertSyntheticScheduleCacheEntry(ctx, {

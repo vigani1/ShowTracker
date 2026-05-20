@@ -144,6 +144,18 @@ const fixtureLibrary = [
     tvmazeId: 9005,
   },
   {
+    id: "fixture-stale-projection",
+    userId: "fixture-user",
+    showId: "show-stale-projection",
+    title: "Stale Projection Repair",
+    mediaType: "tv",
+    status: "watching",
+    watchedEpisodesCount: 20,
+    totalEpisodes: 20,
+    releasedEpisodes: 20,
+    tvmazeId: 9006,
+  },
+  {
     id: "fixture-missing-provider",
     userId: "fixture-user",
     showId: "show-missing-provider",
@@ -302,6 +314,18 @@ const fixtureProviderEvents = [
     name: "Surprise Return",
     airDate: completedFixtureDate,
     providers: { tvmazeId: 9005 },
+  },
+  {
+    sourceProvider: "tvmaze",
+    providerShowId: "tvmaze:9006",
+    title: "Stale Projection Repair",
+    mediaType: "tv",
+    region: "global",
+    seasonNumber: 1,
+    episodeNumber: 21,
+    name: "Projection Repair Release",
+    airDate: "2026-05-10T20:00:00.000Z",
+    providers: { tvmazeId: 9006 },
   },
   {
     sourceProvider: "tvmaze",
@@ -716,12 +740,57 @@ function numberOrNull(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function positiveIntegerOrNull(value) {
+  const numeric = numberOrNull(value);
+  if (typeof numeric !== "number" || numeric <= 0) {
+    return null;
+  }
+  return Math.floor(numeric);
+}
+
 function stringOrNull(value) {
   if (value === null || value === undefined) {
     return null;
   }
   const text = String(value).trim();
   return text ? text : null;
+}
+
+function mergeProviderMetadata(current, next) {
+  if (!next) {
+    return current ?? null;
+  }
+  const currentReleased = positiveIntegerOrNull(current?.releasedEpisodes);
+  const nextReleased = positiveIntegerOrNull(next.releasedEpisodes);
+  const currentTotal = positiveIntegerOrNull(current?.totalEpisodes);
+  const nextTotal = positiveIntegerOrNull(next.totalEpisodes);
+  const sourceProviders = new Set([
+    ...(Array.isArray(current?.sourceProviders) ? current.sourceProviders : []),
+    ...(Array.isArray(next.sourceProviders) ? next.sourceProviders : []),
+    ...(next.sourceProvider ? [next.sourceProvider] : []),
+  ]);
+  const releasedEpisodes =
+    typeof currentReleased === "number" && typeof nextReleased === "number"
+      ? Math.max(currentReleased, nextReleased)
+      : currentReleased ?? nextReleased ?? null;
+  const totalEpisodes =
+    typeof currentTotal === "number" && typeof nextTotal === "number"
+      ? Math.max(currentTotal, nextTotal)
+      : currentTotal ?? nextTotal ?? null;
+
+  if (
+    typeof releasedEpisodes !== "number" &&
+    typeof totalEpisodes !== "number" &&
+    sourceProviders.size === 0
+  ) {
+    return null;
+  }
+
+  return {
+    ...(typeof releasedEpisodes === "number" ? { releasedEpisodes } : {}),
+    ...(typeof totalEpisodes === "number" ? { totalEpisodes } : {}),
+    sourceProviders: [...sourceProviders],
+  };
 }
 
 function parseAirTimestamp(airDate) {
@@ -1431,13 +1500,13 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     ? Math.max(item.watched_episodes_count ?? 0, releasedEvents.length)
     : hasSparseOldReleaseHistory
       ? Math.max(item.watched_episodes_count ?? 0, releasedEvents.length)
-    : Math.max(
-        item.released_episodes ?? 0,
-        item.watched_episodes_count ?? 0,
-        item.total_episodes ?? 0,
-        releasedEvents.length,
-        ...releasedEvents.map((row) => row.episode_number)
-      );
+      : Math.max(
+          item.released_episodes ?? 0,
+          item.watched_episodes_count ?? 0,
+          item.total_episodes ?? 0,
+          releasedEvents.length,
+          ...releasedEvents.map((row) => row.episode_number)
+        );
   const releasedEpisodes =
     latestReleaseIsAlreadyWatched &&
     (releasedEvents.length <= (item.watched_episodes_count ?? 0) ||
@@ -1518,9 +1587,77 @@ function shouldRefreshScheduleCacheFromFact(item, fact) {
   return watchedCount >= fact.releasedEpisodes;
 }
 
+function getImportedWatchableEpisodes(item) {
+  const watchedCount = Math.max(
+    0,
+    Math.floor(numberOrNull(item.watchedEpisodesCount ?? item.watched_episodes_count) ?? 0)
+  );
+  const remainingEpisodes = numberOrNull(item.remainingEpisodes ?? item.remaining_episodes);
+  if (typeof remainingEpisodes === "number") {
+    return watchedCount + Math.max(0, Math.floor(remainingEpisodes));
+  }
+
+  const releasedEpisodes = numberOrNull(item.releasedEpisodes ?? item.released_episodes);
+  if (typeof releasedEpisodes === "number") {
+    return Math.max(0, Math.floor(releasedEpisodes));
+  }
+
+  const totalEpisodes = numberOrNull(item.totalEpisodes ?? item.total_episodes);
+  if (typeof totalEpisodes === "number") {
+    return Math.max(0, Math.floor(totalEpisodes));
+  }
+
+  return null;
+}
+
+function buildProjectionRepairFromFact(item, fact) {
+  if (item.status === "dropped") {
+    return null;
+  }
+  const providerMetadataReleasedEpisodes = positiveIntegerOrNull(
+    item.provider_released_episodes
+  );
+  const factReleasedEpisodes = positiveIntegerOrNull(fact.releasedEpisodes);
+  const providerReleasedEpisodes =
+    providerMetadataReleasedEpisodes ?? factReleasedEpisodes;
+  if (typeof providerReleasedEpisodes !== "number") {
+    return null;
+  }
+  const importedWatchableEpisodes = getImportedWatchableEpisodes(item);
+  if (
+    typeof importedWatchableEpisodes === "number" &&
+    importedWatchableEpisodes >= providerReleasedEpisodes
+  ) {
+    return null;
+  }
+
+  const providerMetadataTotalEpisodes = positiveIntegerOrNull(
+    item.provider_total_episodes
+  );
+  const importedTotalEpisodes = positiveIntegerOrNull(item.total_episodes);
+  const repairTotalEpisodes = Math.max(
+    providerReleasedEpisodes,
+    providerMetadataTotalEpisodes ?? 0,
+    importedTotalEpisodes ?? 0
+  );
+
+  return {
+    reason: "provider_released_count_exceeds_projection",
+    ...(typeof importedWatchableEpisodes === "number"
+      ? { importedWatchableEpisodes }
+      : {}),
+    providerReleasedEpisodes,
+    providerTotalEpisodes: repairTotalEpisodes,
+  };
+}
+
 function storeFactAndDelta(db, fact, item, createdAt) {
   const clearStaleEpisodeSignal = shouldClearStaleEpisodeSignal(item, fact);
   const scheduleCacheMaintenance = shouldRefreshScheduleCacheFromFact(item, fact);
+  const projectionRepair = buildProjectionRepairFromFact(item, fact);
+  const releasedEpisodes =
+    projectionRepair?.providerReleasedEpisodes ?? fact.releasedEpisodes;
+  const totalEpisodes = projectionRepair?.providerTotalEpisodes ?? fact.totalEpisodes;
   const payload = {
     canonicalKey: fact.canonicalKey,
     showId: item.show_id,
@@ -1529,8 +1666,8 @@ function storeFactAndDelta(db, fact, item, createdAt) {
     providerIds: fact.providerIds,
     matchConfidence: fact.matchConfidence,
     releaseState: fact.releaseState,
-    releasedEpisodes: fact.releasedEpisodes,
-    totalEpisodes: fact.totalEpisodes,
+    releasedEpisodes,
+    totalEpisodes,
     latestReleased: fact.latestReleased,
     nextScheduled: fact.nextScheduled,
     upcomingEpisodes: fact.upcomingEpisodes,
@@ -1545,8 +1682,8 @@ function storeFactAndDelta(db, fact, item, createdAt) {
             : "plan_to_watch"
           : item.status,
       remainingEpisodes:
-        typeof fact.releasedEpisodes === "number"
-          ? Math.max(fact.releasedEpisodes - item.watched_episodes_count, 0)
+        typeof releasedEpisodes === "number"
+          ? Math.max(releasedEpisodes - item.watched_episodes_count, 0)
           : null,
       hasHomeAttention: fact.releaseState === "available_now",
       hasUpcomingSchedule: Boolean(fact.nextScheduled),
@@ -1559,20 +1696,25 @@ function storeFactAndDelta(db, fact, item, createdAt) {
     payload.scheduleCacheMaintenance = true;
     payload.scheduleCacheMaintenanceVersion = scheduleCacheMaintenanceVersion;
   }
+  if (projectionRepair) {
+    payload.projectionRepair = projectionRepair;
+  }
   const stablePayload = {
     ...payload,
     reconciledAt: undefined,
     clearStaleEpisodeSignal: undefined,
     scheduleCacheMaintenance: undefined,
     scheduleCacheMaintenanceVersion: undefined,
+    projectionRepair: undefined,
   };
   delete stablePayload.reconciledAt;
   delete stablePayload.clearStaleEpisodeSignal;
   delete stablePayload.scheduleCacheMaintenance;
   delete stablePayload.scheduleCacheMaintenanceVersion;
+  delete stablePayload.projectionRepair;
   const checksum = hashJson(stablePayload);
   const deltaChecksum =
-    clearStaleEpisodeSignal || scheduleCacheMaintenance
+    clearStaleEpisodeSignal || scheduleCacheMaintenance || projectionRepair
       ? hashJson({
           ...stablePayload,
           ...(clearStaleEpisodeSignal ? { clearStaleEpisodeSignal: true } : {}),
@@ -1582,6 +1724,7 @@ function storeFactAndDelta(db, fact, item, createdAt) {
                 scheduleCacheMaintenanceVersion,
               }
             : {}),
+          ...(projectionRepair ? { projectionRepair } : {}),
         })
       : checksum;
   const previousFact = db
@@ -1636,7 +1779,8 @@ function storeFactAndDelta(db, fact, item, createdAt) {
   if (
     changed ||
     clearStaleEpisodeSignal ||
-    (scheduleCacheMaintenance && !maintenanceAlreadyApplied)
+    (scheduleCacheMaintenance && !maintenanceAlreadyApplied) ||
+    projectionRepair
   ) {
     db.prepare(`
       INSERT INTO convex_deltas (canonical_key, payload_json, checksum, created_at)
@@ -1647,7 +1791,11 @@ function storeFactAndDelta(db, fact, item, createdAt) {
         created_at = excluded.created_at,
         applied_at = NULL
     `).run(fact.canonicalKey, JSON.stringify(payload), deltaChecksum, createdAt);
-  } else if (!scheduleCacheMaintenance && (!existingDelta || existingDelta.applied_at !== null)) {
+  } else if (
+    !scheduleCacheMaintenance &&
+    !projectionRepair &&
+    (!existingDelta || existingDelta.applied_at !== null)
+  ) {
     db.prepare("DELETE FROM convex_deltas WHERE canonical_key = ?").run(fact.canonicalKey);
   }
 
@@ -1688,13 +1836,57 @@ function getTmdbAuth() {
   return null;
 }
 
+function getTmdbReleasedTvEpisodeCount(details) {
+  const lastEpisode = details?.last_episode_to_air;
+  const lastSeasonNumber = positiveIntegerOrNull(lastEpisode?.season_number);
+  const lastEpisodeNumber = positiveIntegerOrNull(lastEpisode?.episode_number);
+  if (typeof lastSeasonNumber !== "number" || typeof lastEpisodeNumber !== "number") {
+    return null;
+  }
+
+  const previousSeasonEpisodes = Array.isArray(details?.seasons)
+    ? details.seasons
+        .filter((season) => {
+          const seasonNumber = positiveIntegerOrNull(season?.season_number);
+          const episodeCount = positiveIntegerOrNull(season?.episode_count);
+          return (
+            typeof seasonNumber === "number" &&
+            typeof episodeCount === "number" &&
+            seasonNumber > 0 &&
+            seasonNumber < lastSeasonNumber
+          );
+        })
+        .reduce((sum, season) => sum + Math.floor(season.episode_count), 0)
+    : 0;
+
+  return previousSeasonEpisodes + lastEpisodeNumber;
+}
+
+function getAniListReleasedEpisodeCount(media) {
+  const totalEpisodes = positiveIntegerOrNull(media?.episodes);
+  const nextEpisodeNumber = positiveIntegerOrNull(media?.nextAiringEpisode?.episode);
+  if (typeof nextEpisodeNumber === "number" && nextEpisodeNumber > 1) {
+    return nextEpisodeNumber - 1;
+  }
+
+  const status = String(media?.status ?? "").toLowerCase();
+  if (
+    (status === "finished" || status === "canceled" || status === "cancelled") &&
+    typeof totalEpisodes === "number"
+  ) {
+    return totalEpisodes;
+  }
+
+  return null;
+}
+
 async function fetchTmdbDetails(item) {
   if (!item.tmdb_id || item.media_type === "anime") {
-    return [];
+    return { events: [], metadata: null };
   }
   const auth = getTmdbAuth();
   if (!auth) {
-    return [];
+    return { events: [], metadata: null };
   }
   const base = process.env.EXPO_PUBLIC_TMDB_BASE_URL?.replace(/\/+$/, "") ?? "https://api.themoviedb.org/3";
   const url = new URL(`${base}/${item.media_type}/${item.tmdb_id}`);
@@ -1706,6 +1898,15 @@ async function fetchTmdbDetails(item) {
   const externalIds = details.external_ids ?? {};
   const imdbId = externalIds.imdb_id ?? details.imdb_id ?? item.imdb_id;
   const events = [];
+  const metadata = {
+    sourceProvider: "tmdb",
+    totalEpisodes:
+      item.media_type === "tv"
+        ? positiveIntegerOrNull(details.number_of_episodes)
+        : positiveIntegerOrNull(details.runtime) ? 1 : null,
+    releasedEpisodes:
+      item.media_type === "tv" ? getTmdbReleasedTvEpisodeCount(details) : 1,
+  };
   const sources = [details.last_episode_to_air, details.next_episode_to_air];
 
   const nextSeasonNumber = details.next_episode_to_air?.season_number;
@@ -1740,7 +1941,7 @@ async function fetchTmdbDetails(item) {
       },
     });
   }
-  return events;
+  return { events, metadata };
 }
 
 async function resolveTvMazeShowForItem(item) {
@@ -1785,14 +1986,14 @@ async function resolveTvMazeShowForItem(item) {
   return exactTitleMatches[0] ?? null;
 }
 
-async function fetchTvMazeEpisodes(item) {
+async function fetchTvMazeEpisodes(item, nowMs = Date.now()) {
   const show = await resolveTvMazeShowForItem(item);
   if (!show?.id) {
-    return [];
+    return { events: [], metadata: null };
   }
   const base = process.env.EXPO_PUBLIC_TVMAZE_BASE_URL?.replace(/\/+$/, "") ?? "https://api.tvmaze.com";
   const episodes = await fetchJson(`${base}/shows/${show.id}/episodes`);
-  return episodes
+  const events = episodes
     .filter((episode) => episode.airdate && episode.season && episode.number)
     .map((episode) => ({
       sourceProvider: "tvmaze",
@@ -1810,11 +2011,22 @@ async function fetchTvMazeEpisodes(item) {
         imdbId: item.imdb_id ?? show.externals?.imdb,
       },
     }));
+  const releasedEpisodes = events.filter(
+    (event) => parseAirTimestamp(event.airDate) <= nowMs
+  ).length;
+  return {
+    events,
+    metadata: {
+      sourceProvider: "tvmaze",
+      releasedEpisodes: releasedEpisodes > 0 ? releasedEpisodes : null,
+      totalEpisodes: null,
+    },
+  };
 }
 
 async function fetchAniListSchedule(item) {
   if (!item.anilist_id) {
-    return [];
+    return { events: [], metadata: null };
   }
   const url = process.env.EXPO_PUBLIC_ANILIST_URL ?? "https://graphql.anilist.co";
   const data = await fetchJson(url, {
@@ -1828,6 +2040,7 @@ async function fetchAniListSchedule(item) {
             idMal
             title { romaji english }
             episodes
+            status
             nextAiringEpisode { airingAt episode }
           }
         }
@@ -1837,34 +2050,47 @@ async function fetchAniListSchedule(item) {
   });
   const media = data?.data?.Media;
   const next = media?.nextAiringEpisode;
-  if (!media || !next?.airingAt || !next?.episode) {
-    return [];
+  if (!media) {
+    return { events: [], metadata: null };
   }
-  return [
-    {
+  const events =
+    next?.airingAt && next?.episode
+      ? [
+          {
+            sourceProvider: "anilist",
+            providerShowId: `anilist:${media.id}`,
+            title: media.title?.english ?? media.title?.romaji ?? item.title,
+            mediaType: "anime",
+            region: "JP",
+            seasonNumber: 1,
+            episodeNumber: next.episode,
+            name: `Episode ${next.episode}`,
+            airDate: new Date(next.airingAt * 1000).toISOString(),
+            providers: {
+              anilistId: media.id,
+              malId: media.idMal ?? item.mal_id,
+            },
+          },
+        ]
+      : [];
+
+  return {
+    events,
+    metadata: {
       sourceProvider: "anilist",
-      providerShowId: `anilist:${media.id}`,
-      title: media.title?.english ?? media.title?.romaji ?? item.title,
-      mediaType: "anime",
-      region: "JP",
-      seasonNumber: 1,
-      episodeNumber: next.episode,
-      name: `Episode ${next.episode}`,
-      airDate: new Date(next.airingAt * 1000).toISOString(),
-      providers: {
-        anilistId: media.id,
-        malId: media.idMal ?? item.mal_id,
-      },
+      totalEpisodes: positiveIntegerOrNull(media.episodes),
+      releasedEpisodes: getAniListReleasedEpisodeCount(media),
     },
-  ];
+  };
 }
 
-async function hydrateProviderEventsFromRealApis(db, item, insertedAt) {
+async function hydrateProviderEventsFromRealApis(db, item, insertedAt, nowMs = Date.now()) {
   if (item.title.startsWith(syntheticPrefix)) {
-    return [];
+    return { errors: [], metadata: null };
   }
 
   const errors = [];
+  let metadata = null;
   const upsertEvents = (events) => {
     for (const event of events) {
       upsertProviderEvent(db, event, insertedAt);
@@ -1872,14 +2098,19 @@ async function hydrateProviderEventsFromRealApis(db, item, insertedAt) {
   };
 
   try {
-    const tmdbEvents = await fetchTmdbDetails(item);
-    upsertEvents(tmdbEvents);
+    const tmdbResult = await fetchTmdbDetails(item);
+    upsertEvents(tmdbResult.events);
+    metadata = mergeProviderMetadata(metadata, tmdbResult.metadata);
     const resolvedImdbId =
       item.imdb_id ??
-      tmdbEvents.map((event) => event.providers?.imdbId).find((value) => typeof value === "string");
+      tmdbResult.events
+        .map((event) => event.providers?.imdbId)
+        .find((value) => typeof value === "string");
     const providerItem =
       resolvedImdbId && !item.imdb_id ? { ...item, imdb_id: resolvedImdbId } : item;
-    const hasTmdbFuture = tmdbEvents.some((event) => parseAirTimestamp(event.airDate) > Date.now());
+    const hasTmdbFuture = tmdbResult.events.some(
+      (event) => parseAirTimestamp(event.airDate) > nowMs
+    );
     const isIncomplete =
       typeof item.total_episodes === "number" &&
       typeof item.released_episodes === "number" &&
@@ -1888,18 +2119,22 @@ async function hydrateProviderEventsFromRealApis(db, item, insertedAt) {
       Boolean(providerItem.tvmaze_id) ||
       (item.media_type === "tv" && (hasTmdbFuture || isIncomplete));
     if (shouldFetchTvMaze) {
-      upsertEvents(await fetchTvMazeEpisodes(providerItem));
+      const tvMazeResult = await fetchTvMazeEpisodes(providerItem, nowMs);
+      upsertEvents(tvMazeResult.events);
+      metadata = mergeProviderMetadata(metadata, tvMazeResult.metadata);
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
   }
 
   try {
-    upsertEvents(await fetchAniListSchedule(item));
+    const anilistResult = await fetchAniListSchedule(item);
+    upsertEvents(anilistResult.events);
+    metadata = mergeProviderMetadata(metadata, anilistResult.metadata);
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
   }
-  return errors;
+  return { errors, metadata };
 }
 
 async function reconcile(db, options = {}) {
@@ -1928,9 +2163,23 @@ async function reconcile(db, options = {}) {
     if (item.media_type === "movie") {
       continue;
     }
-    const reconciledItem = applyManualProviderLink(db, item);
+    let reconciledItem = applyManualProviderLink(db, item);
     if (options.fetchProviders) {
-      const errors = await hydrateProviderEventsFromRealApis(db, reconciledItem, Date.now());
+      const providerResult = await hydrateProviderEventsFromRealApis(
+        db,
+        reconciledItem,
+        Date.now(),
+        nowMs
+      );
+      if (providerResult.metadata) {
+        reconciledItem = {
+          ...reconciledItem,
+          provider_released_episodes: providerResult.metadata.releasedEpisodes ?? null,
+          provider_total_episodes: providerResult.metadata.totalEpisodes ?? null,
+          provider_metadata_sources: providerResult.metadata.sourceProviders ?? [],
+        };
+      }
+      const errors = providerResult.errors;
       realProviderErrors += errors.length;
       for (const message of errors) {
         createAuditIssue(db, {
@@ -2942,6 +3191,7 @@ async function applyConvex(deltaPath, options) {
         "patchedFeedProjections",
         "resumedCompletedShows",
         "clearedStaleEpisodeSignals",
+        "repairedStaleProjections",
         "scheduleCacheRowsUpdated",
         "scheduleCacheRowsSkipped",
         "skippedTitleFallback",
@@ -3362,6 +3612,7 @@ function aggregateApplyResults(applyResult) {
       patchedFeedProjections: 0,
       resumedCompletedShows: 0,
       clearedStaleEpisodeSignals: 0,
+      repairedStaleProjections: 0,
       scheduleCacheRowsUpdated: 0,
       scheduleCacheRowsSkipped: 0,
       skippedTitleFallback: 0,
@@ -3400,6 +3651,9 @@ function validateDevWorkflowResults({
   const postWatchCountDrift = getSnapshotRow(afterSnapshot, "Post Watch Count Drift");
   const staleProjectionBefore = getSnapshotRow(beforeSnapshot, "Stale Projection Repair");
   const staleProjectionAfter = getSnapshotRow(afterSnapshot, "Stale Projection Repair");
+  const staleProjectionDelta = exportedDeltas.find(
+    (delta) => delta.title === `${syntheticPrefix} Stale Projection Repair`
+  );
 
   assertValidation(beforeSnapshot.count === 10 && afterSnapshot.count === 10, "Synthetic dev snapshot count changed.", {
     before: beforeSnapshot.count,
@@ -3519,12 +3773,15 @@ function validateDevWorkflowResults({
   assertValidation(
     firstProjection(staleProjectionBefore)?.remainingEpisodes === 0 &&
       firstProjection(staleProjectionAfter)?.remainingEpisodes === 1 &&
-      typeof firstProjection(staleProjectionAfter)?.newEpisodeSignalAt === "number",
+      typeof firstProjection(staleProjectionAfter)?.newEpisodeSignalAt === "number" &&
+      staleProjectionDelta?.projectionRepair?.reason ===
+        "provider_released_count_exceeds_projection" &&
+      applyTotals.repairedStaleProjections >= 1,
     "Stale Convex projection was not repaired by the delta workflow."
   );
 
   return {
-    checks: 17,
+    checks: 18,
     imported: importResult.imported,
     reconciled: reconcileSummary.scannedItems,
     deltas: reconcileSummary.deltas,
@@ -3615,6 +3872,9 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     .map((row) => JSON.parse(row.payload_json));
   const byShowId = new Map(deltas.map((delta) => [delta.simulatedProjection.showId, delta]));
   const exportedDeltas = readJson(deltaPath).deltas;
+  const exportedStaleProjectionDelta = exportedDeltas.find(
+    (delta) => delta.title === "Stale Projection Repair"
+  );
   const projectionPayload = buildScheduleProjectionPayload(db, {
     nowMs: fixtureNowMs,
     generatedAt: fixtureNowMs,
@@ -3688,6 +3948,14 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     "Exported Convex deltas contain local-only metadata."
   );
   assertValidation(
+    exportedStaleProjectionDelta?.projectionRepair?.reason ===
+      "provider_released_count_exceeds_projection" &&
+      exportedStaleProjectionDelta.projectionRepair.importedWatchableEpisodes === 20 &&
+      exportedStaleProjectionDelta.projectionRepair.providerReleasedEpisodes === 21,
+    "Stale projection fixture did not export a provider-backed projection repair delta.",
+    exportedStaleProjectionDelta
+  );
+  assertValidation(
     fixtureUserProjection?.events.some((event) => event.showId === "show-direct"),
     "Schedule projection did not include the direct provider-ID fixture event.",
     projectionPayload.metrics
@@ -3718,7 +3986,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   );
 
   return {
-    checks: 15,
+    checks: 16,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,
