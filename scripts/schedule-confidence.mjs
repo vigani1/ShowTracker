@@ -132,6 +132,20 @@ const fixtureLibrary = [
     imdbId: "tt9012014",
   },
   {
+    id: "fixture-provider-date-conflict",
+    userId: "fixture-user",
+    showId: "show-provider-date-conflict",
+    title: "Provider Date Conflict Show",
+    mediaType: "tv",
+    status: "watching",
+    watchedEpisodesCount: 10,
+    totalEpisodes: 10,
+    releasedEpisodes: 10,
+    remainingEpisodes: 0,
+    tmdbId: 1015,
+    tvmazeId: 9015,
+  },
+  {
     id: "fixture-completed",
     userId: "fixture-user",
     showId: "show-completed",
@@ -303,6 +317,30 @@ const fixtureProviderEvents = [
     name: "Break Week Return",
     airDate: "2026-05-30T09:00:00.000Z",
     providers: { tmdbId: 1014, imdbId: "tt9012014" },
+  },
+  {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:1015",
+    title: "Provider Date Conflict Show",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 1,
+    episodeNumber: 11,
+    name: "Released Provider Episode",
+    airDate: "2026-05-13T12:00:00.000Z",
+    providers: { tmdbId: 1015 },
+  },
+  {
+    sourceProvider: "tvmaze",
+    providerShowId: "tvmaze:9015",
+    title: "Provider Date Conflict Show",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 1,
+    episodeNumber: 11,
+    name: "Future Provider Episode",
+    airDate: "2026-05-20T12:00:00.000Z",
+    providers: { tvmazeId: 9015 },
   },
   {
     sourceProvider: "tvmaze",
@@ -1326,6 +1364,42 @@ function preferEventCandidate(next, current, matchKind = "name") {
   return next.air_timestamp < current.air_timestamp;
 }
 
+function preferReleaseFactEventCandidate(next, current, nowMs, matchKind = "name") {
+  if (matchKind === "number") {
+    const nextReleased = next.air_timestamp <= nowMs;
+    const currentReleased = current.air_timestamp <= nowMs;
+    if (nextReleased !== currentReleased) {
+      return nextReleased;
+    }
+  }
+
+  return preferEventCandidate(next, current, matchKind);
+}
+
+function dedupeProviderEventsForReleaseFact(rows, nowMs) {
+  const deduped = [];
+  for (const row of rows) {
+    const numberKey = eventNumberDedupeKey(row);
+    const nameKey = eventNameDedupeKey(row);
+    const existingIndex = deduped.findIndex((candidate) => {
+      const sameNumber = eventNumberDedupeKey(candidate) === numberKey;
+      const sameName = nameKey !== null && eventNameDedupeKey(candidate) === nameKey;
+      return sameNumber || sameName || isCrossProviderSameDayDuplicate(row, candidate);
+    });
+    if (existingIndex === -1) {
+      deduped.push(row);
+      continue;
+    }
+
+    const existing = deduped[existingIndex];
+    const matchKind = eventNumberDedupeKey(existing) === numberKey ? "number" : "date";
+    if (preferReleaseFactEventCandidate(row, existing, nowMs, matchKind)) {
+      deduped[existingIndex] = row;
+    }
+  }
+  return deduped.sort((a, b) => a.air_timestamp - b.air_timestamp);
+}
+
 function dedupeProviderEventsForSchedule(rows) {
   const deduped = [];
   for (const row of rows) {
@@ -1390,6 +1464,63 @@ function dedupeSingleShowEventsForSchedule(rows) {
   }
 
   return deduped.sort((a, b) => a.air_timestamp - b.air_timestamp);
+}
+
+function findProviderReleaseDateConflicts(rows, nowMs) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = eventNumberDedupeKey(row);
+    if (!key) {
+      continue;
+    }
+    const group = groups.get(key) ?? [];
+    group.push(row);
+    groups.set(key, group);
+  }
+
+  const conflicts = [];
+  for (const group of groups.values()) {
+    const providers = new Set(group.map((row) => row.source_provider));
+    if (providers.size < 2) {
+      continue;
+    }
+    const releasedRows = group.filter((row) => row.air_timestamp <= nowMs);
+    const futureRows = group.filter((row) => row.air_timestamp > nowMs);
+    if (!releasedRows.length || !futureRows.length) {
+      continue;
+    }
+    const row = group[0];
+    conflicts.push({
+      seasonNumber: row.season_number,
+      episodeNumber: row.episode_number,
+      releasedRows: releasedRows.map((candidate) => ({
+        sourceProvider: candidate.source_provider,
+        airDate: candidate.air_date,
+        name: candidate.name,
+      })),
+      futureRows: futureRows.map((candidate) => ({
+        sourceProvider: candidate.source_provider,
+        airDate: candidate.air_date,
+        name: candidate.name,
+      })),
+    });
+  }
+
+  return conflicts;
+}
+
+function isReleasedProviderDateConflictRow(row, rows, nowMs) {
+  if (!row || row.air_timestamp > nowMs) {
+    return false;
+  }
+  const rowKey = eventNumberDedupeKey(row);
+  return rows.some(
+    (candidate) =>
+      candidate !== row &&
+      candidate.source_provider !== row.source_provider &&
+      eventNumberDedupeKey(candidate) === rowKey &&
+      candidate.air_timestamp > nowMs
+  );
 }
 
 function createAuditIssue(db, issue) {
@@ -1473,10 +1604,10 @@ function needsMissingProviderAudit(item) {
 }
 
 function buildReleaseFact(item, match, nowMs, reconciledAt) {
-  const scheduleRows = dedupeProviderEventsForSchedule(match.rows);
-  const releasedEvents = scheduleRows.filter((row) => row.air_timestamp <= nowMs);
+  const releaseRows = dedupeProviderEventsForReleaseFact(match.rows, nowMs);
+  const releasedEvents = releaseRows.filter((row) => row.air_timestamp <= nowMs);
   const allFutureEvents = dedupeSingleShowEventsForSchedule(
-    scheduleRows.filter((row) => row.air_timestamp > nowMs)
+    releaseRows.filter((row) => row.air_timestamp > nowMs)
   );
   const futureEvents = allFutureEvents.filter((row) => row.air_timestamp <= nowMs + scheduleLookaheadMs);
   const latestReleased = releasedEvents.at(-1);
@@ -1528,16 +1659,29 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     releasedEvents.length,
     ...releasedEvents.map((row) => row.episode_number)
   );
-  const releasedEpisodes =
+  const importPreservedReleasedEpisodes =
     typeof importedWatchableEpisodes === "number" &&
     providerReleasedCeilingForImportedRemaining >= importedWatchableEpisodes
       ? Math.max(timestampCappedReleasedEpisodes, importedWatchableEpisodes)
       : timestampCappedReleasedEpisodes;
-  const totalEpisodes = Math.max(
-    item.total_episodes ?? 0,
-    releasedEpisodes,
-    ...match.rows.map((row) => row.episode_number)
+  const providerMetadataReleasedEpisodes = positiveIntegerOrNull(
+    item.provider_released_episodes
   );
+  const providerDateConflictReleasedRow =
+    latestReleased && isReleasedProviderDateConflictRow(latestReleased, match.rows, nowMs);
+  const metadataReleaseFloor =
+    providerDateConflictReleasedRow &&
+    typeof providerMetadataReleasedEpisodes === "number" &&
+    providerMetadataReleasedEpisodes > importPreservedReleasedEpisodes &&
+    providerMetadataReleasedEpisodes -
+      Math.max(importPreservedReleasedEpisodes, importedWatchableEpisodes ?? watchedEpisodesCount) <=
+      maxProjectionRepairEpisodeDelta
+      ? providerMetadataReleasedEpisodes
+      : null;
+  const releasedEpisodes =
+    typeof metadataReleaseFloor === "number"
+      ? metadataReleaseFloor
+      : importPreservedReleasedEpisodes;
   const releaseState =
     latestReleased && item.watched_episodes_count < releasedEpisodes
       ? "available_now"
@@ -1546,6 +1690,15 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
         : match.rows.length
           ? "caught_up"
           : "unknown";
+  const releasedEventEpisodeFloor =
+    releaseState === "available_now"
+      ? Math.max(0, ...releasedEvents.map((row) => row.episode_number))
+      : 0;
+  const totalEpisodes = Math.max(
+    item.total_episodes ?? 0,
+    releasedEpisodes,
+    releasedEventEpisodeFloor
+  );
 
   return {
     canonicalKey: canonicalKeyForItem(item),
@@ -1632,6 +1785,9 @@ function getImportedWatchableEpisodes(item) {
 
 function buildProjectionRepairFromFact(item, fact) {
   if (item.status !== "watching" && item.status !== "completed") {
+    return null;
+  }
+  if (fact.releaseState !== "available_now") {
     return null;
   }
   const providerMetadataReleasedEpisodes = positiveIntegerOrNull(
@@ -1885,6 +2041,62 @@ function getTmdbReleasedTvEpisodeCount(details) {
   return previousSeasonEpisodes + lastEpisodeNumber;
 }
 
+function getTmdbSeasonNumbersToHydrate(details) {
+  const nextSeasonNumber = positiveIntegerOrNull(details?.next_episode_to_air?.season_number);
+  return typeof nextSeasonNumber === "number" ? [nextSeasonNumber] : [];
+}
+
+function getTmdbReleasedEpisodeCountFromHydratedSeasons(details, hydratedSeasons, nowMs) {
+  let releasedEpisodes = getTmdbReleasedTvEpisodeCount(details);
+  const seasonSummaries = Array.isArray(details?.seasons) ? details.seasons : [];
+
+  for (const season of hydratedSeasons) {
+    const seasonNumber = positiveIntegerOrNull(season?.season_number);
+    if (typeof seasonNumber !== "number" || !Array.isArray(season?.episodes)) {
+      continue;
+    }
+
+    let releasedInSeason = 0;
+    let highestReleasedEpisodeNumber = 0;
+    for (const episode of season.episodes) {
+      const episodeNumber = positiveIntegerOrNull(episode?.episode_number);
+      if (typeof episodeNumber !== "number" || !episode?.air_date) {
+        continue;
+      }
+      const airTimestamp = parseAirTimestamp(episode.air_date);
+      if (airTimestamp <= nowMs) {
+        releasedInSeason += 1;
+        highestReleasedEpisodeNumber = Math.max(highestReleasedEpisodeNumber, episodeNumber);
+      }
+    }
+
+    if (highestReleasedEpisodeNumber <= 0) {
+      continue;
+    }
+
+    const previousSeasonEpisodes = seasonSummaries
+      .filter((summary) => {
+        const summarySeasonNumber = positiveIntegerOrNull(summary?.season_number);
+        const episodeCount = positiveIntegerOrNull(summary?.episode_count);
+        return (
+          typeof summarySeasonNumber === "number" &&
+          typeof episodeCount === "number" &&
+          summarySeasonNumber > 0 &&
+          summarySeasonNumber < seasonNumber
+        );
+      })
+      .reduce((sum, summary) => sum + Math.floor(summary.episode_count), 0);
+    const hydratedReleasedEpisodes =
+      previousSeasonEpisodes + Math.max(releasedInSeason, highestReleasedEpisodeNumber);
+    releasedEpisodes =
+      typeof releasedEpisodes === "number"
+        ? Math.max(releasedEpisodes, hydratedReleasedEpisodes)
+        : hydratedReleasedEpisodes;
+  }
+
+  return releasedEpisodes;
+}
+
 function getAniListReleasedEpisodeCount(media) {
   const totalEpisodes = positiveIntegerOrNull(media?.episodes);
   const nextEpisodeNumber = positiveIntegerOrNull(media?.nextAiringEpisode?.episode);
@@ -1903,7 +2115,7 @@ function getAniListReleasedEpisodeCount(media) {
   return null;
 }
 
-async function fetchTmdbDetails(item) {
+async function fetchTmdbDetails(item, nowMs = Date.now()) {
   if (!item.tmdb_id || item.media_type === "anime") {
     return { events: [], metadata: null };
   }
@@ -1921,28 +2133,39 @@ async function fetchTmdbDetails(item) {
   const externalIds = details.external_ids ?? {};
   const imdbId = externalIds.imdb_id ?? details.imdb_id ?? item.imdb_id;
   const events = [];
-  const metadata = {
-    sourceProvider: "tmdb",
-    totalEpisodes:
-      item.media_type === "tv"
-        ? positiveIntegerOrNull(details.number_of_episodes)
-        : positiveIntegerOrNull(details.runtime) ? 1 : null,
-    releasedEpisodes:
-      item.media_type === "tv" ? getTmdbReleasedTvEpisodeCount(details) : 1,
-  };
   const sources = [details.last_episode_to_air, details.next_episode_to_air];
+  const hydratedSeasons = [];
 
-  const nextSeasonNumber = details.next_episode_to_air?.season_number;
-  if (Number.isFinite(nextSeasonNumber)) {
-    const seasonUrl = new URL(`${base}/${item.media_type}/${item.tmdb_id}/season/${nextSeasonNumber}`);
-    if (auth.apiKey) {
-      seasonUrl.searchParams.set("api_key", auth.apiKey);
-    }
-    const seasonDetails = await fetchJson(seasonUrl, { headers: auth.headers });
-    if (Array.isArray(seasonDetails.episodes)) {
-      sources.push(...seasonDetails.episodes);
+  if (item.media_type === "tv") {
+    for (const seasonNumber of getTmdbSeasonNumbersToHydrate(details)) {
+      const seasonUrl = new URL(`${base}/tv/${item.tmdb_id}/season/${seasonNumber}`);
+      if (auth.apiKey) {
+        seasonUrl.searchParams.set("api_key", auth.apiKey);
+      }
+      const seasonDetails = await fetchJson(seasonUrl, { headers: auth.headers });
+      hydratedSeasons.push(seasonDetails);
+      if (Array.isArray(seasonDetails.episodes)) {
+        sources.push(...seasonDetails.episodes);
+      }
     }
   }
+
+  const releasedEpisodes =
+    item.media_type === "tv"
+      ? getTmdbReleasedEpisodeCountFromHydratedSeasons(details, hydratedSeasons, nowMs)
+      : 1;
+  const totalEpisodes =
+    item.media_type === "tv"
+      ? Math.max(
+          positiveIntegerOrNull(details.number_of_episodes) ?? 0,
+          releasedEpisodes ?? 0
+        ) || null
+      : positiveIntegerOrNull(details.runtime) ? 1 : null;
+  const metadata = {
+    sourceProvider: "tmdb",
+    totalEpisodes,
+    releasedEpisodes,
+  };
 
   for (const source of sources) {
     if (!source?.air_date || !source.season_number || !source.episode_number) {
@@ -2121,7 +2344,7 @@ async function hydrateProviderEventsFromRealApis(db, item, insertedAt, nowMs = D
   };
 
   try {
-    const tmdbResult = await fetchTmdbDetails(item);
+    const tmdbResult = await fetchTmdbDetails(item, nowMs);
     upsertEvents(tmdbResult.events);
     metadata = mergeProviderMetadata(metadata, tmdbResult.metadata);
     const resolvedImdbId =
@@ -2269,6 +2492,21 @@ async function reconcile(db, options = {}) {
         issueType: "conflicting_provider_ids",
         severity: "error",
         details: { conflicts },
+        createdAt: Date.now(),
+      });
+    }
+
+    const releaseDateConflicts = findProviderReleaseDateConflicts(match.rows, nowMs);
+    if (releaseDateConflicts.length > 0) {
+      createAuditIssue(db, {
+        runId,
+        canonicalKey: canonicalKeyForItem(item),
+        showId: item.show_id,
+        title: item.title,
+        mediaType: item.media_type,
+        issueType: "provider_release_date_conflict",
+        severity: "warning",
+        details: { conflicts: releaseDateConflicts },
         createdAt: Date.now(),
       });
     }
@@ -3952,6 +4190,23 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
       byShowId.get("show-stale-signal-break")?.simulatedProjection.hasUpcomingSchedule === true,
     "Stale episode signal break case did not emit a targeted stale-signal clearing delta."
   );
+  const providerDateConflictFact = facts.get("show-provider-date-conflict");
+  const providerDateConflictLatest = providerDateConflictFact?.latest_released_json
+    ? JSON.parse(providerDateConflictFact.latest_released_json)
+    : null;
+  assertValidation(
+    providerDateConflictFact?.release_state === "available_now" &&
+      providerDateConflictLatest?.airDate === "2026-05-13T12:00:00.000Z" &&
+      byShowId.get("show-provider-date-conflict")?.simulatedProjection.remainingEpisodes === 1 &&
+      byShowId.get("show-provider-date-conflict")?.simulatedProjection.hasHomeAttention === true &&
+      issues.some(
+        (issue) =>
+          issue.show_id === "show-provider-date-conflict" &&
+          issue.issue_type === "provider_release_date_conflict"
+      ),
+    "Provider date conflict should prefer the released same-number row for release availability.",
+    { providerDateConflictFact, providerDateConflictLatest }
+  );
   assertValidation(
     summary.changedFacts >= 7 && summary.deltas >= 7,
     "Reconciliation did not produce the expected compact facts/deltas.",
@@ -3970,7 +4225,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
       provider_released_episodes: 21,
       provider_total_episodes: 24,
     },
-    { releasedEpisodes: 999, totalEpisodes: 999 }
+    { releaseState: "available_now", releasedEpisodes: 999, totalEpisodes: 999 }
   );
   const factOnlyRepair = buildProjectionRepairFromFact(
     {
@@ -3979,7 +4234,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
       total_episodes: 20,
       remaining_episodes: 0,
     },
-    { releasedEpisodes: 21, totalEpisodes: 21 }
+    { releaseState: "available_now", releasedEpisodes: 21, totalEpisodes: 21 }
   );
   const largeJumpRepair = buildProjectionRepairFromFact(
     {
@@ -3990,7 +4245,18 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
       provider_released_episodes: 30,
       provider_total_episodes: 30,
     },
-    { releasedEpisodes: 30, totalEpisodes: 30 }
+    { releaseState: "available_now", releasedEpisodes: 30, totalEpisodes: 30 }
+  );
+  const futureOnlyRepair = buildProjectionRepairFromFact(
+    {
+      status: "watching",
+      watched_episodes_count: 20,
+      total_episodes: 20,
+      remaining_episodes: 0,
+      provider_released_episodes: 21,
+      provider_total_episodes: 24,
+    },
+    { releaseState: "upcoming", releasedEpisodes: 20, totalEpisodes: 24 }
   );
   const pausedRepair = buildProjectionRepairFromFact(
     {
@@ -4001,7 +4267,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
       provider_released_episodes: 15,
       provider_total_episodes: 25,
     },
-    { releasedEpisodes: 15, totalEpisodes: 25 }
+    { releaseState: "available_now", releasedEpisodes: 15, totalEpisodes: 25 }
   );
   const plannedRepair = buildProjectionRepairFromFact(
     {
@@ -4012,17 +4278,18 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
       provider_released_episodes: 12,
       provider_total_episodes: 12,
     },
-    { releasedEpisodes: 12, totalEpisodes: 12 }
+    { releaseState: "available_now", releasedEpisodes: 12, totalEpisodes: 12 }
   );
   assertValidation(
     metadataRepair?.providerReleasedEpisodes === 21 &&
       metadataRepair.providerTotalEpisodes === 21 &&
       factOnlyRepair === null &&
       largeJumpRepair === null &&
+      futureOnlyRepair === null &&
       pausedRepair === null &&
       plannedRepair === null,
     "Projection repair should be metadata-backed, small-delta, and fact fallback should not trigger.",
-    { metadataRepair, factOnlyRepair, largeJumpRepair, pausedRepair, plannedRepair }
+    { metadataRepair, factOnlyRepair, largeJumpRepair, futureOnlyRepair, pausedRepair, plannedRepair }
   );
   const postAirWatchedAt = Date.UTC(2026, 4, 20, 12, 0, 0);
   const latestEpisodeTimestamp = Date.UTC(2026, 4, 18, 0, 0, 0);
@@ -4098,6 +4365,122 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     "Imported remaining episodes should prevent timestamp-only release capping.",
     { remainingPreservedFact, timestampCappedFact }
   );
+  const hotOnesShapedConflictFact = buildReleaseFact(
+    {
+      show_id: "show-hot-ones-shaped-conflict",
+      title: "Hot Ones Shaped Conflict",
+      media_type: "tv",
+      status: "watching",
+      watched_episodes_count: 416,
+      total_episodes: 416,
+      released_episodes: 416,
+      remaining_episodes: 0,
+      provider_released_episodes: 417,
+      provider_total_episodes: 422,
+      tmdb_id: 72649,
+      tvmaze_id: 36841,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2026, 4, 18, 0, 0, 0),
+          air_date: "2026-05-18",
+          normalized_title: "hotonesshapedconflict",
+          media_type: "tv",
+          season_number: 30,
+          episode_number: 1,
+          name: "Released TMDB Episode",
+          tmdb_id: 72649,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+        {
+          source_provider: "tvmaze",
+          air_timestamp: Date.UTC(2026, 4, 21, 12, 0, 0),
+          air_date: "2026-05-21T12:00:00.000Z",
+          normalized_title: "hotonesshapedconflict",
+          media_type: "tv",
+          season_number: 30,
+          episode_number: 1,
+          name: "Future TVMaze Episode",
+          tmdb_id: null,
+          tvmaze_id: 36841,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+        {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2026, 4, 28, 0, 0, 0),
+          air_date: "2026-05-28",
+          normalized_title: "hotonesshapedconflict",
+          media_type: "tv",
+          season_number: 30,
+          episode_number: 2,
+          name: "Next TMDB Episode",
+          tmdb_id: 72649,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+      ],
+    },
+    Date.UTC(2026, 4, 20, 12, 0, 0),
+    fixtureNowMs
+  );
+  const futureOnlyTotalDriftFact = buildReleaseFact(
+    {
+      show_id: "show-future-only-total-drift",
+      title: "Future Only Total Drift",
+      media_type: "tv",
+      status: "watching",
+      watched_episodes_count: 456,
+      total_episodes: 456,
+      released_episodes: 456,
+      remaining_episodes: 0,
+      tmdb_id: 1434,
+      tvmaze_id: 84,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tvmaze",
+          air_timestamp: Date.UTC(2026, 4, 25, 12, 0, 0),
+          air_date: "2026-05-25T12:00:00.000Z",
+          normalized_title: "futureonlytotaldrift",
+          media_type: "tv",
+          season_number: 24,
+          episode_number: 457,
+          name: "Future Provider Count Drift",
+          tmdb_id: null,
+          tvmaze_id: 84,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+      ],
+    },
+    Date.UTC(2026, 4, 20, 12, 0, 0),
+    fixtureNowMs
+  );
+  assertValidation(
+    hotOnesShapedConflictFact.releaseState === "available_now" &&
+      hotOnesShapedConflictFact.releasedEpisodes === 417 &&
+      hotOnesShapedConflictFact.totalEpisodes === 417 &&
+      hotOnesShapedConflictFact.latestReleased?.airDate === "2026-05-18" &&
+      hotOnesShapedConflictFact.nextScheduled?.airDate === "2026-05-28" &&
+      futureOnlyTotalDriftFact.releaseState === "upcoming" &&
+      futureOnlyTotalDriftFact.releasedEpisodes === 456 &&
+      futureOnlyTotalDriftFact.totalEpisodes === 456,
+    "Provider conflict should surface released backlog without letting future-only rows inflate totals.",
+    { hotOnesShapedConflictFact, futureOnlyTotalDriftFact }
+  );
   assertValidation(
     fixtureUserProjection?.events.some((event) => event.showId === "show-direct"),
     "Schedule projection did not include the direct provider-ID fixture event.",
@@ -4129,7 +4512,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   );
 
   return {
-    checks: 16,
+    checks: 17,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,

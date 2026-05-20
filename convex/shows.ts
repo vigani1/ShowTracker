@@ -2915,12 +2915,14 @@ async function fetchLatestNormalizedShowForExistingShow(show: Doc<"shows">) {
         const releasedFromSeasons =
           await getTmdbReleasedEpisodeCountFromSeasonDetails(show.tmdbId, details.seasons);
         if (typeof releasedFromSeasons === "number") {
+          const totalEpisodes = Math.max(
+            normalized.totalEpisodes ?? 0,
+            releasedFromSeasons
+          );
           return {
             ...normalized,
-            releasedEpisodes: Math.min(
-              releasedFromSeasons,
-              normalized.totalEpisodes ?? releasedFromSeasons
-            ),
+            totalEpisodes: totalEpisodes > 0 ? totalEpisodes : normalized.totalEpisodes,
+            releasedEpisodes: releasedFromSeasons,
           };
         }
       } catch (error) {
