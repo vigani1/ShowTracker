@@ -49,3 +49,6 @@ artifacts/
 backup-export/
 backups
 .schedule-confidence/
+
+# Local operations notes
+docs/OPERATIONS.md
