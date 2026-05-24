@@ -62,6 +62,13 @@ type WatchlistFutureCountRow = {
   unavailableCount: number;
 };
 
+type ScheduleEpisodeNumberLike = {
+  showId: Id<"shows">;
+  seasonNumber: number;
+  episodeNumber: number;
+  episodeName?: string | null;
+};
+
 type ScheduledWatchlistItem = {
   id: string;
   title: string;
@@ -1064,6 +1071,49 @@ async function getProjectedScheduleEvents(
     .collect();
 }
 
+async function getProjectionByIdForScheduleRows(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  rows: Doc<"userScheduleEvents">[]
+) {
+  const projectionIds = Array.from(
+    new Set(rows.map((row) => row.feedProjectionId))
+  );
+  const projections = await Promise.all(
+    projectionIds.map((projectionId) => ctx.db.get(projectionId))
+  );
+
+  return new Map(
+    projections
+      .filter(
+        (projection): projection is Doc<"feedProjections"> =>
+          !!projection && projection.userId === userId
+      )
+      .map((projection) => [projection._id, projection])
+  );
+}
+
+function getProjectedScheduleEpisodeNumberRows(
+  rows: Doc<"userScheduleEvents">[],
+  projectionById: Map<Id<"feedProjections">, Doc<"feedProjections">>
+): ScheduleEpisodeNumberLike[] {
+  return rows.flatMap((row) => {
+    const projection = projectionById.get(row.feedProjectionId);
+    if (!projection) {
+      return [];
+    }
+
+    return [
+      {
+        showId: projection.showId,
+        seasonNumber: row.seasonNumber,
+        episodeNumber: row.episodeNumber,
+        episodeName: row.episodeName ?? null,
+      },
+    ];
+  });
+}
+
 function projectedScheduleEntryFromRow(
   row: Doc<"userScheduleEvents">
 ): CompactScheduleEntry {
@@ -1091,16 +1141,90 @@ function getWatchedScheduleSeasonKey(showId: Id<"shows">, seasonNumber: number) 
   return `${showId}:${seasonNumber}`;
 }
 
+function getWatchedScheduleAbsoluteEpisodeKey(
+  showId: Id<"shows">,
+  episodeNumber: number
+) {
+  return `${showId}:${episodeNumber}`;
+}
+
+const ABSOLUTE_SCHEDULE_EPISODE_MIN = 100;
+
 type WatchedScheduleEpisodeIndex = {
   exactKeys: Set<string>;
+  absoluteEpisodeKeys: Set<string>;
   absoluteSeasonOffsets: Map<string, number>;
 };
+
+function parseAbsoluteScheduleEpisodeNumber(episodeName?: string | null) {
+  const match = episodeName?.trim().match(/^Episode\s+(\d{3,})$/i);
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasProviderAbsoluteEpisodeNumber(
+  seasonNumber: number,
+  episodeNumber: number
+) {
+  return (
+    episodeNumber >= ABSOLUTE_SCHEDULE_EPISODE_MIN &&
+    (seasonNumber <= 1 || seasonNumber >= 1900)
+  );
+}
+
+function getScheduleAbsoluteSeasonOffsets(rows: ScheduleEpisodeNumberLike[]) {
+  const offsetHits = new Map<string, Map<number, number>>();
+
+  for (const row of rows) {
+    const absoluteEpisodeNumber = parseAbsoluteScheduleEpisodeNumber(
+      row.episodeName
+    );
+    if (typeof absoluteEpisodeNumber !== "number") {
+      continue;
+    }
+
+    const offset = absoluteEpisodeNumber - row.episodeNumber;
+    if (offset < ABSOLUTE_SCHEDULE_EPISODE_MIN) {
+      continue;
+    }
+
+    const seasonKey = getWatchedScheduleSeasonKey(row.showId, row.seasonNumber);
+    const hits = offsetHits.get(seasonKey) ?? new Map<number, number>();
+    hits.set(offset, (hits.get(offset) ?? 0) + 1);
+    offsetHits.set(seasonKey, hits);
+  }
+
+  const offsets = new Map<string, number>();
+  for (const [seasonKey, hits] of offsetHits) {
+    const sortedHits = Array.from(hits.entries()).sort(
+      ([offsetA, countA], [offsetB, countB]) =>
+        countB - countA || offsetA - offsetB
+    );
+    const [bestOffset, bestCount] = sortedHits[0] ?? [null, 0];
+    const secondBestCount = sortedHits[1]?.[1] ?? 0;
+
+    if (
+      typeof bestOffset === "number" &&
+      bestCount >= 2 &&
+      bestCount > secondBestCount
+    ) {
+      offsets.set(seasonKey, bestOffset);
+    }
+  }
+
+  return offsets;
+}
 
 function isWatchedScheduleEpisode(
   watched: WatchedScheduleEpisodeIndex,
   showId: Id<"shows">,
   seasonNumber: number,
-  episodeNumber: number
+  episodeNumber: number,
+  scheduleAbsoluteSeasonOffsets?: Map<string, number>
 ) {
   if (
     watched.exactKeys.has(
@@ -1110,18 +1234,42 @@ function isWatchedScheduleEpisode(
     return true;
   }
 
+  if (
+    hasProviderAbsoluteEpisodeNumber(seasonNumber, episodeNumber) &&
+    watched.absoluteEpisodeKeys.has(
+      getWatchedScheduleAbsoluteEpisodeKey(showId, episodeNumber)
+    )
+  ) {
+    return true;
+  }
+
   const absoluteOffset = watched.absoluteSeasonOffsets.get(
     getWatchedScheduleSeasonKey(showId, seasonNumber)
   );
-  if (typeof absoluteOffset !== "number") {
+  if (
+    typeof absoluteOffset === "number" &&
+    watched.exactKeys.has(
+      getWatchedScheduleEpisodeKey(
+        showId,
+        seasonNumber,
+        absoluteOffset + episodeNumber
+      )
+    )
+  ) {
+    return true;
+  }
+
+  const scheduleAbsoluteOffset = scheduleAbsoluteSeasonOffsets?.get(
+    getWatchedScheduleSeasonKey(showId, seasonNumber)
+  );
+  if (typeof scheduleAbsoluteOffset !== "number") {
     return false;
   }
 
-  return watched.exactKeys.has(
-    getWatchedScheduleEpisodeKey(
+  return watched.absoluteEpisodeKeys.has(
+    getWatchedScheduleAbsoluteEpisodeKey(
       showId,
-      seasonNumber,
-      absoluteOffset + episodeNumber
+      scheduleAbsoluteOffset + episodeNumber
     )
   );
 }
@@ -1135,6 +1283,7 @@ async function getWatchedScheduleEpisodeIndexForShows(
     new Map(showIds.map((showId) => [String(showId), showId])).values()
   );
   const watchedEpisodeKeys = new Set<string>();
+  const watchedAbsoluteEpisodeKeys = new Set<string>();
   const absoluteSeasonOffsets = new Map<string, number>();
 
   await Promise.all(
@@ -1150,6 +1299,11 @@ async function getWatchedScheduleEpisodeIndexForShows(
         watchedEpisodeKeys.add(
           getWatchedScheduleEpisodeKey(showId, watched.season, watched.episode)
         );
+        if (watched.episode >= ABSOLUTE_SCHEDULE_EPISODE_MIN) {
+          watchedAbsoluteEpisodeKeys.add(
+            getWatchedScheduleAbsoluteEpisodeKey(showId, watched.episode)
+          );
+        }
       }
 
       const episodesBySeason = new Map<number, number[]>();
@@ -1181,6 +1335,7 @@ async function getWatchedScheduleEpisodeIndexForShows(
 
   return {
     exactKeys: watchedEpisodeKeys,
+    absoluteEpisodeKeys: watchedAbsoluteEpisodeKeys,
     absoluteSeasonOffsets,
   };
 }
@@ -1395,6 +1550,9 @@ async function getProjectedFutureUpcomingCountsForUser(
     args.userId,
     Array.from(projectionById.values()).map((projection) => projection.showId)
   );
+  const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
+    getProjectedScheduleEpisodeNumberRows(currentRows, projectionById)
+  );
   const counts = new Map<
     string,
     { availableCount: number; futureCount: number; unavailableCount: number }
@@ -1412,7 +1570,8 @@ async function getProjectedFutureUpcomingCountsForUser(
         watchedEpisodes,
         projection.showId,
         row.seasonNumber,
-        row.episodeNumber
+        row.episodeNumber,
+        scheduleAbsoluteSeasonOffsets
       )
     ) {
       continue;
@@ -1556,6 +1715,23 @@ async function getProjectedTodayScheduledWatchlistFeed(
     args.userId,
     candidates.map((candidate) => candidate.tracked.showId)
   );
+  const proofRows =
+    coveredWindow.scheduleStartDate === args.date &&
+    coveredWindow.scheduleEndDate === args.date
+      ? rows
+      : await getProjectedScheduleEvents(ctx, {
+          userId: args.userId,
+          startDate: coveredWindow.scheduleStartDate,
+          endDate: coveredWindow.scheduleEndDate,
+          mediaFilter: args.mediaFilter,
+        });
+  const proofProjectionById =
+    proofRows === rows
+      ? projectionById
+      : await getProjectionByIdForScheduleRows(ctx, args.userId, proofRows);
+  const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
+    getProjectedScheduleEpisodeNumberRows(proofRows, proofProjectionById)
+  );
 
   const selectedByRoute = new Map<string, (typeof candidates)[number]>();
   for (const candidate of candidates) {
@@ -1564,7 +1740,8 @@ async function getProjectedTodayScheduledWatchlistFeed(
         watchedEpisodes,
         candidate.tracked.showId,
         candidate.row.seasonNumber,
-        candidate.row.episodeNumber
+        candidate.row.episodeNumber,
+        scheduleAbsoluteSeasonOffsets
       )
     ) {
       continue;
@@ -2028,9 +2205,11 @@ export const getHomeScheduleSignalMatches = internalQuery({
       tracked: (typeof trackedShows)[number];
       seasonNumber: number;
       episodeNumber: number;
+      episodeName: string | null;
       signalAt: number;
       latestEpisodeKey: string;
     }> = [];
+    const scheduleOffsetRows: ScheduleEpisodeNumberLike[] = [];
     const dedupe = new Set<string>();
 
     for (const row of rows) {
@@ -2040,10 +2219,6 @@ export const getHomeScheduleSignalMatches = internalQuery({
       }
 
       const bucketDayStartMs = startOfDay(bucketDate).getTime();
-      if (bucketDayStartMs > availableDayStartMs) {
-        continue;
-      }
-
       const rowMediaType = row.mediaType as "tv" | "anime";
       const entries = parseCachedScheduleEntries(row.episodes);
 
@@ -2056,6 +2231,17 @@ export const getHomeScheduleSignalMatches = internalQuery({
         );
 
         if (!tracked) {
+          continue;
+        }
+
+        scheduleOffsetRows.push({
+          showId: tracked.showId,
+          seasonNumber: entry.episode.seasonNumber,
+          episodeNumber: entry.episode.episodeNumber,
+          episodeName: entry.episode.name ?? null,
+        });
+
+        if (bucketDayStartMs > availableDayStartMs) {
           continue;
         }
 
@@ -2080,6 +2266,7 @@ export const getHomeScheduleSignalMatches = internalQuery({
           tracked,
           seasonNumber: entry.episode.seasonNumber,
           episodeNumber: entry.episode.episodeNumber,
+          episodeName: entry.episode.name ?? null,
           signalAt,
           latestEpisodeKey,
         });
@@ -2090,6 +2277,9 @@ export const getHomeScheduleSignalMatches = internalQuery({
       ctx,
       args.userId,
       candidates.map((candidate) => candidate.tracked.showId)
+    );
+    const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
+      scheduleOffsetRows
     );
 
     const matches = new Map<
@@ -2123,7 +2313,8 @@ export const getHomeScheduleSignalMatches = internalQuery({
           watchedEpisodes,
           candidate.tracked.showId,
           candidate.seasonNumber,
-          candidate.episodeNumber
+          candidate.episodeNumber,
+          scheduleAbsoluteSeasonOffsets
         )
       ) {
         continue;
@@ -2364,7 +2555,7 @@ async function syncCachedHomeScheduleSignalsForUser(
     {
       userId: args.userId,
       startDate: formatDate(addUtcDays(today, -HOME_CACHED_SIGNAL_LOOKBACK_DAYS)),
-      endDate: todayKey,
+      endDate: formatDate(addUtcDays(today, HOME_SIGNAL_LOOKAHEAD_DAYS)),
       availableDate: todayKey,
       nowMs,
     }
@@ -2823,6 +3014,53 @@ export const getTodayScheduledWatchlistFeed = query({
       typedUserId,
       candidates.map((candidate) => candidate.tracked.showId)
     );
+    const proofEndDate = formatDate(
+      addUtcDays(
+        parseRequiredScheduleDateKey(
+          dateKey,
+          "scheduled watchlist proof date"
+        ).date,
+        HOME_SIGNAL_LOOKAHEAD_DAYS
+      )
+    );
+    const proofRows = await ctx.db
+      .query("scheduleCache")
+      .withIndex("by_date", (q) => q.gte("date", dateKey).lte("date", proofEndDate))
+      .collect();
+    const scheduleOffsetRows: ScheduleEpisodeNumberLike[] = [];
+
+    for (const proofRow of proofRows) {
+      if (mediaFilter && proofRow.mediaType !== mediaFilter) {
+        continue;
+      }
+
+      const rowMediaType = proofRow.mediaType as "tv" | "anime";
+      const entries = parseCachedScheduleEntries(proofRow.episodes);
+
+      for (const entry of entries) {
+        const tracked = findTrackedScheduleMatch(
+          entry,
+          rowMediaType,
+          trackedShows,
+          byExternalKey
+        );
+
+        if (!tracked) {
+          continue;
+        }
+
+        scheduleOffsetRows.push({
+          showId: tracked.showId,
+          seasonNumber: entry.episode.seasonNumber,
+          episodeNumber: entry.episode.episodeNumber,
+          episodeName: entry.episode.name ?? null,
+        });
+      }
+    }
+
+    const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
+      scheduleOffsetRows
+    );
 
     const selectedByRoute = new Map<string, (typeof candidates)[number]>();
     for (const candidate of candidates) {
@@ -2831,7 +3069,8 @@ export const getTodayScheduledWatchlistFeed = query({
           watchedEpisodes,
           candidate.tracked.showId,
           candidate.entry.episode.seasonNumber,
-          candidate.entry.episode.episodeNumber
+          candidate.entry.episode.episodeNumber,
+          scheduleAbsoluteSeasonOffsets
         )
       ) {
         continue;
@@ -3345,6 +3584,14 @@ async function getFutureUpcomingCountsForUser(
       args.userId,
       countCandidates.map((candidate) => candidate.tracked.showId)
     );
+    const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
+      countCandidates.map((candidate) => ({
+        showId: candidate.tracked.showId,
+        seasonNumber: candidate.entry.episode.seasonNumber,
+        episodeNumber: candidate.entry.episode.episodeNumber,
+        episodeName: candidate.entry.episode.name ?? null,
+      }))
+    );
 
     for (const candidate of countCandidates) {
       if (
@@ -3352,7 +3599,8 @@ async function getFutureUpcomingCountsForUser(
           watchedEpisodes,
           candidate.tracked.showId,
           candidate.entry.episode.seasonNumber,
-          candidate.entry.episode.episodeNumber
+          candidate.entry.episode.episodeNumber,
+          scheduleAbsoluteSeasonOffsets
         )
       ) {
         continue;
