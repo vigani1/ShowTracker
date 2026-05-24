@@ -143,6 +143,34 @@ function getWatchlistScheduleAttentionCount(
   );
 }
 
+function hasWatchlistActionableEpisode(
+  item: WatchlistItem,
+  counts: WatchlistScheduleCounts | undefined,
+  mode: WatchlistAirtimeMode
+) {
+  const scheduleAttentionCount = getWatchlistScheduleAttentionCount(
+    counts,
+    mode
+  );
+  if (scheduleAttentionCount > 0) {
+    return true;
+  }
+
+  if (
+    typeof item.remainingEpisodes !== "number" ||
+    item.remainingEpisodes <= 0
+  ) {
+    return false;
+  }
+
+  const unavailableUpcomingCount =
+    mode === "after_airtime"
+      ? counts?.unavailableCount ?? 0
+      : counts?.futureCount ?? 0;
+
+  return unavailableUpcomingCount < item.remainingEpisodes;
+}
+
 function parseEpisodeAirtime(airDate?: string | null) {
   const trimmed = airDate?.trim();
   if (
@@ -1618,10 +1646,6 @@ export function HomeScreen() {
       const upcomingCounts = routeId
         ? upcomingAvailabilityByRoute.get(routeId)
         : undefined;
-      const unavailableUpcomingCount =
-        watchlistAirtimeMode === "after_airtime"
-          ? upcomingCounts?.unavailableCount ?? 0
-          : upcomingCounts?.futureCount ?? 0;
       const availableScheduleCount = getWatchlistScheduleAttentionCount(
         upcomingCounts,
         watchlistAirtimeMode
@@ -1631,12 +1655,11 @@ export function HomeScreen() {
         item.newEpisodeSignalAt > (item.lastWatchedAt ?? 0);
       const hasSameDayScheduleAttention =
         watchlistAirtimeMode === "same_day" && availableScheduleCount > 0;
-      const allRemainingEpisodesAreFuture =
-        watchlistAirtimeMode === "after_airtime" &&
-        typeof item.remainingEpisodes === "number" &&
-        item.remainingEpisodes > 0 &&
-        availableScheduleCount <= 0 &&
-        unavailableUpcomingCount >= item.remainingEpisodes;
+      const hasActionableEpisode = hasWatchlistActionableEpisode(
+        item,
+        upcomingCounts,
+        watchlistAirtimeMode
+      );
 
       if (item.status === "paused") return false;
       if (item.status === "dropped") return false;
@@ -1651,7 +1674,11 @@ export function HomeScreen() {
       if (item.watchedEpisodes <= 0) {
         return false;
       }
-      if (allRemainingEpisodesAreFuture) {
+      if (
+        !hasActionableEpisode &&
+        !hasAvailableScheduleSignal &&
+        !hasSameDayScheduleAttention
+      ) {
         return false;
       }
 
@@ -1682,16 +1709,25 @@ export function HomeScreen() {
       if (mediaFilter !== "all" && item.mediaType !== mediaFilter) {
         return false;
       }
+      const isAutoPaused = typeof item.autoPausedAt === "number";
+      const hasWatchProgress =
+        typeof item.watchedEpisodes === "number" && item.watchedEpisodes > 0;
+      const hasActionableEpisode = hasWatchlistActionableEpisode(
+        item,
+        upcomingAvailabilityByRoute.get(item.id),
+        watchlistAirtimeMode
+      );
       if (pausedSectionMode === "all_paused") {
-        return true;
+        if (!isAutoPaused) {
+          return true;
+        }
+        return (
+          hasWatchProgress &&
+          hasActionableEpisode &&
+          item.trackingState !== "upcoming"
+        );
       }
-      if (typeof item.remainingEpisodes !== "number" || item.remainingEpisodes <= 0) {
-        return false;
-      }
-      if (typeof item.watchedEpisodes !== "number" || item.watchedEpisodes <= 0) {
-        return false;
-      }
-      if (typeof item.autoPausedAt !== "number") {
+      if (!isAutoPaused || !hasActionableEpisode || !hasWatchProgress) {
         return false;
       }
       if (item.trackingState === "upcoming") {
@@ -1712,7 +1748,13 @@ export function HomeScreen() {
 
       return (b.lastWatchedAt ?? 0) - (a.lastWatchedAt ?? 0);
     });
-  }, [mediaFilter, pausedFeedItems, pausedSectionMode]);
+  }, [
+    mediaFilter,
+    pausedFeedItems,
+    pausedSectionMode,
+    upcomingAvailabilityByRoute,
+    watchlistAirtimeMode,
+  ]);
 
   const notStartedSectionWatchlist = useMemo(() => {
     return notStartedFeedItems

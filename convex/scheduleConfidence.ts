@@ -1646,6 +1646,7 @@ export const applyReleaseDeltas = mutation({
       patchedUserShows: 0,
       patchedFeedProjections: 0,
       resumedCompletedShows: 0,
+      resumedAutoPausedShows: 0,
       clearedStaleEpisodeSignals: 0,
       repairedStaleProjections: 0,
       scheduleCacheRowsUpdated: 0,
@@ -1745,6 +1746,16 @@ export const applyReleaseDeltas = mutation({
             userPatch.droppedAt = undefined;
             userPatch.statusChangedAt = args.generatedAt;
             result.resumedCompletedShows += 1;
+          } else if (
+            userShow.status === "paused" &&
+            typeof userShow.autoPausedAt === "number"
+          ) {
+            userPatch.status = watchedCount > 0 ? "watching" : "plan_to_watch";
+            userPatch.completedAt = undefined;
+            userPatch.autoPausedAt = undefined;
+            userPatch.droppedAt = undefined;
+            userPatch.statusChangedAt = args.generatedAt;
+            result.resumedAutoPausedShows += 1;
           }
         } else if (
           delta.clearStaleEpisodeSignal === true &&

@@ -39,6 +39,7 @@ const TARGETED_TRACKING_REPAIR_PAGE_SIZE = 20;
 const TARGETED_TRACKING_REPAIR_PAGE_SIZE_MAX = 30;
 const COMPLETED_SHOW_METADATA_REFRESH_PAGE_SIZE = 100;
 const COMPLETED_SHOW_METADATA_REFRESH_MAX_SCANNED = 500;
+const AUTO_PAUSED_RELEASE_REPAIR_BATCH_SIZE = 512;
 
 function startOfUtcDayMs(value: Date) {
   return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
@@ -573,7 +574,12 @@ export const resumeCompletedUserShowsForNewReleasedEpisodes = internalMutation({
     for (const userShow of page.page) {
       scanned += 1;
 
-      if (userShow.status === "completed") {
+      const shouldCheckForResume =
+        userShow.status === "completed" ||
+        (userShow.status === "paused" &&
+          typeof userShow.autoPausedAt === "number");
+
+      if (shouldCheckForResume) {
         if (releasedEpisodeCount === null) {
           skippedFutureOnly += 1;
         } else if (!shouldResumeForNewContent(userShow, releasedEpisodeCount)) {
@@ -1088,16 +1094,17 @@ function isHomeFeedPausedSectionEntry(
     return false;
   }
 
-  if (pausedSectionMode === "all_paused") {
-    return true;
-  }
-
-  return (
-    typeof entry.autoPausedAt === "number" &&
+  const isAutoPaused = typeof entry.autoPausedAt === "number";
+  const hasReleasedBacklog =
     typeof entry.remainingEpisodes === "number" &&
     entry.remainingEpisodes > 0 &&
-    hasWatchlistProgress(entry)
-  );
+    hasWatchlistProgress(entry);
+
+  if (pausedSectionMode === "all_paused") {
+    return !isAutoPaused || hasReleasedBacklog;
+  }
+
+  return isAutoPaused && hasReleasedBacklog;
 }
 
 function isHomeFeedNotStartedSectionEntry(
@@ -2560,10 +2567,16 @@ function shouldBypassTrackedShowMetadataRefreshThrottle(show: Doc<"shows">) {
 }
 
 function shouldResumeForNewContent(
-  userShow: Pick<Doc<"userShows">, "status" | "watchedEpisodesCount">,
+  userShow: Pick<
+    Doc<"userShows">,
+    "status" | "watchedEpisodesCount" | "autoPausedAt"
+  >,
   releasedEpisodeCount: number | null
 ): boolean {
-  if (userShow.status !== "completed") {
+  const isSystemPaused =
+    userShow.status === "paused" && typeof userShow.autoPausedAt === "number";
+
+  if (userShow.status !== "completed" && !isSystemPaused) {
     return false;
   }
   if (typeof releasedEpisodeCount !== "number") {
@@ -8097,6 +8110,7 @@ function shouldAutoPause(
   status: UserShowStatus,
   lastWatchedAt: number | undefined,
   statusChangedAt: number | undefined,
+  newEpisodeSignalAt: number | undefined,
   now: number = Date.now()
 ): boolean {
   if (status !== "watching") return false;
@@ -8104,17 +8118,32 @@ function shouldAutoPause(
   if (statusChangedAt && now - statusChangedAt < INACTIVITY_THRESHOLD_DAYS * 24 * 60 * 60 * 1000) {
     return false;
   }
-  
-  const daysSinceLastWatch = (now - lastWatchedAt) / (1000 * 60 * 60 * 24);
-  return daysSinceLastWatch >= INACTIVITY_THRESHOLD_DAYS;
+
+  const latestAttentionAt = Math.max(lastWatchedAt, newEpisodeSignalAt ?? 0);
+  const daysSinceLatestAttention = (now - latestAttentionAt) / (1000 * 60 * 60 * 24);
+  return daysSinceLatestAttention >= INACTIVITY_THRESHOLD_DAYS;
 }
 
 function hasWatchedKnownEpisodeTotal(
-  show: Pick<Doc<"shows">, "mediaType" | "totalEpisodes">,
+  show: Pick<
+    Doc<"shows">,
+    "mediaType" | "releasedEpisodes" | "totalEpisodes"
+  >,
   watchedEpisodesCount: number
 ) {
   if (show.mediaType === "movie") {
     return false;
+  }
+
+  const releasedEpisodes = normalizePositiveEpisodeCount(show.releasedEpisodes);
+  if (typeof releasedEpisodes === "number") {
+    const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
+    const watchableEpisodes =
+      typeof totalEpisodes === "number"
+        ? Math.min(releasedEpisodes, totalEpisodes)
+        : releasedEpisodes;
+
+    return watchedEpisodesCount >= watchableEpisodes;
   }
 
   const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
@@ -8129,6 +8158,51 @@ function hasWatchedKnownEpisodeTotal(
   return true;
 }
 
+function shouldResumeAutoPausedForRecentReleasedSignal(
+  userShow: Pick<
+    Doc<"userShows">,
+    | "status"
+    | "watchedEpisodesCount"
+    | "lastWatchedAt"
+    | "addedAt"
+    | "autoPausedAt"
+    | "newEpisodeSignalAt"
+  >,
+  show: Pick<Doc<"shows">, "releasedEpisodes">,
+  now: number
+) {
+  if (
+    userShow.status !== "paused" ||
+    typeof userShow.autoPausedAt !== "number" ||
+    typeof userShow.newEpisodeSignalAt !== "number"
+  ) {
+    return false;
+  }
+
+  const lastUserWatchAt = userShow.lastWatchedAt ?? userShow.addedAt ?? 0;
+  if (userShow.newEpisodeSignalAt <= lastUserWatchAt) {
+    return false;
+  }
+
+  const daysSinceSignal =
+    (now - userShow.newEpisodeSignalAt) / (1000 * 60 * 60 * 24);
+  if (daysSinceSignal >= INACTIVITY_THRESHOLD_DAYS) {
+    return false;
+  }
+
+  const releasedEpisodes = normalizePositiveEpisodeCount(show.releasedEpisodes);
+  if (typeof releasedEpisodes !== "number") {
+    return false;
+  }
+
+  const watchedEpisodesCount = Math.max(
+    0,
+    Math.floor(userShow.watchedEpisodesCount ?? 0)
+  );
+
+  return watchedEpisodesCount < releasedEpisodes;
+}
+
 /**
  * Scheduled internal mutation to auto-pause inactive shows
  * Runs daily via cron job
@@ -8138,6 +8212,51 @@ export const autoPauseInactiveShows = internalMutation({
   handler: async (ctx) => {
     const now = Date.now();
     const cutoffTime = now - (INACTIVITY_THRESHOLD_DAYS * 24 * 60 * 60 * 1000);
+
+    const autoPausedCandidates = await ctx.db
+      .query("userShows")
+      .withIndex("by_status_last_watched", (q) => q.eq("status", "paused"))
+      .take(AUTO_PAUSED_RELEASE_REPAIR_BATCH_SIZE);
+
+    let resumedAutoPausedCount = 0;
+
+    for (const userShow of autoPausedCandidates) {
+      const show = await ctx.db.get(userShow.showId);
+      if (
+        !show ||
+        !shouldResumeAutoPausedForRecentReleasedSignal(userShow, show, now)
+      ) {
+        continue;
+      }
+
+      const watchedEpisodesCount = Math.max(
+        0,
+        Math.floor(userShow.watchedEpisodesCount ?? 0)
+      );
+      const nextStatus: UserShowStatus =
+        watchedEpisodesCount > 0 ? "watching" : "plan_to_watch";
+
+      await ctx.db.patch(userShow._id, {
+        status: nextStatus,
+        completedAt: undefined,
+        autoPausedAt: undefined,
+        droppedAt: undefined,
+        statusChangedAt: now,
+      });
+      await upsertFeedProjectionForUserShowDoc(
+        ctx,
+        {
+          ...userShow,
+          status: nextStatus,
+          completedAt: undefined,
+          autoPausedAt: undefined,
+          droppedAt: undefined,
+          statusChangedAt: now,
+        },
+        show
+      );
+      resumedAutoPausedCount++;
+    }
     
     // Find all "watching" shows where lastWatchedAt is older than threshold
     const showsToPause = await ctx.db
@@ -8161,7 +8280,15 @@ export const autoPauseInactiveShows = internalMutation({
       }
 
       // Double-check the condition
-      if (shouldAutoPause(userShow.status, userShow.lastWatchedAt, userShow.statusChangedAt, now)) {
+      if (
+        shouldAutoPause(
+          userShow.status,
+          userShow.lastWatchedAt,
+          userShow.statusChangedAt,
+          userShow.newEpisodeSignalAt,
+          now
+        )
+      ) {
         await ctx.db.patch(userShow._id, {
           status: "paused",
           statusChangedAt: now,
@@ -8180,7 +8307,7 @@ export const autoPauseInactiveShows = internalMutation({
       }
     }
     
-    return { pausedCount, skippedFullyWatchedCount };
+    return { pausedCount, skippedFullyWatchedCount, resumedAutoPausedCount };
   },
 });
 

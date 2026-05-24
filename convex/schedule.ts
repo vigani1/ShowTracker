@@ -1079,6 +1079,112 @@ function projectedScheduleEntryFromRow(
   };
 }
 
+function getWatchedScheduleEpisodeKey(
+  showId: Id<"shows">,
+  seasonNumber: number,
+  episodeNumber: number
+) {
+  return `${showId}:${seasonNumber}:${episodeNumber}`;
+}
+
+function getWatchedScheduleSeasonKey(showId: Id<"shows">, seasonNumber: number) {
+  return `${showId}:${seasonNumber}`;
+}
+
+type WatchedScheduleEpisodeIndex = {
+  exactKeys: Set<string>;
+  absoluteSeasonOffsets: Map<string, number>;
+};
+
+function isWatchedScheduleEpisode(
+  watched: WatchedScheduleEpisodeIndex,
+  showId: Id<"shows">,
+  seasonNumber: number,
+  episodeNumber: number
+) {
+  if (
+    watched.exactKeys.has(
+      getWatchedScheduleEpisodeKey(showId, seasonNumber, episodeNumber)
+    )
+  ) {
+    return true;
+  }
+
+  const absoluteOffset = watched.absoluteSeasonOffsets.get(
+    getWatchedScheduleSeasonKey(showId, seasonNumber)
+  );
+  if (typeof absoluteOffset !== "number") {
+    return false;
+  }
+
+  return watched.exactKeys.has(
+    getWatchedScheduleEpisodeKey(
+      showId,
+      seasonNumber,
+      absoluteOffset + episodeNumber
+    )
+  );
+}
+
+async function getWatchedScheduleEpisodeIndexForShows(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  showIds: Id<"shows">[]
+) {
+  const uniqueShowIds = Array.from(
+    new Map(showIds.map((showId) => [String(showId), showId])).values()
+  );
+  const watchedEpisodeKeys = new Set<string>();
+  const absoluteSeasonOffsets = new Map<string, number>();
+
+  await Promise.all(
+    uniqueShowIds.map(async (showId) => {
+      const watchedEpisodes = await ctx.db
+        .query("watchedEpisodes")
+        .withIndex("by_user_show", (q) =>
+          q.eq("userId", userId).eq("showId", showId)
+        )
+        .collect();
+
+      for (const watched of watchedEpisodes) {
+        watchedEpisodeKeys.add(
+          getWatchedScheduleEpisodeKey(showId, watched.season, watched.episode)
+        );
+      }
+
+      const episodesBySeason = new Map<number, number[]>();
+      for (const watched of watchedEpisodes) {
+        const episodes = episodesBySeason.get(watched.season) ?? [];
+        episodes.push(watched.episode);
+        episodesBySeason.set(watched.season, episodes);
+      }
+
+      const seasons = Array.from(episodesBySeason.keys()).sort((a, b) => a - b);
+      let previousMaxEpisode = 0;
+      for (const season of seasons) {
+        const episodes = episodesBySeason.get(season) ?? [];
+        if (season > 1 && previousMaxEpisode > 0) {
+          const currentMinEpisode = Math.min(...episodes);
+          // Some tracked episode lists store later seasons as absolute series numbers.
+          if (currentMinEpisode === previousMaxEpisode + 1) {
+            absoluteSeasonOffsets.set(
+              getWatchedScheduleSeasonKey(showId, season),
+              previousMaxEpisode
+            );
+          }
+        }
+
+        previousMaxEpisode = Math.max(previousMaxEpisode, ...episodes);
+      }
+    })
+  );
+
+  return {
+    exactKeys: watchedEpisodeKeys,
+    absoluteSeasonOffsets,
+  };
+}
+
 async function filterProjectedRowsToCurrentFeedProjections(
   ctx: QueryCtx,
   userId: Id<"users">,
@@ -1270,6 +1376,25 @@ async function getProjectedFutureUpcomingCountsForUser(
     args.userId,
     rows
   );
+  const projectionIds = Array.from(
+    new Set(currentRows.map((row) => row.feedProjectionId))
+  );
+  const projections = await Promise.all(
+    projectionIds.map((projectionId) => ctx.db.get(projectionId))
+  );
+  const projectionById = new Map(
+    projections
+      .filter(
+        (projection): projection is Doc<"feedProjections"> =>
+          !!projection && projection.userId === args.userId
+      )
+      .map((projection) => [projection._id, projection])
+  );
+  const watchedEpisodes = await getWatchedScheduleEpisodeIndexForShows(
+    ctx,
+    args.userId,
+    Array.from(projectionById.values()).map((projection) => projection.showId)
+  );
   const counts = new Map<
     string,
     { availableCount: number; futureCount: number; unavailableCount: number }
@@ -1278,6 +1403,21 @@ async function getProjectedFutureUpcomingCountsForUser(
   const today = startOfDay(new Date());
 
   for (const row of currentRows) {
+    const projection = projectionById.get(row.feedProjectionId);
+    if (!projection) {
+      continue;
+    }
+    if (
+      isWatchedScheduleEpisode(
+        watchedEpisodes,
+        projection.showId,
+        row.seasonNumber,
+        row.episodeNumber
+      )
+    ) {
+      continue;
+    }
+
     const bucketDate = parseScheduleDateKey(row.date);
     if (!bucketDate) {
       continue;
@@ -1411,30 +1551,20 @@ async function getProjectedTodayScheduledWatchlistFeed(
     return [];
   }
 
-  const candidateShowIds = Array.from(
-    new Set(candidates.map((candidate) => candidate.tracked.showId))
-  );
-  const watchedEpisodeKeys = new Set<string>();
-  await Promise.all(
-    candidateShowIds.map(async (showId) => {
-      const watchedEpisodes = await ctx.db
-        .query("watchedEpisodes")
-        .withIndex("by_user_show", (q) =>
-          q.eq("userId", args.userId).eq("showId", showId)
-        )
-        .collect();
-
-      for (const watched of watchedEpisodes) {
-        watchedEpisodeKeys.add(`${showId}:${watched.season}:${watched.episode}`);
-      }
-    })
+  const watchedEpisodes = await getWatchedScheduleEpisodeIndexForShows(
+    ctx,
+    args.userId,
+    candidates.map((candidate) => candidate.tracked.showId)
   );
 
   const selectedByRoute = new Map<string, (typeof candidates)[number]>();
   for (const candidate of candidates) {
     if (
-      watchedEpisodeKeys.has(
-        `${candidate.tracked.showId}:${candidate.row.seasonNumber}:${candidate.row.episodeNumber}`
+      isWatchedScheduleEpisode(
+        watchedEpisodes,
+        candidate.tracked.showId,
+        candidate.row.seasonNumber,
+        candidate.row.episodeNumber
       )
     ) {
       continue;
@@ -1956,23 +2086,10 @@ export const getHomeScheduleSignalMatches = internalQuery({
       }
     }
 
-    const candidateShowIds = Array.from(
-      new Set(candidates.map((candidate) => candidate.tracked.showId))
-    );
-    const watchedEpisodeKeys = new Set<string>();
-    await Promise.all(
-      candidateShowIds.map(async (showId) => {
-        const watchedEpisodes = await ctx.db
-          .query("watchedEpisodes")
-          .withIndex("by_user_show", (q) =>
-            q.eq("userId", args.userId).eq("showId", showId)
-          )
-          .collect();
-
-        for (const watched of watchedEpisodes) {
-          watchedEpisodeKeys.add(`${showId}:${watched.season}:${watched.episode}`);
-        }
-      })
+    const watchedEpisodes = await getWatchedScheduleEpisodeIndexForShows(
+      ctx,
+      args.userId,
+      candidates.map((candidate) => candidate.tracked.showId)
     );
 
     const matches = new Map<
@@ -2002,8 +2119,11 @@ export const getHomeScheduleSignalMatches = internalQuery({
       });
 
       if (
-        watchedEpisodeKeys.has(
-          `${candidate.tracked.showId}:${candidate.seasonNumber}:${candidate.episodeNumber}`
+        isWatchedScheduleEpisode(
+          watchedEpisodes,
+          candidate.tracked.showId,
+          candidate.seasonNumber,
+          candidate.episodeNumber
         )
       ) {
         continue;
@@ -2698,30 +2818,20 @@ export const getTodayScheduledWatchlistFeed = query({
       return [];
     }
 
-    const candidateShowIds = Array.from(
-      new Set(candidates.map((candidate) => candidate.tracked.showId))
-    );
-    const watchedEpisodeKeys = new Set<string>();
-    await Promise.all(
-      candidateShowIds.map(async (showId) => {
-        const watchedEpisodes = await ctx.db
-          .query("watchedEpisodes")
-          .withIndex("by_user_show", (q) =>
-            q.eq("userId", typedUserId).eq("showId", showId)
-          )
-          .collect();
-
-        for (const watched of watchedEpisodes) {
-          watchedEpisodeKeys.add(`${showId}:${watched.season}:${watched.episode}`);
-        }
-      })
+    const watchedEpisodes = await getWatchedScheduleEpisodeIndexForShows(
+      ctx,
+      typedUserId,
+      candidates.map((candidate) => candidate.tracked.showId)
     );
 
     const selectedByRoute = new Map<string, (typeof candidates)[number]>();
     for (const candidate of candidates) {
       if (
-        watchedEpisodeKeys.has(
-          `${candidate.tracked.showId}:${candidate.entry.episode.seasonNumber}:${candidate.entry.episode.episodeNumber}`
+        isWatchedScheduleEpisode(
+          watchedEpisodes,
+          candidate.tracked.showId,
+          candidate.entry.episode.seasonNumber,
+          candidate.entry.episode.episodeNumber
         )
       ) {
         continue;
@@ -3131,6 +3241,7 @@ async function getFutureUpcomingCountsForUser(
     }
 
     const trackedShows = nonMovieProjections.map((p) => ({
+      showId: p.showId,
       normalizedTitle: normalizeTitle(p.title),
       mediaType: p.mediaType as "tv" | "anime",
       status: p.status,
@@ -3166,6 +3277,12 @@ async function getFutureUpcomingCountsForUser(
       string,
       { availableCount: number; futureCount: number; unavailableCount: number }
     >();
+    const countCandidates: Array<{
+      dayKey: string;
+      daysUntil: number;
+      entry: CompactScheduleEntry;
+      tracked: (typeof trackedShows)[number] & { watchlistId: string };
+    }> = [];
     const dedupe = new Set<string>();
     const sameTrackedShowDayDedupe = new Map<string, CompactScheduleEntry>();
     const nowMs = Date.now();
@@ -3212,25 +3329,54 @@ async function getFutureUpcomingCountsForUser(
         dedupe.add(uniqueKey);
         sameTrackedShowDayDedupe.set(sameTrackedShowDayKey, entry);
 
-        const airtimeMs = getEpisodeAirtimeTimestamp(entry.episode.airDate);
-        const isFutureDay = daysUntil > 0;
-        const isTodayBeforeAirtime = daysUntil === 0 && airtimeMs !== null && airtimeMs > nowMs;
-        const existing = counts.get(tracked.watchlistId) ?? {
-          availableCount: 0,
-          futureCount: 0,
-          unavailableCount: 0,
-        };
-        if (!isFutureDay && !isTodayBeforeAirtime) {
-          existing.availableCount += 1;
-          counts.set(tracked.watchlistId, existing);
-          continue;
-        }
-        if (isFutureDay) {
-          existing.futureCount += 1;
-        }
-        existing.unavailableCount += 1;
-        counts.set(tracked.watchlistId, existing);
+        countCandidates.push({
+          dayKey,
+          daysUntil,
+          entry,
+          tracked: tracked as (typeof trackedShows)[number] & {
+            watchlistId: string;
+          },
+        });
       }
+    }
+
+    const watchedEpisodes = await getWatchedScheduleEpisodeIndexForShows(
+      ctx,
+      args.userId,
+      countCandidates.map((candidate) => candidate.tracked.showId)
+    );
+
+    for (const candidate of countCandidates) {
+      if (
+        isWatchedScheduleEpisode(
+          watchedEpisodes,
+          candidate.tracked.showId,
+          candidate.entry.episode.seasonNumber,
+          candidate.entry.episode.episodeNumber
+        )
+      ) {
+        continue;
+      }
+
+      const airtimeMs = getEpisodeAirtimeTimestamp(candidate.entry.episode.airDate);
+      const isFutureDay = candidate.daysUntil > 0;
+      const isTodayBeforeAirtime =
+        candidate.daysUntil === 0 && airtimeMs !== null && airtimeMs > nowMs;
+      const existing = counts.get(candidate.tracked.watchlistId) ?? {
+        availableCount: 0,
+        futureCount: 0,
+        unavailableCount: 0,
+      };
+      if (!isFutureDay && !isTodayBeforeAirtime) {
+        existing.availableCount += 1;
+        counts.set(candidate.tracked.watchlistId, existing);
+        continue;
+      }
+      if (isFutureDay) {
+        existing.futureCount += 1;
+      }
+      existing.unavailableCount += 1;
+      counts.set(candidate.tracked.watchlistId, existing);
     }
 
     return Array.from(counts.entries())
