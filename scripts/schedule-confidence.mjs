@@ -27,6 +27,7 @@ const scheduleProjectionPastDays = 45;
 const scheduleProjectionFutureDays = 120;
 const watchlistFutureCountDays = 90;
 const maxProjectionRepairEpisodeDelta = 3;
+const absoluteScheduleEpisodeMin = 100;
 
 const directFixtureDate = "2026-05-13T21:00:00.000Z";
 const bridgedFixtureDate = "2026-05-14T18:00:00.000Z";
@@ -255,6 +256,20 @@ const fixtureLibrary = [
     tmdbId: 1013,
     lastWatchedAt: Date.UTC(2026, 4, 20),
   },
+  {
+    id: "fixture-provider-year-numbering",
+    userId: "fixture-user",
+    showId: "show-provider-year-numbering",
+    title: "Provider Year Numbering",
+    mediaType: "tv",
+    status: "watching",
+    watchedEpisodesCount: 1163,
+    totalEpisodes: 1181,
+    releasedEpisodes: 1163,
+    remainingEpisodes: 0,
+    tmdbId: 1016,
+    tvmazeId: 9016,
+  },
 ];
 
 const fixtureProviderEvents = [
@@ -449,6 +464,42 @@ const fixtureProviderEvents = [
     name: "Count Drift",
     airDate: "2026-05-10T00:00:00.000Z",
     providers: { tmdbId: 1013 },
+  },
+  {
+    sourceProvider: "tvmaze",
+    providerShowId: "tvmaze:9016",
+    title: "Provider Year Numbering",
+    mediaType: "tv",
+    region: "JP",
+    seasonNumber: 2026,
+    episodeNumber: 8,
+    name: "Descriptive Current Episode",
+    airDate: "2026-05-14T10:00:00.000Z",
+    providers: { tmdbId: 1016, tvmazeId: 9016 },
+  },
+  {
+    sourceProvider: "tvmaze",
+    providerShowId: "tvmaze:9016",
+    title: "Provider Year Numbering",
+    mediaType: "tv",
+    region: "JP",
+    seasonNumber: 2026,
+    episodeNumber: 9,
+    name: "Episode 1164",
+    airDate: "2026-05-21T10:00:00.000Z",
+    providers: { tmdbId: 1016, tvmazeId: 9016 },
+  },
+  {
+    sourceProvider: "tvmaze",
+    providerShowId: "tvmaze:9016",
+    title: "Provider Year Numbering",
+    mediaType: "tv",
+    region: "JP",
+    seasonNumber: 2026,
+    episodeNumber: 10,
+    name: "Episode 1165",
+    airDate: "2026-05-28T10:00:00.000Z",
+    providers: { tmdbId: 1016, tvmazeId: 9016 },
   },
 ];
 
@@ -2723,6 +2774,10 @@ function createScheduleProjectionCandidate(item, row, matchConfidence, windows, 
     payload,
     status: item.status,
     lastWatchedAt: numberOrNull(item.last_watched_at) ?? 0,
+    watchedEpisodesCount: Math.max(
+      0,
+      Math.floor(numberOrNull(item.watched_episodes_count) ?? 0)
+    ),
   };
 }
 
@@ -2782,9 +2837,100 @@ function addProjectedScheduleCandidate(state, candidate) {
   state.sameDay.set(sameDayKey, { index });
 }
 
+function getProjectedScheduleSeasonKey(payload) {
+  return `${payload.showId}:${payload.seasonNumber}`;
+}
+
+function parseAbsoluteScheduleEpisodeNumber(episodeName) {
+  const match = String(episodeName ?? "").trim().match(/^Episode\s+(\d{3,})$/i);
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasProviderAbsoluteEpisodeNumber(seasonNumber, episodeNumber) {
+  return (
+    episodeNumber >= absoluteScheduleEpisodeMin &&
+    (seasonNumber <= 1 || seasonNumber >= 1900)
+  );
+}
+
+function getScheduleAbsoluteSeasonOffsets(events) {
+  const offsetHits = new Map();
+
+  for (const event of events) {
+    const payload = event.payload;
+    const absoluteEpisodeNumber = parseAbsoluteScheduleEpisodeNumber(payload.episodeName);
+    if (typeof absoluteEpisodeNumber !== "number") {
+      continue;
+    }
+
+    const offset = absoluteEpisodeNumber - payload.episodeNumber;
+    if (offset < absoluteScheduleEpisodeMin) {
+      continue;
+    }
+
+    const seasonKey = getProjectedScheduleSeasonKey(payload);
+    const hits = offsetHits.get(seasonKey) ?? new Map();
+    hits.set(offset, (hits.get(offset) ?? 0) + 1);
+    offsetHits.set(seasonKey, hits);
+  }
+
+  const offsets = new Map();
+  for (const [seasonKey, hits] of offsetHits) {
+    const sortedHits = Array.from(hits.entries()).sort(
+      ([offsetA, countA], [offsetB, countB]) =>
+        countB - countA || offsetA - offsetB
+    );
+    const [bestOffset, bestCount] = sortedHits[0] ?? [null, 0];
+    const secondBestCount = sortedHits[1]?.[1] ?? 0;
+
+    if (
+      typeof bestOffset === "number" &&
+      bestCount >= 2 &&
+      bestCount > secondBestCount
+    ) {
+      offsets.set(seasonKey, bestOffset);
+    }
+  }
+
+  return offsets;
+}
+
+function isProjectedScheduleEventWatched(event, scheduleAbsoluteSeasonOffsets) {
+  const watchedCount = Math.max(
+    0,
+    Math.floor(numberOrNull(event.watchedEpisodesCount) ?? 0)
+  );
+  if (watchedCount <= 0) {
+    return false;
+  }
+
+  const { payload } = event;
+  if (
+    hasProviderAbsoluteEpisodeNumber(payload.seasonNumber, payload.episodeNumber) &&
+    payload.episodeNumber <= watchedCount
+  ) {
+    return true;
+  }
+
+  const scheduleAbsoluteOffset = scheduleAbsoluteSeasonOffsets.get(
+    getProjectedScheduleSeasonKey(payload)
+  );
+  if (typeof scheduleAbsoluteOffset !== "number") {
+    return false;
+  }
+
+  return scheduleAbsoluteOffset + payload.episodeNumber <= watchedCount;
+}
+
 function buildCountProjectionRows(events, windows, nowMs) {
   const todayKey = dateKeyFromValue(new Date(nowMs).toISOString());
   const today = new Date(`${todayKey}T00:00:00.000Z`);
+  const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(events);
   const countsByFilter = new Map([
     ["all", new Map()],
     ["tv", new Map()],
@@ -2797,6 +2943,9 @@ function buildCountProjectionRows(events, windows, nowMs) {
       compareDateKeys(payload.date, windows.countWindowStartDate) < 0 ||
       compareDateKeys(payload.date, windows.countWindowEndDate) > 0
     ) {
+      continue;
+    }
+    if (isProjectedScheduleEventWatched(event, scheduleAbsoluteSeasonOffsets)) {
       continue;
     }
 
@@ -4497,6 +4646,16 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     "Schedule projection did not include the future anime count row.",
     fixtureUserProjection?.counts ?? []
   );
+  const providerYearCount = fixtureUserProjection?.counts.find(
+    (row) => row.mediaFilter === "tv" && row.routeId === "tmdb:tv:1016"
+  );
+  assertValidation(
+    providerYearCount?.availableCount === 0 &&
+      providerYearCount?.futureCount === 2 &&
+      providerYearCount?.unavailableCount === 2,
+    "Schedule projection count should suppress watched provider-year episodes.",
+    providerYearCount
+  );
   assertValidation(
     projectionPayload.metrics.users === 1 && projectionPayload.metrics.eventCount > 0,
     "Schedule projection payload did not generate covered user rows.",
@@ -4512,7 +4671,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   );
 
   return {
-    checks: 17,
+    checks: 18,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,

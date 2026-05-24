@@ -23,6 +23,8 @@ The matcher still checks exact keys first. It then allows direct absolute episod
 
 The proof window is wider than the candidate window. Today-only reads and home signal reads may use nearby future rows to prove numbering, but future rows are still not eligible as available episodes until the existing date and airtime checks allow them.
 
+The external schedule-confidence projection generator uses the same provider-style absolute numbering evidence for `watchlistFutureCountProjections`. Because that server job imports aggregate watched counts rather than every watched episode row, it only suppresses mapped absolute episodes whose absolute episode number is at or below the imported `watchedEpisodesCount`. Convex read-time queries remain stricter because they check the actual `watchedEpisodes` table.
+
 ## Reasoning
 
 This avoids a One Piece-specific fix and keeps the behavior provider-evidence based. A single titled row like `S2026E08` is not enough to prove it means absolute episode 1163, but nearby generic rows like `Episode 1164`, `Episode 1165`, and `Episode 1166` can prove a stable `+1155` offset for the `2026` schedule season.
@@ -83,6 +85,8 @@ Schedule-cache fallback simulation for May 24 to June 14, 2026 loaded 1140 `sche
 The all-current-row projection simulation found exactly one row newly hidden by this change: One Piece on May 24, 2026. No Rick and Morty, Silo, or Wistoria behavior changed.
 
 After deploying to production, `npx convex run --prod schedule:getFutureUpcomingCountsForWatchlistForUser '{"userId":"ks72ekcbbe4cjqqmcyd42x2e2d82myhc","startDate":"2026-05-24","endDate":"2026-08-22"}'` returned One Piece `routeId: tmdb:tv:37854` with `availableCount: 0`, `futureCount: 12`, and `unavailableCount: 12`.
+
+The first VPS schedule-confidence run after the read-time fix proved a second stored-projection gap: `watchlistFutureCountProjections` still wrote One Piece `availableCount: 1` for both `mediaFilter: tv` and `mediaFilter: all`. The follow-up server projection fix adds a fixture named `Provider Year Numbering`; validation asserts the watched `S2026E08` row is suppressed from stored counts while future `Episode 1164` and `Episode 1165` remain future/unavailable.
 
 ## Rollback Notes
 
