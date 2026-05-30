@@ -31,7 +31,7 @@ const HOME_SIGNAL_LOOKAHEAD_DAYS = 21;
 const HOME_SIGNAL_PAST_CACHE_DAYS = 7;
 const HOME_SIGNAL_MAX_MATCHES = 200;
 const MONTHLY_SIGNAL_USER_PAGE_SIZE = 500;
-const HOME_CACHED_SIGNAL_LOOKBACK_DAYS = 1;
+const HOME_CACHED_SIGNAL_LOOKBACK_DAYS = HOME_SIGNAL_PAST_CACHE_DAYS;
 const HOME_CACHED_SIGNAL_SYNC_BUCKET_MS = 1000 * 60 * 30;
 const DAY_MS = 1000 * 60 * 60 * 24;
 
@@ -332,8 +332,16 @@ function addUtcDays(date: Date, days: number) {
   return next;
 }
 
-function getScheduleSignalSyncCursor(nowMs: number) {
-  return String(Math.floor(nowMs / HOME_CACHED_SIGNAL_SYNC_BUCKET_MS));
+function getScheduleSignalSyncCursor(
+  nowMs: number,
+  latestFeedProjectionUpdatedAt: number
+) {
+  const bucket = Math.floor(nowMs / HOME_CACHED_SIGNAL_SYNC_BUCKET_MS);
+  const projectionVersion = Math.max(
+    0,
+    Math.floor(latestFeedProjectionUpdatedAt)
+  );
+  return `${bucket}:${projectionVersion}`;
 }
 
 function getSafeClientTodayDate(clientTodayDate: string | undefined, nowMs: number) {
@@ -925,6 +933,18 @@ async function getLatestFeedProjectionUpdatedAt(
 
   return Math.max(tvProjection?.updatedAt ?? 0, animeProjection?.updatedAt ?? 0);
 }
+
+export const getHomeScheduleSignalSyncState = internalQuery({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => ({
+    latestFeedProjectionUpdatedAt: await getLatestFeedProjectionUpdatedAt(
+      ctx,
+      args.userId
+    ),
+  }),
+});
 
 async function getLatestScheduleProjectionIdentityUpdatedAt(
   ctx: QueryCtx,
@@ -2130,6 +2150,7 @@ export const getHomeScheduleSignalMatches = internalQuery({
     endDate: v.string(),
     availableDate: v.string(),
     nowMs: v.number(),
+    extendedPastSignalMode: v.optional(v.literal("catch_up_only")),
   },
   handler: async (ctx, args): Promise<HomeScheduleSignalEvaluation> => {
     const range = getScheduleRangeKeys(args.startDate, args.endDate);
@@ -2138,6 +2159,9 @@ export const getHomeScheduleSignalMatches = internalQuery({
       "home schedule signal available date"
     ).date;
     const availableDayStartMs = startOfDay(availableDate).getTime();
+    const regularCachedStartMs = startOfDay(
+      addUtcDays(availableDate, -1)
+    ).getTime();
 
     const nonMovieProjections = (
       await Promise.all([
@@ -2260,6 +2284,14 @@ export const getHomeScheduleSignalMatches = internalQuery({
           continue;
         }
         const signalAt = airtimeMs ?? Math.min(bucketDayStartMs, args.nowMs);
+        if (
+          args.extendedPastSignalMode === "catch_up_only" &&
+          bucketDayStartMs < regularCachedStartMs &&
+          tracked.lastWatchedAt < signalAt
+        ) {
+          continue;
+        }
+
         const latestEpisodeKey = `${row.date}:${entry.episode.seasonNumber}:${entry.episode.episodeNumber}`;
 
         candidates.push({
@@ -2429,13 +2461,21 @@ export const applyHomeScheduleSignals = internalMutation({
         ctx.db.get(match.feedProjectionId),
       ]);
 
+      const userShowSignalAt =
+        userShow && userShow.userId === args.userId
+          ? Math.max(
+              match.signalAt,
+              (userShow.lastWatchedAt ?? userShow.addedAt ?? 0) + 1
+            )
+          : match.signalAt;
+
       if (
         userShow &&
         userShow.userId === args.userId &&
-        ((userShow.newEpisodeSignalAt ?? 0) < match.signalAt)
+        ((userShow.newEpisodeSignalAt ?? 0) < userShowSignalAt)
       ) {
         await ctx.db.patch(userShow._id, {
-          newEpisodeSignalAt: match.signalAt,
+          newEpisodeSignalAt: userShowSignalAt,
         });
         patchedUserShows += 1;
       }
@@ -2448,14 +2488,18 @@ export const applyHomeScheduleSignals = internalMutation({
         continue;
       }
 
+      const projectionSignalAt = Math.max(
+        match.signalAt,
+        projection.lastWatchedAt + 1
+      );
       const nextHomeSortAt = Math.max(
         projection.homeSortAt ?? projection.lastWatchedAt,
         projection.lastWatchedAt,
-        match.signalAt
+        projectionSignalAt
       );
 
       if (
-        (projection.newEpisodeSignalAt ?? 0) >= match.signalAt &&
+        (projection.newEpisodeSignalAt ?? 0) >= projectionSignalAt &&
         (projection.homeSortAt ?? 0) >= nextHomeSortAt
       ) {
         continue;
@@ -2464,7 +2508,7 @@ export const applyHomeScheduleSignals = internalMutation({
       await ctx.db.patch(projection._id, {
         newEpisodeSignalAt: Math.max(
           projection.newEpisodeSignalAt ?? 0,
-          match.signalAt
+          projectionSignalAt
         ),
         homeSortAt: nextHomeSortAt,
         updatedAt: now,
@@ -2538,7 +2582,14 @@ async function syncCachedHomeScheduleSignalsForUser(
   const today = getSafeClientTodayDate(args.todayDate, nowMs);
   const todayKey = formatDate(today);
   const maintenanceKey = `home-cached-schedule-signal:v1:${args.userId}`;
-  const syncCursor = getScheduleSignalSyncCursor(nowMs);
+  const syncState: { latestFeedProjectionUpdatedAt: number } =
+    await ctx.runQuery(internal.schedule.getHomeScheduleSignalSyncState, {
+      userId: args.userId,
+    });
+  const syncCursor = getScheduleSignalSyncCursor(
+    nowMs,
+    syncState.latestFeedProjectionUpdatedAt
+  );
   const existingCursor = await ctx.runQuery(internal.shows.getMaintenanceCursor, {
     key: maintenanceKey,
   });
@@ -2558,6 +2609,7 @@ async function syncCachedHomeScheduleSignalsForUser(
       endDate: formatDate(addUtcDays(today, HOME_SIGNAL_LOOKAHEAD_DAYS)),
       availableDate: todayKey,
       nowMs,
+      extendedPastSignalMode: "catch_up_only",
     }
   );
 
@@ -2572,9 +2624,18 @@ async function syncCachedHomeScheduleSignalsForUser(
     checked: signalEvaluation.checked,
   });
 
+  const finalSyncState: { latestFeedProjectionUpdatedAt: number } =
+    await ctx.runQuery(internal.schedule.getHomeScheduleSignalSyncState, {
+      userId: args.userId,
+    });
+  const finalSyncCursor = getScheduleSignalSyncCursor(
+    nowMs,
+    finalSyncState.latestFeedProjectionUpdatedAt
+  );
+
   await ctx.runMutation(internal.shows.setMaintenanceCursor, {
     key: maintenanceKey,
-    cursor: syncCursor,
+    cursor: finalSyncCursor,
   });
 
   const result: HomeScheduleSignalResult = {
