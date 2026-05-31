@@ -28,6 +28,7 @@ const scheduleProjectionFutureDays = 120;
 const watchlistFutureCountDays = 90;
 const maxProjectionRepairEpisodeDelta = 3;
 const absoluteScheduleEpisodeMin = 100;
+const sameSourceEpisodeAliasMinDelta = 10;
 
 const directFixtureDate = "2026-05-13T21:00:00.000Z";
 const bridgedFixtureDate = "2026-05-14T18:00:00.000Z";
@@ -1394,8 +1395,38 @@ function isCrossProviderSameDayDuplicate(next, current) {
   );
 }
 
+function isSameSourceSameDayEpisodeAlias(next, current) {
+  if (next.source_provider !== current.source_provider) {
+    return false;
+  }
+
+  if (
+    next.provider_show_id &&
+    current.provider_show_id &&
+    next.provider_show_id !== current.provider_show_id
+  ) {
+    return false;
+  }
+
+  const nextDateKey = eventDateDedupeKey(next);
+  if (!nextDateKey || nextDateKey !== eventDateDedupeKey(current)) {
+    return false;
+  }
+
+  if (next.season_number !== current.season_number) {
+    return false;
+  }
+
+  const episodeDelta = Math.abs(next.episode_number - current.episode_number);
+  if (episodeDelta < sameSourceEpisodeAliasMinDelta) {
+    return false;
+  }
+
+  return isGenericEpisodeName(next.name) || isGenericEpisodeName(current.name);
+}
+
 function preferEventCandidate(next, current, matchKind = "name") {
-  if (matchKind === "number") {
+  if (matchKind === "number" || matchKind === "alias") {
     const nameDelta =
       Number(!isGenericEpisodeName(next.name)) - Number(!isGenericEpisodeName(current.name));
     if (nameDelta !== 0) {
@@ -1435,7 +1466,12 @@ function dedupeProviderEventsForReleaseFact(rows, nowMs) {
     const existingIndex = deduped.findIndex((candidate) => {
       const sameNumber = eventNumberDedupeKey(candidate) === numberKey;
       const sameName = nameKey !== null && eventNameDedupeKey(candidate) === nameKey;
-      return sameNumber || sameName || isCrossProviderSameDayDuplicate(row, candidate);
+      return (
+        sameNumber ||
+        sameName ||
+        isCrossProviderSameDayDuplicate(row, candidate) ||
+        isSameSourceSameDayEpisodeAlias(row, candidate)
+      );
     });
     if (existingIndex === -1) {
       deduped.push(row);
@@ -1443,7 +1479,12 @@ function dedupeProviderEventsForReleaseFact(rows, nowMs) {
     }
 
     const existing = deduped[existingIndex];
-    const matchKind = eventNumberDedupeKey(existing) === numberKey ? "number" : "date";
+    const matchKind =
+      eventNumberDedupeKey(existing) === numberKey
+        ? "number"
+        : isSameSourceSameDayEpisodeAlias(row, existing)
+          ? "alias"
+          : "date";
     if (preferReleaseFactEventCandidate(row, existing, nowMs, matchKind)) {
       deduped[existingIndex] = row;
     }
@@ -1459,7 +1500,12 @@ function dedupeProviderEventsForSchedule(rows) {
     const existingIndex = deduped.findIndex((candidate) => {
       const sameNumber = eventNumberDedupeKey(candidate) === numberKey;
       const sameName = nameKey !== null && eventNameDedupeKey(candidate) === nameKey;
-      return sameNumber || sameName || isCrossProviderSameDayDuplicate(row, candidate);
+      return (
+        sameNumber ||
+        sameName ||
+        isCrossProviderSameDayDuplicate(row, candidate) ||
+        isSameSourceSameDayEpisodeAlias(row, candidate)
+      );
     });
     if (existingIndex === -1) {
       deduped.push(row);
@@ -1467,7 +1513,12 @@ function dedupeProviderEventsForSchedule(rows) {
     }
 
     const existing = deduped[existingIndex];
-    const matchKind = eventNumberDedupeKey(existing) === numberKey ? "number" : "date";
+    const matchKind =
+      eventNumberDedupeKey(existing) === numberKey
+        ? "number"
+        : isSameSourceSameDayEpisodeAlias(row, existing)
+          ? "alias"
+          : "date";
     if (preferEventCandidate(row, existing, matchKind)) {
       deduped[existingIndex] = row;
     }
@@ -1494,7 +1545,8 @@ function dedupeSingleShowEventsForSchedule(rows) {
       return (
         sameNumber ||
         sameName ||
-        isCrossProviderSameDayDuplicate(row, candidate)
+        isCrossProviderSameDayDuplicate(row, candidate) ||
+        isSameSourceSameDayEpisodeAlias(row, candidate)
       );
     });
 
@@ -1508,7 +1560,9 @@ function dedupeSingleShowEventsForSchedule(rows) {
       existing.season_number === row.season_number &&
       existing.episode_number === row.episode_number
         ? "number"
-        : "date";
+        : isSameSourceSameDayEpisodeAlias(row, existing)
+          ? "alias"
+          : "date";
     if (preferEventCandidate(row, existing, matchKind)) {
       deduped[existingIndex] = row;
     }
@@ -4630,6 +4684,36 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     "Provider conflict should surface released backlog without letting future-only rows inflate totals.",
     { hotOnesShapedConflictFact, futureOnlyTotalDriftFact }
   );
+  const sameSourceAliasDedupe = dedupeSingleShowEventsForSchedule([
+    {
+      source_provider: "tmdb",
+      provider_show_id: "tmdb:tv:245842",
+      air_timestamp: Date.UTC(2026, 5, 7),
+      air_date: "2026-06-07",
+      normalized_title: "wistoriawandandsword",
+      media_type: "tv",
+      season_number: 2,
+      episode_number: 9,
+      name: "The Page to Be Turned",
+    },
+    {
+      source_provider: "tmdb",
+      provider_show_id: "tmdb:tv:245842",
+      air_timestamp: Date.UTC(2026, 5, 7),
+      air_date: "2026-06-07",
+      normalized_title: "wistoriawandandsword",
+      media_type: "tv",
+      season_number: 2,
+      episode_number: 21,
+      name: "Episode 21",
+    },
+  ]);
+  assertValidation(
+    sameSourceAliasDedupe.length === 1 &&
+      sameSourceAliasDedupe[0]?.episode_number === 9,
+    "Same-source season-local and cumulative schedule aliases should collapse.",
+    sameSourceAliasDedupe
+  );
   assertValidation(
     fixtureUserProjection?.events.some((event) => event.showId === "show-direct"),
     "Schedule projection did not include the direct provider-ID fixture event.",
@@ -4671,7 +4755,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   );
 
   return {
-    checks: 18,
+    checks: 19,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,
