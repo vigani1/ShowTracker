@@ -16,6 +16,7 @@ Most frequently relevant:
 - [ADR-0019](ADR-0019-home-schedule-signal-recency.md): Home schedule signal recency.
 - [ADR-0020](ADR-0020-same-day-watched-schedule-duplicates.md): same-day watched duplicates.
 - [ADR-0021](ADR-0021-provider-cache-total-pruning.md): provider-verified cache total pruning.
+- [ADR-0022](ADR-0022-home-feed-pagination-stability.md): Home feed pagination stability.
 
 ## Navigation
 
@@ -52,6 +53,7 @@ Most frequently relevant:
 | [ADR-0019](ADR-0019-home-schedule-signal-recency.md) | Home schedule signals use recency rules to avoid stale attention rows. |
 | [ADR-0020](ADR-0020-same-day-watched-schedule-duplicates.md) | Same-day watched schedule duplicates collapse without hiding real unwatched content. |
 | [ADR-0021](ADR-0021-provider-cache-total-pruning.md) | Provider-verified totals can prune stale cache rows safely. |
+| [ADR-0022](ADR-0022-home-feed-pagination-stability.md) | Home holds resolved feed pages during pagination refetches so section expansion does not collapse. |
 
 ## Rule For New ADRs
 

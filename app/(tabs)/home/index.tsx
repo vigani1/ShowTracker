@@ -21,7 +21,10 @@ import { HomeModeSwitch } from "@/components/HomeModeSwitch";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
 import { useHorizontalSectionSwipe } from "@/hooks/use-horizontal-section-swipe";
-import { useStableDisplayPair } from "@/hooks/use-stable-display-value";
+import {
+  useStableDisplayPair,
+  useStableDisplayValue,
+} from "@/hooks/use-stable-display-value";
 import type { MediaType } from "@/lib/api/types";
 import { toHttpsImageUrl } from "@/lib/image-url";
 import { parseShowRouteId } from "@/lib/show-route";
@@ -1565,16 +1568,46 @@ export function HomeScreen() {
   const watchlistAirtimeMode =
     (homeSettings?.watchlistAirtimeMode as WatchlistAirtimeMode | undefined) ??
     "same_day";
+  const watchlistFeedContextKey = `watchlist:${mediaFilter}`;
+  const stableActiveFeed = useStableDisplayValue(
+    activeFeed as WatchlistItem[] | undefined,
+    {
+      contextKey: `${watchlistFeedContextKey}:active`,
+      isLoading: activeTab === "watchlist" && activeFeed === undefined,
+    }
+  );
+  const stableTodayScheduledWatchlistFeed = useStableDisplayValue(
+    todayScheduledWatchlistFeed as WatchlistItem[] | undefined,
+    {
+      contextKey: `${watchlistFeedContextKey}:today:${todayKey}`,
+      isLoading:
+        activeTab === "watchlist" && todayScheduledWatchlistFeed === undefined,
+    }
+  );
+  const stablePausedFeed = useStableDisplayValue(
+    pausedFeed as WatchlistItem[] | undefined,
+    {
+      contextKey: `${watchlistFeedContextKey}:paused`,
+      isLoading: activeTab === "watchlist" && pausedFeed === undefined,
+    }
+  );
+  const stableNotStartedFeed = useStableDisplayValue(
+    notStartedFeed as WatchlistItem[] | undefined,
+    {
+      contextKey: `${watchlistFeedContextKey}:not-started`,
+      isLoading: activeTab === "watchlist" && notStartedFeed === undefined,
+    }
+  );
 
   const activeFeedItems = useMemo(
     () => {
       const merged = new Map<string, WatchlistItem>();
 
-      for (const item of (activeFeed ?? []) as WatchlistItem[]) {
+      for (const item of (stableActiveFeed ?? []) as WatchlistItem[]) {
         merged.set(item.id, item);
       }
 
-      for (const item of (todayScheduledWatchlistFeed ?? []) as WatchlistItem[]) {
+      for (const item of (stableTodayScheduledWatchlistFeed ?? []) as WatchlistItem[]) {
         if (!merged.has(item.id)) {
           merged.set(item.id, item);
         }
@@ -1582,15 +1615,15 @@ export function HomeScreen() {
 
       return Array.from(merged.values());
     },
-    [activeFeed, todayScheduledWatchlistFeed]
+    [stableActiveFeed, stableTodayScheduledWatchlistFeed]
   );
   const pausedFeedItems = useMemo(
-    () => (pausedFeed ?? []) as WatchlistItem[],
-    [pausedFeed]
+    () => (stablePausedFeed ?? []) as WatchlistItem[],
+    [stablePausedFeed]
   );
   const notStartedFeedItems = useMemo(
-    () => (notStartedFeed ?? []) as WatchlistItem[],
-    [notStartedFeed]
+    () => (stableNotStartedFeed ?? []) as WatchlistItem[],
+    [stableNotStartedFeed]
   );
   const watchlistItems = useMemo(
     () => [...activeFeedItems, ...pausedFeedItems, ...notStartedFeedItems],
@@ -1796,7 +1829,9 @@ export function HomeScreen() {
 
   const isWatchlistLoading =
     activeTab === "watchlist" &&
-    (activeFeed === undefined || pausedFeed === undefined || notStartedFeed === undefined);
+    (stableActiveFeed === undefined ||
+      stablePausedFeed === undefined ||
+      stableNotStartedFeed === undefined);
   const hasResolvedFutureCountsForCurrentKey =
     resolvedFutureCountsQueryKey === watchlistFutureCountsQueryKey;
   const isWatchlistFutureCountsLoading =
@@ -1829,7 +1864,11 @@ export function HomeScreen() {
   const isUpcomingContentLoading =
     activeTab === "upcoming" && upcoming === undefined;
   const watchlistSettleContextKey = useMemo(() => {
-    if (activeFeed === undefined || pausedFeed === undefined || notStartedFeed === undefined) {
+    if (
+      stableActiveFeed === undefined ||
+      stablePausedFeed === undefined ||
+      stableNotStartedFeed === undefined
+    ) {
       return "";
     }
 
@@ -1848,7 +1887,13 @@ export function HomeScreen() {
       .join("|");
 
     return `${watchlistFutureCountsQueryKey}:${itemSignature}`;
-  }, [activeFeed, notStartedFeed, pausedFeed, watchlistFutureCountsQueryKey, watchlistItems]);
+  }, [
+    stableActiveFeed,
+    stableNotStartedFeed,
+    stablePausedFeed,
+    watchlistFutureCountsQueryKey,
+    watchlistItems,
+  ]);
   const [settledWatchlistSnapshot, setSettledWatchlistSnapshot] = useState<{
     key: string;
     items: WatchlistItem[];
@@ -1967,7 +2012,11 @@ export function HomeScreen() {
   }, [notStartedSectionWatchlist.length, secondarySectionPageSize]);
 
   useEffect(() => {
-    if (activeFeed === undefined || pausedFeed === undefined || notStartedFeed === undefined) {
+    if (
+      stableActiveFeed === undefined ||
+      stablePausedFeed === undefined ||
+      stableNotStartedFeed === undefined
+    ) {
       setSettledWatchlistSnapshot({
         key: "",
         items: [],
@@ -1982,11 +2031,11 @@ export function HomeScreen() {
       });
     }
   }, [
-    activeFeed,
     filteredWatchlist,
     isWatchlistFilterSettling,
-    notStartedFeed,
-    pausedFeed,
+    stableActiveFeed,
+    stableNotStartedFeed,
+    stablePausedFeed,
     watchlistSettleContextKey,
   ]);
 
