@@ -19,7 +19,7 @@ const defaultDevBeforePath = path.join(defaultWorkDir, "dev-before-snapshot.json
 const defaultDevAfterPath = path.join(defaultWorkDir, "dev-after-snapshot.json");
 const defaultDevWorkflowReportPath = path.join(defaultWorkDir, "dev-workflow-report.json");
 const dashboardHtmlPath = path.join(__dirname, "schedule-confidence-dashboard.html");
-const scheduleCacheMaintenanceVersion = 2;
+const scheduleCacheMaintenanceVersion = 3;
 const syntheticPrefix = "SC Synthetic";
 const fixtureNowMs = Date.UTC(2026, 4, 14, 12, 0, 0);
 const scheduleLookaheadMs = 1000 * 60 * 60 * 24 * 120;
@@ -2435,6 +2435,231 @@ async function fetchAniListSchedule(item) {
   };
 }
 
+async function fetchAniListMediaBatch(ids) {
+  const uniqueIds = [...new Set(ids.map((id) => positiveIntegerOrNull(id)).filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
+
+  const url = process.env.EXPO_PUBLIC_ANILIST_URL ?? "https://graphql.anilist.co";
+  const mediaById = new Map();
+  for (let index = 0; index < uniqueIds.length; index += 50) {
+    const batch = uniqueIds.slice(index, index + 50);
+    const data = await fetchJson(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        query: `
+          query ($ids: [Int]) {
+            Page(page: 1, perPage: 50) {
+              media(id_in: $ids, type: ANIME) {
+                id
+                idMal
+                title { romaji english }
+                episodes
+                status
+                endDate { year month day }
+                nextAiringEpisode { airingAt episode }
+              }
+            }
+          }
+        `,
+        variables: { ids: batch },
+      }),
+    });
+
+    for (const media of data?.data?.Page?.media ?? []) {
+      if (typeof media?.id === "number") {
+        mediaById.set(media.id, media);
+      }
+    }
+  }
+  return mediaById;
+}
+
+function dateKeyFromAniListDate(date) {
+  const year = positiveIntegerOrNull(date?.year);
+  const month = positiveIntegerOrNull(date?.month);
+  const day = positiveIntegerOrNull(date?.day);
+  if (
+    typeof year !== "number" ||
+    typeof month !== "number" ||
+    typeof day !== "number"
+  ) {
+    return null;
+  }
+  return [
+    String(year).padStart(4, "0"),
+    String(month).padStart(2, "0"),
+    String(day).padStart(2, "0"),
+  ].join("-");
+}
+
+function isFinishedAniListStatus(status) {
+  const normalized = String(status ?? "").toLowerCase();
+  return normalized === "finished" || normalized === "cancelled" || normalized === "canceled";
+}
+
+function parseAniListProviderShowId(providerShowId) {
+  const match = String(providerShowId ?? "").match(/^anilist:(\d+)$/);
+  return match ? positiveIntegerOrNull(match[1]) : null;
+}
+
+function buildScheduleCacheProviderMaintenanceDeltasFromMedia(
+  scheduleCacheRows,
+  mediaByAniListId,
+  options = {}
+) {
+  const generatedAt = options.generatedAt ?? Date.now();
+  const grouped = new Map();
+
+  for (const row of scheduleCacheRows) {
+    if (row.mediaType !== "anime") {
+      continue;
+    }
+    let parsed = [];
+    try {
+      parsed = JSON.parse(row.episodes);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) {
+      continue;
+    }
+
+    for (const entry of parsed) {
+      const anilistId = parseAniListProviderShowId(entry?.showId);
+      const episode = entry?.episode;
+      if (
+        typeof anilistId !== "number" ||
+        typeof entry?.normalizedTitle !== "string" ||
+        typeof episode?.seasonNumber !== "number" ||
+        typeof episode?.episodeNumber !== "number"
+      ) {
+        continue;
+      }
+
+      const entries = grouped.get(anilistId) ?? [];
+      entries.push({
+        date: row.date,
+        normalizedTitle: entry.normalizedTitle,
+        episode: {
+          seasonNumber: episode.seasonNumber,
+          episodeNumber: episode.episodeNumber,
+          ...(typeof episode.name === "string" ? { name: episode.name } : {}),
+          ...(typeof episode.airDate === "string" ? { airDate: episode.airDate } : {}),
+        },
+      });
+      grouped.set(anilistId, entries);
+    }
+  }
+
+  const deltas = [];
+  for (const [anilistId, entries] of grouped) {
+    const media = mediaByAniListId.get(anilistId);
+    const totalEpisodes = positiveIntegerOrNull(media?.episodes);
+    if (
+      typeof totalEpisodes !== "number" ||
+      !isFinishedAniListStatus(media?.status)
+    ) {
+      continue;
+    }
+
+    const invalidEntries = entries.filter(
+      (entry) => entry.episode.episodeNumber > totalEpisodes
+    );
+    if (invalidEntries.length === 0) {
+      continue;
+    }
+
+    const latestCachedEntry = entries
+      .filter((entry) => entry.episode.episodeNumber <= totalEpisodes)
+      .sort((a, b) => {
+        const episodeDelta = b.episode.episodeNumber - a.episode.episodeNumber;
+        if (episodeDelta !== 0) {
+          return episodeDelta;
+        }
+        return String(b.episode.airDate ?? b.date).localeCompare(
+          String(a.episode.airDate ?? a.date)
+        );
+      })[0];
+    const endDate = dateKeyFromAniListDate(media?.endDate);
+    const latestReleased = latestCachedEntry
+      ? latestCachedEntry.episode
+      : endDate
+        ? {
+            seasonNumber: 1,
+            episodeNumber: totalEpisodes,
+            name: `Episode ${totalEpisodes}`,
+            airDate: `${endDate}T00:00:00.000Z`,
+          }
+        : undefined;
+
+    if (!latestReleased) {
+      continue;
+    }
+
+    const title =
+      media?.title?.english ??
+      media?.title?.romaji ??
+      entries.find((entry) => entry.normalizedTitle)?.normalizedTitle ??
+      `AniList ${anilistId}`;
+
+    deltas.push({
+      canonicalKey: `schedule-cache:anilist:${anilistId}`,
+      title,
+      mediaType: "anime",
+      providerIds: {
+        anilistId,
+        ...(typeof media?.idMal === "number" ? { malId: media.idMal } : {}),
+      },
+      matchConfidence: "direct_id",
+      releaseState: "caught_up",
+      releasedEpisodes: totalEpisodes,
+      totalEpisodes,
+      latestReleased,
+      upcomingEpisodes: [],
+      scheduleCacheMaintenance: true,
+      scheduleCacheMaintenanceVersion,
+      sourceProvider: "anilist",
+      reconciledAt: generatedAt,
+    });
+  }
+
+  return deltas;
+}
+
+async function buildScheduleCacheProviderMaintenanceDeltas(scheduleCacheRows, options = {}) {
+  const anilistIds = [];
+  for (const row of scheduleCacheRows) {
+    if (row.mediaType !== "anime") {
+      continue;
+    }
+    let parsed = [];
+    try {
+      parsed = JSON.parse(row.episodes);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) {
+      continue;
+    }
+    for (const entry of parsed) {
+      const anilistId = parseAniListProviderShowId(entry?.showId);
+      if (typeof anilistId === "number") {
+        anilistIds.push(anilistId);
+      }
+    }
+  }
+
+  const mediaByAniListId = await fetchAniListMediaBatch(anilistIds);
+  return buildScheduleCacheProviderMaintenanceDeltasFromMedia(
+    scheduleCacheRows,
+    mediaByAniListId,
+    options
+  );
+}
+
 async function hydrateProviderEventsFromRealApis(db, item, insertedAt, nowMs = Date.now()) {
   if (item.title.startsWith(syntheticPrefix)) {
     return { errors: [], metadata: null };
@@ -3624,24 +3849,68 @@ async function applyConvex(deltaPath, options) {
   const client = new ConvexHttpClient(convexUrl);
   const applyReleaseDeltas = makeFunctionReference("scheduleConfidence:applyReleaseDeltas");
   const batchSize = options.batchSize ?? 25;
-  const results = [];
-  for (let index = 0; index < payload.deltas.length; index += batchSize) {
-    const deltas = payload.deltas.slice(index, index + batchSize);
-    const result = await client.mutation(applyReleaseDeltas, {
-      importToken,
-      runId: options.runId ?? `local-${payload.generatedAt}`,
-      generatedAt: payload.generatedAt,
-      deltas,
-    });
-    results.push(result);
-    if (options.db) {
+  const runId = options.runId ?? `local-${payload.generatedAt}`;
+  const applyDeltas = async (deltas, { generatedAt, markApplied } = {}) => {
+    const batchResults = [];
+    for (let index = 0; index < deltas.length; index += batchSize) {
+      const batch = deltas.slice(index, index + batchSize);
+      const result = await client.mutation(applyReleaseDeltas, {
+        importToken,
+        runId,
+        generatedAt: generatedAt ?? payload.generatedAt,
+        deltas: batch,
+      });
+      batchResults.push(result);
+      if (!markApplied || !options.db) {
+        continue;
+      }
       const appliedAt = Date.now();
-      const markApplied = options.db.prepare(
+      const markAppliedStatement = options.db.prepare(
         "UPDATE convex_deltas SET applied_at = ? WHERE canonical_key = ?"
       );
-      for (const delta of deltas) {
-        markApplied.run(appliedAt, delta.canonicalKey);
+      for (const delta of batch) {
+        markAppliedStatement.run(appliedAt, delta.canonicalKey);
       }
+    }
+    return batchResults;
+  };
+
+  const results = await applyDeltas(payload.deltas, { markApplied: true });
+  let scheduleCacheMaintenance = {
+    exportedRows: 0,
+    deltas: 0,
+    batches: 0,
+  };
+  if (options.db && options.applyScheduleCacheMaintenance !== false) {
+    try {
+      const clientBundle = { client, makeFunctionReference, importToken };
+      const windows = getScheduleProjectionWindows({
+        ...options,
+        generatedAt: Date.now(),
+      });
+      const scheduleCacheRows = await exportScheduleCacheWindowForProjection(
+        clientBundle,
+        windows
+      );
+      const scheduleCacheDeltas =
+        await buildScheduleCacheProviderMaintenanceDeltas(scheduleCacheRows, {
+          generatedAt: Date.now(),
+        });
+      const scheduleCacheResults = await applyDeltas(scheduleCacheDeltas, {
+        generatedAt: Date.now(),
+        markApplied: false,
+      });
+      results.push(...scheduleCacheResults);
+      scheduleCacheMaintenance = {
+        exportedRows: scheduleCacheRows.length,
+        deltas: scheduleCacheDeltas.length,
+        batches: scheduleCacheResults.length,
+      };
+    } catch (error) {
+      scheduleCacheMaintenance = {
+        ...scheduleCacheMaintenance,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
   const totals = results.reduce(
@@ -3670,6 +3939,7 @@ async function applyConvex(deltaPath, options) {
     {
       exportedItems: payload.deltas.length,
       changedDeltas: payload.metrics?.changedDeltas ?? payload.deltas.length,
+      scheduleCacheMaintenanceDeltas: scheduleCacheMaintenance.deltas,
       payloadBytes:
         payload.metrics?.payloadBytes ??
         Buffer.byteLength(JSON.stringify(payload.deltas), "utf8"),
@@ -3682,12 +3952,13 @@ async function applyConvex(deltaPath, options) {
           client,
           makeFunctionReference,
           importToken,
-          runId: options.runId ?? `local-${payload.generatedAt}`,
+          runId,
           generatedAt: Date.now(),
         });
   return {
     batches: results.length,
     totals,
+    scheduleCacheMaintenance,
     scheduleProjections,
     results,
   };
@@ -4343,6 +4614,60 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     legacyProjectionPayload
   );
   const fixtureUserProjection = projectionPayload.users.find((user) => user.userId === "fixture-user");
+  const staleAniListCacheDeltas =
+    buildScheduleCacheProviderMaintenanceDeltasFromMedia(
+      [
+        {
+          date: "2026-05-27",
+          mediaType: "anime",
+          episodes: JSON.stringify([
+            {
+              showId: "anilist:173172",
+              normalizedTitle: "providercachealiasseason2",
+              episode: {
+                seasonNumber: 1,
+                episodeNumber: 11,
+                name: "Episode 11",
+                airDate: "2026-05-27T14:00:00.000Z",
+              },
+            },
+          ]),
+        },
+        {
+          date: "2026-06-03",
+          mediaType: "anime",
+          episodes: JSON.stringify([
+            {
+              showId: "anilist:173172",
+              normalizedTitle: "providercachealiasseason2",
+              episode: {
+                seasonNumber: 1,
+                episodeNumber: 12,
+                name: "Episode 12",
+                airDate: "2026-06-03T14:00:00.000Z",
+              },
+            },
+          ]),
+        },
+      ],
+      new Map([
+        [
+          173172,
+          {
+            id: 173172,
+            idMal: 57779,
+            title: {
+              english: "Provider Cache Alias Season 2",
+              romaji: "Provider Cache Alias Season 2",
+            },
+            episodes: 11,
+            status: "FINISHED",
+            endDate: { year: 2026, month: 5, day: 27 },
+          },
+        ],
+      ]),
+      { generatedAt: fixtureNowMs }
+    );
 
   assertValidation(
     facts.get("show-direct")?.match_confidence === "direct_id",
@@ -4753,9 +5078,18 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     "Schedule projection parity check diverged from legacy provider-event matching.",
     projectionParity
   );
+  assertValidation(
+    staleAniListCacheDeltas.length === 1 &&
+      staleAniListCacheDeltas[0].canonicalKey === "schedule-cache:anilist:173172" &&
+      staleAniListCacheDeltas[0].totalEpisodes === 11 &&
+      staleAniListCacheDeltas[0].latestReleased?.episodeNumber === 11 &&
+      staleAniListCacheDeltas[0].scheduleCacheMaintenance === true,
+    "Finished AniList provider cache rows beyond provider total should emit cache-only maintenance.",
+    { staleAniListCacheDeltas }
+  );
 
   return {
-    checks: 19,
+    checks: 20,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,
@@ -4779,6 +5113,7 @@ Commands:
   dashboard                    Start local internal audit dashboard.
   apply-convex                 Apply exported compact deltas to Convex.
                                Also applies user schedule projections unless --skip-schedule-projections is set.
+                               Also prunes provider-invalid schedule cache rows unless --skip-schedule-cache-maintenance is set.
   apply-schedule-projections   Apply only user schedule projections to Convex from the local SQLite state.
   compare-schedule-projections Compare generated projection rows with legacy provider-event matching.
   diagnose-projections         Explain whether a user's date range uses projections or falls back.
@@ -4924,6 +5259,7 @@ async function main() {
         batchSize: Number(getFlag(flags, "batch-size", 25)),
         runId: getFlag(flags, "run-id", undefined),
         applyScheduleProjections: !flags.has("skip-schedule-projections"),
+        applyScheduleCacheMaintenance: !flags.has("skip-schedule-cache-maintenance"),
         db,
       }), null, 2));
       return;

@@ -1663,9 +1663,19 @@ export const applyReleaseDeltas = mutation({
         continue;
       }
 
+      let scheduleCacheAlreadyMaintained = false;
+      if (delta.scheduleCacheMaintenance === true) {
+        const scheduleCacheResult = await upsertScheduleCacheEntry(ctx, delta);
+        result.scheduleCacheRowsUpdated += scheduleCacheResult.updated;
+        result.scheduleCacheRowsSkipped += scheduleCacheResult.skippedUnchanged;
+        scheduleCacheAlreadyMaintained = true;
+      }
+
       const show = await findShowByProviderIds(ctx, delta);
       if (!show) {
-        result.missingShows += 1;
+        if (!scheduleCacheAlreadyMaintained) {
+          result.missingShows += 1;
+        }
         continue;
       }
       result.matchedShows += 1;
@@ -1705,9 +1715,11 @@ export const applyReleaseDeltas = mutation({
       }
       const patchedShow = { ...show, ...showPatch };
 
-      const scheduleCacheResult = await upsertScheduleCacheEntry(ctx, delta);
-      result.scheduleCacheRowsUpdated += scheduleCacheResult.updated;
-      result.scheduleCacheRowsSkipped += scheduleCacheResult.skippedUnchanged;
+      if (!scheduleCacheAlreadyMaintained) {
+        const scheduleCacheResult = await upsertScheduleCacheEntry(ctx, delta);
+        result.scheduleCacheRowsUpdated += scheduleCacheResult.updated;
+        result.scheduleCacheRowsSkipped += scheduleCacheResult.skippedUnchanged;
+      }
 
       const signalAt = delta.latestReleased
         ? getEpisodeSignalAt(delta.latestReleased)
