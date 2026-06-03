@@ -34,7 +34,7 @@ reviews:
     - label: "ui"
       instructions: "Changes to UI components in components/"
     - label: "docs"
-      instructions: "Changes to documentation files (docs/, AGENTS.md, CLAUDE.md, PROGRESS.md)"
+      instructions: "Changes to documentation files (docs/, AGENTS.md, README.md)"
 
   auto_review:
     enabled: true

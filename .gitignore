@@ -24,12 +24,13 @@ Thumbs.db
 
 # IDE
 .vscode/
+.codex/
 .idea/
 *.swp
 *.swo
 
 # Local agent settings (auto-generated, user-specific)
-.claude/settings.local.json
+.claude/
 
 # Build outputs
 *.tsbuildinfo

@@ -1,193 +1,131 @@
 # ShowTracker Architecture
 
-## High-Level Overview
+## System Shape
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Expo App (RN + Web)                   │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
-│  │ Discovery │  │  Search  │  │ Watchlist │  │Schedule│  │
-│  │  Screen   │  │  Screen  │  │  Screen  │  │ Screen │  │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └───┬────┘  │
-│       │              │             │             │       │
-│  ┌────▼──────────────▼─────────────▼─────────────▼────┐  │
-│  │              lib/api/ (API Layer)                   │  │
-│  │  tmdb.ts  anilist.ts  tvmaze.ts  jikan.ts         │  │
-│  │  normalize.ts  types.ts  cache.ts                  │  │
-│  └────┬──────────────┬─────────────┬─────────────┬────┘  │
-│       │              │             │             │       │
-│  ┌────▼──────────────▼─────────────▼─────────────▼────┐  │
-│  │              Convex Client (useQuery/useMutation)   │  │
-│  └────────────────────────┬───────────────────────────┘  │
-└───────────────────────────┼──────────────────────────────┘
-                            │
-                    ┌───────▼───────┐
-                    │  Convex Cloud  │
-                    │  ┌───────────┐ │
-                    │  │  queries  │ │
-                    │  │ mutations │ │
-                    │  │  actions  │ │
-                    │  └─────┬─────┘ │
-                    │  ┌─────▼─────┐ │
-                    │  │   Tables  │ │
-                    │  │  shows    │ │
-                    │  │ userShows │ │
-                    │  │ watched   │ │
-                    │  │  Episodes │ │
-                    │  │ custom    │ │
-                    │  │  Lists    │ │
-                    │  │ schedule  │ │
-                    │  │  Cache    │ │
-                    │  └───────────┘ │
-                    └────────────────┘
+```text
+Expo app (native + web)
+  -> lib/api provider clients for TMDB, TVMaze, AniList, Jikan
+  -> Convex client for auth, user state, projections, repairs
+  -> Convex database and functions
+  -> schedule-confidence SQLite reconciler for heavyweight release intelligence
+  -> compact release/projection deltas back to Convex
 ```
 
-## Data Flow Patterns
+Convex remains the source of truth for user-owned synced state. Provider APIs are sources of catalog, identity, schedule, and release facts. The schedule-confidence reconciler handles heavyweight provider/release reconciliation outside reactive app reads, then writes compact facts back to Convex.
 
-### Search / Discovery (Read-Only, No Auth Required for API)
-```
-User types query
-  → Debounce (300ms)
-  → lib/api/tmdb.search() + lib/api/anilist.search() (parallel)
-  → normalize.ts transforms to NormalizedShow[]
-  → In-memory cache stores result (15min TTL)
-  → Component renders results
-```
+## Frontend
 
-### Add Show to Watchlist
-```
-User taps "Add to Watchlist"
-  → Convex mutation: upsertShow (cache show metadata in shows table)
-  → Convex mutation: addUserShow (create userShows entry, status="watching")
-  → Convex reactive query updates UI instantly
-```
+The app uses Expo Router 6 with authenticated shell routes and direct-linkable detail/list routes.
 
-### Mark Episode Watched
-```
-User toggles episode / season / full show watched state
-  → Convex mutations: toggleEpisodeWatched, markSeasonWatched, unmarkSeasonWatched
-  → Inserts/removes rows in watchedEpisodes table
-  → Updates userShows.lastWatchedAt
-  → Reactive queries update: watchlist badge count, stats, schedule highlighting
-```
+Important routes:
 
-### Schedule Sync
-```
-Convex scheduled action (runs every 6 hours):
-  → Fetch TVMaze schedule for today ± 7 days
-  → Fetch AniList airing schedule for same range
-  → Normalize and store in scheduleCache table
+- `app/(auth)/login.tsx` and `app/(auth)/register.tsx`.
+- `app/(tabs)/home/index.tsx` for Home watchlist and upcoming/schedule surfaces.
+- `app/(tabs)/discover/index.tsx`, `search.tsx`, `recommendations.tsx`, and `library/index.tsx`.
+- `app/(tabs)/profile.tsx` and `app/profile/settings.tsx`.
+- `app/show/[id].tsx` for direct and in-app show detail.
+- `app/list/[id].tsx` and `app/list/create.tsx`.
+- `app/import.tsx` for import flows.
 
-User opens Schedule screen:
-  → Convex query: getSchedule(userId, dateRange)
-  → Cross-reference scheduleCache with user's tracked shows (userShows)
-  → Return only episodes for shows user is tracking
-  → Client renders grouped by date
-```
+Styling is NativeWind. App/component images should use React Native `Image`.
 
-### Show Detail (Cache-First)
-```
-User opens show detail:
-  → Convex query: getShow(showId)
-  → If show.lastUpdated > 24h ago:
-    → Convex action: fetchAndUpdateShow
-    → Calls TMDB/AniList API for fresh data
-    → Updates shows table
-    → Reactive query returns updated data
-  → Else: return cached data immediately
-```
+## Provider API Layer
 
-## Auth Flow
+Provider clients live in `lib/api/` and return normalized types from `lib/api/types.ts`.
 
-```
-App Launch
-  → Root _layout.tsx checks Convex auth state
-  → If not authenticated → redirect to (auth)/login
-  → If authenticated → render (tabs) layout
+- `tmdb.ts`: TV/movie discovery, detail, season/episode data, and external IDs.
+- `tvmaze.ts`: TV search, detail, episode lists, country schedule, and web schedule.
+- `anilist.ts`: anime search, trends, airing facts, and relation graph.
+- `jikan.ts`: MAL/Jikan fallback and anime episode enrichment.
+- `normalize.ts`: provider response normalization.
+- `cache.ts`: in-memory API response TTL cache.
 
-Login/Register
-  → Convex Auth handles OAuth / email+password
-  → On success: auth token stored, user redirected to (tabs)
-  → All Convex queries/mutations validate auth via ctx.auth.getUserIdentity()
+Screens should not consume raw provider responses. Normalize first, then persist through Convex where synced user state is involved.
+
+## Convex Backend
+
+Convex functions live in one file per domain:
+
+- `convex/shows.ts`: show cache, tracking, Home feeds, Library, anime relations, import/reset, watch actions, repair/backfill tools.
+- `convex/schedule.ts`: schedule cache, Home schedule signals, projected schedule reads, future count reads.
+- `convex/scheduleConfidence.ts`: token-protected import/export/apply boundary for the SQLite reconciler.
+- `convex/lists.ts`: custom lists.
+- `convex/stats.ts`: profile, stats, favorites, and watch history.
+- `convex/auth.ts`, `auth.config.ts`, `http.ts`, `crons.ts`: auth, HTTP routes, scheduled jobs.
+
+Key tables:
+
+- `shows`: cached normalized provider metadata and provider IDs.
+- `userShows`: a user's relationship to a show/movie and status/progress state.
+- `watchedEpisodes`: per-episode watch history.
+- `customLists`, `userFavorites`, `userProfiles`, `userSocial`, `userStats`.
+- `feedProjections`: compact per-user show rows used by Home, Discover tracked-state checks, Library, and repairs.
+- `scheduleCache`: global date/media schedule buckets.
+- `userScheduleEvents`, `watchlistFutureCountProjections`, `userScheduleProjectionWindows`: compact user-specific schedule projections.
+- `rateLimits`, `maintenanceState`: operational state.
+
+## Core Flows
+
+### Discovery And Search
+
+```text
+User searches or opens a feed
+  -> provider clients fetch TMDB/AniList/TVMaze/Jikan as needed
+  -> normalize to shared types
+  -> tracked-state badges read compact Convex projection state
+  -> UI renders provider results without storing user data outside Convex
 ```
 
-## Navigation Shell (Current UI)
+### Add Or Track A Title
 
-- Theme is currently dark-only (ThemeProvider forces `dark` mode).
-- Desktop web (`>=1024px`) uses a collapsible left sidebar (expanded/collapsed rail).
-- Mobile uses a bottom tab bar with 5 visible tabs: Home, Discover, Search, Watchlist, Profile.
-- `Schedule` is still routed and available from desktop nav, but hidden from mobile tabs for now.
-- `Extra` route is retained as hidden placeholder during navigation cleanup.
-- `/show/[id]` is an Overlay Detail Route when opened from inside the app: it presents over the current Shell Page so source scroll/filter state stays mounted, while direct/shared visits still render as a normal full page.
-
-## Caching Strategy (3 Layers)
-
-| Layer | Storage | TTL | What's Cached |
-|-------|---------|-----|---------------|
-| **Convex DB** | Cloud database | 24 hours | Show metadata, schedule data |
-| **In-Memory** | JavaScript Map | 15 minutes | API search results, trending lists |
-| **MMKV** | Device storage | Until refresh | Watchlist, recently viewed shows |
-
-### Cache Invalidation
-- Convex DB: `lastUpdated` timestamp checked on read, refresh if stale
-- In-Memory: TTL-based expiry, cleared on app restart
-- MMKV: Overwritten when fresh data arrives, serves as offline fallback
-
-## Convex Schema Overview
-
-### Table Relationships
-```
-users (managed by Convex Auth)
-  │
-  ├── userShows (userId → showId) — user's relationship to a show
-  │     └── shows — cached show metadata from external APIs
-  │
-  ├── watchedEpisodes (userId → showId, season, episode) — individual episode tracking
-  │
-  └── customLists (userId, showIds[]) — user-created lists of shows
-
-scheduleCache — cached schedule data by date, independent of users
+```text
+User tracks a title
+  -> Convex upserts normalized show metadata
+  -> Convex creates or updates userShows
+  -> feedProjections refresh for cheap Home/Library reads
+  -> reactive queries update the UI
 ```
 
-### Key Indexes
-- `userShows.by_user_status` — fast watchlist queries filtered by status
-- `userShows.by_user_show` — check if user tracks a specific show
-- `watchedEpisodes.by_user_show` — get watched episodes for a show
-- `watchedEpisodes.by_watchedAt` — stats queries sorted by time
-- `shows.by_tmdbId` / `by_anilistId` — deduplicate when caching API data
-- `scheduleCache.by_date_type` — fetch schedule for a date+type combo
+### Watch Progress
 
-## Expo Router Layout Hierarchy
-
-```
-app/
-  _layout.tsx              # Root: Convex/Auth providers + dark-only ThemeProvider
-  │
-  ├── (auth)/
-  │   _layout.tsx          # Auth layout (no tab bar)
-  │   login.tsx
-  │   register.tsx
-  │
-  ├── (tabs)/
-  │   _layout.tsx          # Desktop sidebar + mobile tab bar
-  │   index.tsx            # Home dashboard
-  │   discover.tsx         # Discovery
-  │   search.tsx           # Search
-  │   watchlist.tsx        # Watchlist
-  │   schedule.tsx         # Schedule (hidden from mobile tab bar)
-  │   profile.tsx          # Profile + account settings
-  │   Extra.tsx            # Hidden placeholder route
-  │
-  ├── show/
-  │   [id].tsx             # Show detail; Overlay Detail Route when opened in-app
-  │
-  └── list/
-      [id].tsx             # Custom list detail
-      create.tsx           # Create new list
+```text
+User marks episode/season/show/movie watched or unwatched
+  -> Convex mutation updates watchedEpisodes and userShows
+  -> stats/projection repair paths refresh focused derived state
+  -> Home, Library, details, and Profile react to compact rows
 ```
 
-### Navigation Guards
-- Root layout checks auth state
-- Unauthenticated users see only (auth) screens
-- All (tabs) and detail screens require authentication
-- Deep links work via Expo Router's URL-based routing
+### Home And Schedule
+
+```text
+Home/Schedule query
+  -> reads feedProjections and userScheduleEvents/count projections when fresh
+  -> falls back only through guarded legacy schedule-cache paths
+  -> preserves provider-ID-first matching and conservative title fallback
+```
+
+### Release Reconciliation
+
+```text
+scripts/schedule-confidence.mjs
+  -> imports tracked Convex library and schedule cache
+  -> reconciles provider links and release facts in SQLite
+  -> emits audit issues and compact deltas
+  -> convex/scheduleConfidence.ts applies release and projection deltas
+```
+
+The reconciler should make missing provider links, title-only matches, conflicting provider IDs, and stale release facts inspectable instead of silently absent.
+
+## Routing And Identity
+
+Route IDs are provider-qualified, for example `tmdb:tv:123`, `tmdb:movie:456`, `anilist:anime:789`, `jikan:anime:321`, or `tvmaze:tv:654`. Do not compare bare numeric IDs across providers.
+
+Provider matching rules live in ADRs, especially ADR-0002 and ADR-0017 through ADR-0021. Title fallback must remain narrow and auditable.
+
+## Architecture Guardrails
+
+- User-owned synced data stays in Convex.
+- Provider API calls stay in `lib/api/*` or Convex actions.
+- Broad aggregate repair/backfill must not run from normal app navigation.
+- Watchlist/schedule/release/provider/projection changes need ADR coverage.
+- Optimize Convex I/O by materializing compact projections, not by hiding correct release facts.

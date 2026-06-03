@@ -1,0 +1,69 @@
+# Decision Map
+
+ADRs are the durable memory for architectural and behavior decisions. This map groups them so agents can find the relevant history quickly.
+
+For Home, Watchlist, Schedule, release availability, provider matching, duplicate collapse, route IDs, schedule cache, and user projections, ADRs are the long-term memory that prevents repeating old debugging loops. Do not delete, summarize away, or bypass them just because the implementation is now easier to inspect.
+
+## Start Here For Risky Work
+
+For Home, Watchlist, Schedule, release availability, provider matching, duplicate collapse, route IDs, schedule cache, user projections, or the SQLite reconciliation boundary, read the most recent relevant ADRs before editing code and add a new ADR for behavior changes.
+
+Most frequently relevant:
+
+- [ADR-0010](ADR-0010-user-schedule-projections.md): user-specific schedule projections.
+- [ADR-0017](ADR-0017-auto-paused-release-availability.md): auto-paused release availability.
+- [ADR-0018](ADR-0018-provider-schedule-episode-numbering.md): provider episode numbering.
+- [ADR-0019](ADR-0019-home-schedule-signal-recency.md): Home schedule signal recency.
+- [ADR-0020](ADR-0020-same-day-watched-schedule-duplicates.md): same-day watched duplicates.
+- [ADR-0021](ADR-0021-provider-cache-total-pruning.md): provider-verified cache total pruning.
+
+## Navigation
+
+| ADR | Decision |
+| --- | --- |
+| [ADR-0001](ADR-0001-overlay-detail-routes.md) | Show details use overlay detail routes for in-app navigation while preserving direct URL support. |
+
+## Convex Cost And Projection Shape
+
+| ADR | Decision |
+| --- | --- |
+| [ADR-0003](ADR-0003-tracked-metadata-refresh-cost-gate.md) | Tracked metadata refresh skips broad user-library aggregate repair while preserving show-level projection refresh. |
+| [ADR-0004](ADR-0004-tracked-ids-projection-read.md) | Discover and Recommendations read tracked identity state from feed projections instead of N+1 show hydration. |
+| [ADR-0010](ADR-0010-user-schedule-projections.md) | Schedule reads use compact user-specific projections with guarded fallback behavior. |
+| [ADR-0011](ADR-0011-schedule-projection-fallback-diagnostics.md) | Projection fallback diagnostics make missing/stale projection coverage visible. |
+| [ADR-0013](ADR-0013-server-owned-watchable-count-repair.md) | Watchable count repair remains server-owned and bounded. |
+| [ADR-0014](ADR-0014-narrow-projection-repair-trigger.md) | Projection repair triggers stay narrow instead of broad reactive rebuilds. |
+
+## Schedule, Release, And Provider Matching
+
+| ADR | Decision |
+| --- | --- |
+| [ADR-0002](ADR-0002-watchlist-schedule-cache-bridge.md) | Home can use same-day schedule-cache facts as watchlist attention while provider matching stays conservative. |
+| [ADR-0005](ADR-0005-server-owned-schedule-refresh.md) | Server-owned schedule refresh owns freshness and prunes moved cache rows. |
+| [ADR-0006](ADR-0006-clear-stale-release-signals.md) | Server reconciliation clears stale release signals when trusted facts say the user is caught up. |
+| [ADR-0007](ADR-0007-prune-stale-title-schedule-rows.md) | Provider-backed break-week moves prune stale same-title schedule rows. |
+| [ADR-0008](ADR-0008-utc-overnight-scheduler-window.md) | Scheduled maintenance runs after UTC day rollover. |
+| [ADR-0009](ADR-0009-home-watchlist-released-progress.md) | Home watchlist released progress counts use released, not merely total, episode facts. |
+| [ADR-0012](ADR-0012-tmdb-bearer-and-autopause-fully-watched-guard.md) | TMDB bearer auth and fully watched auto-pause guards preserve release/status correctness. |
+| [ADR-0015](ADR-0015-preserve-imported-remaining-release-floor.md) | Imported remaining release floors are preserved until trusted facts replace them. |
+| [ADR-0016](ADR-0016-provider-date-conflict-release-authority.md) | Provider date conflicts use release-authority rules instead of broad fallback. |
+| [ADR-0017](ADR-0017-auto-paused-release-availability.md) | Auto-paused titles can surface again when reliable released content exists. |
+| [ADR-0018](ADR-0018-provider-schedule-episode-numbering.md) | Schedule rows preserve trusted provider episode numbering. |
+| [ADR-0019](ADR-0019-home-schedule-signal-recency.md) | Home schedule signals use recency rules to avoid stale attention rows. |
+| [ADR-0020](ADR-0020-same-day-watched-schedule-duplicates.md) | Same-day watched schedule duplicates collapse without hiding real unwatched content. |
+| [ADR-0021](ADR-0021-provider-cache-total-pruning.md) | Provider-verified totals can prune stale cache rows safely. |
+
+## Rule For New ADRs
+
+Watchlist/schedule/release/provider/projection ADRs must include:
+
+- Context.
+- Current behavior.
+- Decision.
+- Reasoning.
+- Provider/data assumptions.
+- Edge cases.
+- Verification.
+- Rollback notes.
+
+Keep the ADR concrete enough that a future agent can understand why a behavior exists without reading old chat history.

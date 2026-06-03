@@ -1,6 +1,6 @@
 # ShowTracker Context
 
-ShowTracker is a personal media tracking app for shows, anime, and movies. This context defines product language that should stay consistent across planning, UI copy, and implementation.
+ShowTracker is a personal media tracking app for shows, anime, and movies. This context defines product language that should stay consistent across planning, UI copy, implementation, and ADRs. Product goals live in `docs/GOALS.md`; this file is only the vocabulary source of truth.
 
 ## Language
 

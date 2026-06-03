@@ -1,58 +1,53 @@
 # ShowTracker
 
-Cross-platform show/anime/movie tracking app built with Expo (React Native + Web), Convex backend, and NativeWind styling. It focuses on a fast, minimal UX for discovering media, tracking progress, and managing watchlists across web + iOS + Android from a single codebase.
+ShowTracker is a cross-platform show, anime, and movie tracker built with Expo, React Native Web, Convex, and NativeWind. It is meant to replace TVTime with a faster, cleaner, open source app for discovery, progress tracking, watchlists, schedules, custom lists, and watch statistics.
 
 ## Features
-- Discover trending shows, anime, and movies.
-- Search across all media types.
-- Track episodes watched per show.
-- Manage watchlists with unwatched episode counts.
-- View a personal schedule of upcoming episodes.
-- Create custom lists and track watch statistics.
+
+- Discover trending TV, anime, and movies.
+- Search across supported media types.
+- Track episode, season, full-show, and movie watch state.
+- Manage Home watchlist surfaces with released/unwatched counts.
+- View tracked-show schedule and upcoming episode projections.
+- Create custom lists and inspect profile/watch statistics.
+- Import tracked data and repair stale tracking state with bounded tools.
 
 ## Tech Stack
-- **Runtime**: Expo SDK 52+ (React Native + React Native Web)
-- **Language**: TypeScript (strict mode)
-- **Routing**: Expo Router v4 (file-based)
-- **Styling**: NativeWind v4 (Tailwind CSS for RN)
-- **Backend**: Convex (real-time DB, server functions, auth)
-- **Client State**: Zustand + react-native-mmkv
-- **APIs**: TMDB (movies/TV), TVMaze (schedule), AniList (anime), Jikan (fallback)
+
+- **Runtime**: Expo SDK 54, React 19, React Native 0.81, React Native Web 0.21
+- **Routing**: Expo Router 6
+- **Language**: TypeScript 5.9 in strict mode
+- **Styling**: NativeWind 4
+- **Backend**: Convex with Convex Auth
+- **Client state**: Convex realtime data plus small Zustand stores for client/UI state
+- **Providers**: TMDB, TVMaze, AniList, and Jikan/MAL fallback
 
 ## Getting Started
+
 ```bash
-# Install dependencies
 npm install
-
-# Start Expo (web + mobile)
-npx expo start
-
-# Start Expo (web only)
-npx expo start --web
-
-# Start Convex dev backend (run alongside Expo)
+npm run start:web
 npx convex dev
 ```
 
-## Project Structure
-- `app/` — Expo Router screens and layouts
-- `components/` — Reusable UI components
-- `lib/` — Business logic, API clients, utilities
-- `lib/api/` — External API clients (TMDB, AniList, TVMaze, Jikan)
-- `convex/` — Convex backend (schema, queries, mutations, actions)
-- `constants/` — Theme colors, config values
-- `hooks/` — Custom React hooks
-- `store/` — Zustand stores
-- `types/` — Shared TypeScript types
-- `docs/` — Architecture, API reference, tech stack docs
+Useful validation commands:
+
+```bash
+npm run lint
+npx tsc --noEmit --pretty false
+npm run schedule-confidence:validate
+```
 
 ## Documentation
-- `docs/PLAN.md` — Implementation phases and feature breakdown
-- `docs/ARCHITECTURE.md` — System design and data flow
-- `docs/TECH_STACK.md` — Setup, build, run, and debug instructions
-- `docs/API_REFERENCE.md` — External API details and rate limits
-- `PROGRESS.md` — Current status, completed work, and known issues
+
+Start with [docs/README.md](docs/README.md). The short version:
+
+- [docs/GOALS.md](docs/GOALS.md) explains the product goal, non-goals, and durable guardrails.
+- [CONTEXT.md](CONTEXT.md) defines product language agents should keep consistent.
+- [docs/DECISIONS.md](docs/DECISIONS.md) indexes ADRs and the reasoning behind risky behavior.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps the current app, Convex backend, and reconciliation flow.
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) lists setup, env, validation, and workflow commands.
 
 ## Contributing
-1. Create a feature branch (`feat/short-description`, `fix/short-description`, `docs/short-description`).
-2. Keep changes focused and open a PR for review.
+
+Create a feature branch, keep changes focused, and open a PR for review. Do not commit secrets, do not bypass Convex for user-owned synced data, and add an ADR for any change that can affect watchlist, schedule, release availability, provider matching, or projection behavior.
