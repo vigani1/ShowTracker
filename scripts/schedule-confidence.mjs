@@ -29,6 +29,7 @@ const watchlistFutureCountDays = 90;
 const maxProjectionRepairEpisodeDelta = 3;
 const absoluteScheduleEpisodeMin = 100;
 const sameSourceEpisodeAliasMinDelta = 10;
+const nearDateDuplicateWindowDays = 1;
 
 const directFixtureDate = "2026-05-13T21:00:00.000Z";
 const bridgedFixtureDate = "2026-05-14T18:00:00.000Z";
@@ -271,6 +272,20 @@ const fixtureLibrary = [
     tmdbId: 1016,
     tvmazeId: 9016,
   },
+  {
+    id: "fixture-adjacent-date-duplicate",
+    userId: "fixture-user",
+    showId: "show-adjacent-date-duplicate",
+    title: "Adjacent Date Duplicate",
+    mediaType: "tv",
+    status: "watching",
+    watchedEpisodesCount: 13,
+    totalEpisodes: 13,
+    releasedEpisodes: 13,
+    remainingEpisodes: 0,
+    tmdbId: 1017,
+    tvmazeId: 9017,
+  },
 ];
 
 const fixtureProviderEvents = [
@@ -501,6 +516,30 @@ const fixtureProviderEvents = [
     name: "Episode 1165",
     airDate: "2026-05-28T10:00:00.000Z",
     providers: { tmdbId: 1016, tvmazeId: 9016 },
+  },
+  {
+    sourceProvider: "tvmaze",
+    providerShowId: "tvmaze:9017",
+    title: "Adjacent Date Duplicate",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 4,
+    episodeNumber: 13,
+    name: "Episode 13",
+    airDate: "2026-05-13",
+    providers: { tmdbId: 1017, tvmazeId: 9017 },
+  },
+  {
+    sourceProvider: "anilist",
+    providerShowId: "anilist:8017",
+    title: "Adjacent Date Duplicate",
+    mediaType: "anime",
+    region: "JP",
+    seasonNumber: 1,
+    episodeNumber: 13,
+    name: "Episode 13",
+    airDate: "2026-05-14T12:30:00.000Z",
+    providers: { anilistId: 8017 },
   },
 ];
 
@@ -1015,6 +1054,16 @@ function scheduleEpisodeDedupeKeyFromEvent(row) {
     return `name:${normalizedName}`;
   }
   return `number:${row.season_number}:${row.episode_number}`;
+}
+
+function genericEpisodeNumberFromName(name) {
+  const match = normalizeTitle(name ?? "").match(/^episode(\d+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function getEpisodeAirtimeTimestampForCounts(airDate) {
@@ -2923,6 +2972,14 @@ function projectedEventAirDatePrecision(event) {
   return String(event.payload.airDate ?? "").includes("T") ? 1 : 0;
 }
 
+function projectedEpisodeDedupeKey(event) {
+  const normalizedName = normalizeTitle(event.payload.episodeName ?? "");
+  if (normalizedName && !isGenericEpisodeName(event.payload.episodeName)) {
+    return `name:${normalizedName}`;
+  }
+  return `number:${event.payload.seasonNumber}:${event.payload.episodeNumber}`;
+}
+
 function shouldCollapseProjectedSameTrackedShowDay(next, current) {
   const nextName = normalizeTitle(next.payload.episodeName ?? "");
   const currentName = normalizeTitle(current.payload.episodeName ?? "");
@@ -2946,6 +3003,57 @@ function shouldCollapseProjectedSameTrackedShowDay(next, current) {
     isGenericEpisodeName(current.payload.episodeName) ||
     projectedEventAirDatePrecision(next) !== projectedEventAirDatePrecision(current)
   );
+}
+
+function projectedDateDistanceDays(next, current) {
+  const nextDate = dateKeyFromValue(next.payload.date);
+  const currentDate = dateKeyFromValue(current.payload.date);
+  if (!nextDate || !currentDate) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return (
+    Math.abs(
+      new Date(`${nextDate}T00:00:00.000Z`).getTime() -
+        new Date(`${currentDate}T00:00:00.000Z`).getTime()
+    ) /
+    (1000 * 60 * 60 * 24)
+  );
+}
+
+function hasSameProjectedEpisodeIdentity(next, current) {
+  if (projectedEpisodeDedupeKey(next) === projectedEpisodeDedupeKey(current)) {
+    return true;
+  }
+
+  const nextGenericEpisodeNumber = genericEpisodeNumberFromName(
+    next.payload.episodeName
+  );
+  const currentGenericEpisodeNumber = genericEpisodeNumberFromName(
+    current.payload.episodeName
+  );
+  return (
+    typeof nextGenericEpisodeNumber === "number" &&
+    nextGenericEpisodeNumber === currentGenericEpisodeNumber
+  );
+}
+
+function shouldCollapseProjectedSameTrackedShowNearbyDate(next, current) {
+  if (next.payload.date === current.payload.date) {
+    return shouldCollapseProjectedSameTrackedShowDay(next, current);
+  }
+
+  if (projectedDateDistanceDays(next, current) > nearDateDuplicateWindowDays) {
+    return false;
+  }
+
+  if (!hasSameProjectedEpisodeIdentity(next, current)) {
+    return false;
+  }
+
+  const sameDedupeKey = projectedEpisodeDedupeKey(next) === projectedEpisodeDedupeKey(current);
+  const differentSource = next.payload.sourceProvider !== current.payload.sourceProvider;
+  return sameDedupeKey || differentSource;
 }
 
 function preferProjectedScheduleCandidate(next, current) {
@@ -3106,6 +3214,24 @@ function addProjectedScheduleCandidate(state, candidate) {
   if (existing) {
     if (preferProjectedScheduleCandidate(candidate, state.events[existing.index])) {
       replaceProjectedScheduleCandidate(state, existing.index, uniqueKey, sameDayKey, candidate);
+    }
+    return;
+  }
+
+  const existingNearbyIndex = state.events.findIndex(
+    (event) =>
+      event.payload.routeId === candidate.payload.routeId &&
+      shouldCollapseProjectedSameTrackedShowNearbyDate(candidate, event)
+  );
+  if (existingNearbyIndex !== -1) {
+    if (preferProjectedScheduleCandidate(candidate, state.events[existingNearbyIndex])) {
+      replaceProjectedScheduleCandidate(
+        state,
+        existingNearbyIndex,
+        uniqueKey,
+        sameDayKey,
+        candidate
+      );
     }
     return;
   }
@@ -5065,6 +5191,17 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     "Schedule projection count should suppress watched provider-year episodes.",
     providerYearCount
   );
+  const adjacentDateDuplicateEvents =
+    fixtureUserProjection?.events.filter(
+      (event) => event.showId === "show-adjacent-date-duplicate"
+    ) ?? [];
+  assertValidation(
+    adjacentDateDuplicateEvents.length === 1 &&
+      adjacentDateDuplicateEvents[0]?.sourceProvider === "tvmaze" &&
+      adjacentDateDuplicateEvents[0]?.date === "2026-05-13",
+    "Adjacent-date direct and title-fallback schedule duplicates should collapse to the direct row.",
+    adjacentDateDuplicateEvents
+  );
   assertValidation(
     projectionPayload.metrics.users === 1 && projectionPayload.metrics.eventCount > 0,
     "Schedule projection payload did not generate covered user rows.",
@@ -5089,7 +5226,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   );
 
   return {
-    checks: 20,
+    checks: 21,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,

@@ -34,6 +34,7 @@ const MONTHLY_SIGNAL_USER_PAGE_SIZE = 500;
 const HOME_CACHED_SIGNAL_LOOKBACK_DAYS = HOME_SIGNAL_PAST_CACHE_DAYS;
 const HOME_CACHED_SIGNAL_SYNC_BUCKET_MS = 1000 * 60 * 30;
 const DAY_MS = 1000 * 60 * 60 * 24;
+const NEAR_DATE_DUPLICATE_WINDOW_DAYS = 1;
 
 type DateCacheStatus = {
   tvCount: number;
@@ -429,6 +430,16 @@ function isGenericScheduleEpisodeName(name?: string) {
   return !normalized || /^episode\d+$/.test(normalized);
 }
 
+function getGenericScheduleEpisodeNumber(name?: string) {
+  const match = normalizeTitle(name ?? "").match(/^episode(\d+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function getScheduleEpisodeDedupeKey(episode: {
   seasonNumber: number;
   episodeNumber: number;
@@ -500,6 +511,67 @@ function shouldCollapseSameTrackedShowDay(
     getScheduleAirDatePrecision(next.episode.airDate) !==
       getScheduleAirDatePrecision(current.episode.airDate)
   );
+}
+
+function getScheduleDateDistanceDays(nextDate: string, currentDate: string) {
+  const nextParsed = parseScheduleDateKey(nextDate);
+  const currentParsed = parseScheduleDateKey(currentDate);
+  if (!nextParsed || !currentParsed) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return Math.abs(nextParsed.getTime() - currentParsed.getTime()) / DAY_MS;
+}
+
+function hasSameScheduleEpisodeIdentity(
+  next: CompactScheduleEntry,
+  current: CompactScheduleEntry
+) {
+  if (
+    getScheduleEpisodeDedupeKey(next.episode) ===
+    getScheduleEpisodeDedupeKey(current.episode)
+  ) {
+    return true;
+  }
+
+  const nextGenericEpisodeNumber = getGenericScheduleEpisodeNumber(next.episode.name);
+  const currentGenericEpisodeNumber = getGenericScheduleEpisodeNumber(
+    current.episode.name
+  );
+  return (
+    typeof nextGenericEpisodeNumber === "number" &&
+    nextGenericEpisodeNumber === currentGenericEpisodeNumber
+  );
+}
+
+function shouldCollapseSameTrackedShowNearbyDate(
+  next: CompactScheduleEntry,
+  current: CompactScheduleEntry,
+  nextDate: string,
+  currentDate: string
+) {
+  if (nextDate === currentDate) {
+    return shouldCollapseSameTrackedShowDay(next, current);
+  }
+
+  if (
+    getScheduleDateDistanceDays(nextDate, currentDate) >
+    NEAR_DATE_DUPLICATE_WINDOW_DAYS
+  ) {
+    return false;
+  }
+
+  if (!hasSameScheduleEpisodeIdentity(next, current)) {
+    return false;
+  }
+
+  const sameDedupeKey =
+    getScheduleEpisodeDedupeKey(next.episode) ===
+    getScheduleEpisodeDedupeKey(current.episode);
+  const differentSource =
+    getScheduleEntrySourceProvider(next) !== getScheduleEntrySourceProvider(current);
+
+  return sameDedupeKey || differentSource;
 }
 
 function shouldPreferSameTrackedShowDayEpisode(
@@ -1375,6 +1447,110 @@ function getWatchedSameDayDuplicateGroupKeys<T>(
   return suppressed;
 }
 
+function getWatchedNearbyDuplicateCandidateKeys<T>(
+  candidates: T[],
+  args: {
+    getCandidateKey: (candidate: T) => string;
+    getRouteKey: (candidate: T) => string;
+    getDateKey: (candidate: T) => string;
+    getEntry: (candidate: T) => CompactScheduleEntry;
+    getShowId: (candidate: T) => Id<"shows">;
+    watchedEpisodes: WatchedScheduleEpisodeIndex;
+    scheduleAbsoluteSeasonOffsets?: Map<string, number>;
+  }
+) {
+  const watchedCandidates = candidates.filter((candidate) =>
+    isWatchedScheduleEntry(
+      args.watchedEpisodes,
+      args.getShowId(candidate),
+      args.getEntry(candidate),
+      args.scheduleAbsoluteSeasonOffsets
+    )
+  );
+
+  if (watchedCandidates.length === 0) {
+    return new Set<string>();
+  }
+
+  const suppressed = new Set<string>();
+  for (const candidate of candidates) {
+    if (
+      isWatchedScheduleEntry(
+        args.watchedEpisodes,
+        args.getShowId(candidate),
+        args.getEntry(candidate),
+        args.scheduleAbsoluteSeasonOffsets
+      )
+    ) {
+      continue;
+    }
+
+    const routeKey = args.getRouteKey(candidate);
+    const dateKey = args.getDateKey(candidate);
+    const entry = args.getEntry(candidate);
+    const showId = String(args.getShowId(candidate));
+    const hasWatchedDuplicate = watchedCandidates.some((watchedCandidate) => {
+      if (routeKey !== args.getRouteKey(watchedCandidate)) {
+        return false;
+      }
+      if (showId !== String(args.getShowId(watchedCandidate))) {
+        return false;
+      }
+
+      return shouldCollapseSameTrackedShowNearbyDate(
+        entry,
+        args.getEntry(watchedCandidate),
+        dateKey,
+        args.getDateKey(watchedCandidate)
+      );
+    });
+
+    if (hasWatchedDuplicate) {
+      suppressed.add(args.getCandidateKey(candidate));
+    }
+  }
+
+  return suppressed;
+}
+
+function selectNearbyScheduleDuplicateCandidates<T>(
+  candidates: T[],
+  args: {
+    getRouteKey: (candidate: T) => string;
+    getDateKey: (candidate: T) => string;
+    getEntry: (candidate: T) => CompactScheduleEntry;
+    shouldPrefer: (candidate: T, current: T) => boolean;
+  }
+) {
+  const selected: T[] = [];
+
+  for (const candidate of candidates) {
+    const existingIndex = selected.findIndex((existing) => {
+      if (args.getRouteKey(candidate) !== args.getRouteKey(existing)) {
+        return false;
+      }
+
+      return shouldCollapseSameTrackedShowNearbyDate(
+        args.getEntry(candidate),
+        args.getEntry(existing),
+        args.getDateKey(candidate),
+        args.getDateKey(existing)
+      );
+    });
+
+    if (existingIndex === -1) {
+      selected.push(candidate);
+      continue;
+    }
+
+    if (args.shouldPrefer(candidate, selected[existingIndex])) {
+      selected[existingIndex] = candidate;
+    }
+  }
+
+  return selected;
+}
+
 async function getWatchedScheduleEpisodeIndexForShows(
   ctx: QueryCtx,
   userId: Id<"users">,
@@ -1540,8 +1716,23 @@ function serializeProjectedUpcomingSchedule(
   today: Date
 ): UpcomingScheduleGroup[] {
   const grouped = new Map<string, UpcomingScheduleEpisode[]>();
+  const selectedRows = selectNearbyScheduleDuplicateCandidates(rows, {
+    getRouteKey: (row) => row.routeId,
+    getDateKey: (row) => row.date,
+    getEntry: (row) => projectedScheduleEntryFromRow(row),
+    shouldPrefer: (candidate, current) => {
+      if (candidate.sourceMatchesTracked !== current.sourceMatchesTracked) {
+        return candidate.sourceMatchesTracked;
+      }
 
-  for (const row of rows) {
+      return shouldPreferSameTrackedShowDayEpisode(
+        projectedScheduleEntryFromRow(candidate),
+        projectedScheduleEntryFromRow(current)
+      );
+    },
+  });
+
+  for (const row of selectedRows) {
     const bucketDate = parseScheduleDateKey(row.date);
     if (!bucketDate) {
       continue;
@@ -1632,8 +1823,34 @@ async function getProjectedFutureUpcomingCountsForUser(
     args.userId,
     rows
   );
+  const previousStartDate = formatDate(
+    addUtcDays(
+      parseRequiredScheduleDateKey(
+        args.startDate,
+        "projected future count start date"
+      ).date,
+      -NEAR_DATE_DUPLICATE_WINDOW_DAYS
+    )
+  );
+  const duplicateStartDate =
+    previousStartDate < coveredWindow.scheduleStartDate
+      ? args.startDate
+      : previousStartDate;
+  const duplicateRows =
+    duplicateStartDate === args.startDate
+      ? currentRows
+      : await filterProjectedRowsToCurrentFeedProjections(
+          ctx,
+          args.userId,
+          await getProjectedScheduleEvents(ctx, {
+            userId: args.userId,
+            startDate: duplicateStartDate,
+            endDate: args.endDate,
+            mediaFilter: args.mediaFilter,
+          })
+        );
   const projectionIds = Array.from(
-    new Set(currentRows.map((row) => row.feedProjectionId))
+    new Set(duplicateRows.map((row) => row.feedProjectionId))
   );
   const projections = await Promise.all(
     projectionIds.map((projectionId) => ctx.db.get(projectionId))
@@ -1652,9 +1869,10 @@ async function getProjectedFutureUpcomingCountsForUser(
     Array.from(projectionById.values()).map((projection) => projection.showId)
   );
   const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
-    getProjectedScheduleEpisodeNumberRows(currentRows, projectionById)
+    getProjectedScheduleEpisodeNumberRows(duplicateRows, projectionById)
   );
-  const countCandidates = currentRows.flatMap((row) => {
+  const currentRowIds = new Set(currentRows.map((row) => row._id));
+  const duplicateCandidates = duplicateRows.flatMap((row) => {
     const projection = projectionById.get(row.feedProjectionId);
     return projection
       ? [
@@ -1666,14 +1884,67 @@ async function getProjectedFutureUpcomingCountsForUser(
         ]
       : [];
   });
+  const countCandidates = duplicateCandidates.filter((candidate) =>
+    currentRowIds.has(candidate.row._id)
+  );
   const suppressedDuplicateGroups = getWatchedSameDayDuplicateGroupKeys(
-    countCandidates,
+    duplicateCandidates,
     {
       getGroupKey: (candidate) => `${candidate.row.routeId}:${candidate.row.date}`,
       getEntry: (candidate) => candidate.entry,
       getShowId: (candidate) => candidate.projection.showId,
       watchedEpisodes,
       scheduleAbsoluteSeasonOffsets,
+    }
+  );
+  const suppressedNearbyDuplicates = getWatchedNearbyDuplicateCandidateKeys(
+    duplicateCandidates,
+    {
+      getCandidateKey: (candidate) => String(candidate.row._id),
+      getRouteKey: (candidate) => candidate.row.routeId,
+      getDateKey: (candidate) => candidate.row.date,
+      getEntry: (candidate) => candidate.entry,
+      getShowId: (candidate) => candidate.projection.showId,
+      watchedEpisodes,
+      scheduleAbsoluteSeasonOffsets,
+    }
+  );
+  const eligibleCountCandidates = countCandidates.filter((candidate) => {
+    const { row, projection } = candidate;
+    if (suppressedDuplicateGroups.has(`${row.routeId}:${row.date}`)) {
+      return false;
+    }
+
+    if (suppressedNearbyDuplicates.has(String(row._id))) {
+      return false;
+    }
+
+    return !isWatchedScheduleEpisode(
+      watchedEpisodes,
+      projection.showId,
+      row.seasonNumber,
+      row.episodeNumber,
+      scheduleAbsoluteSeasonOffsets
+    );
+  });
+  const selectedCountCandidates = selectNearbyScheduleDuplicateCandidates(
+    eligibleCountCandidates,
+    {
+      getRouteKey: (candidate) => candidate.row.routeId,
+      getDateKey: (candidate) => candidate.row.date,
+      getEntry: (candidate) => candidate.entry,
+      shouldPrefer: (candidate, current) => {
+        if (
+          candidate.row.sourceMatchesTracked !== current.row.sourceMatchesTracked
+        ) {
+          return candidate.row.sourceMatchesTracked;
+        }
+
+        return shouldPreferSameTrackedShowDayEpisode(
+          candidate.entry,
+          current.entry
+        );
+      },
     }
   );
   const counts = new Map<
@@ -1683,23 +1954,8 @@ async function getProjectedFutureUpcomingCountsForUser(
   const nowMs = Date.now();
   const today = startOfDay(new Date());
 
-  for (const candidate of countCandidates) {
+  for (const candidate of selectedCountCandidates) {
     const { row, projection } = candidate;
-    if (suppressedDuplicateGroups.has(`${row.routeId}:${row.date}`)) {
-      continue;
-    }
-
-    if (
-      isWatchedScheduleEpisode(
-        watchedEpisodes,
-        projection.showId,
-        row.seasonNumber,
-        row.episodeNumber,
-        scheduleAbsoluteSeasonOffsets
-      )
-    ) {
-      continue;
-    }
 
     const bucketDate = parseScheduleDateKey(row.date);
     if (!bucketDate) {
@@ -1856,11 +2112,99 @@ async function getProjectedTodayScheduledWatchlistFeed(
   const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
     getProjectedScheduleEpisodeNumberRows(proofRows, proofProjectionById)
   );
+  const duplicateStartDate = formatDate(
+    addUtcDays(
+      parseRequiredScheduleDateKey(
+        args.date,
+        "projected scheduled watchlist duplicate date"
+      ).date,
+      -NEAR_DATE_DUPLICATE_WINDOW_DAYS
+    )
+  );
+  const duplicateEndDate = formatDate(
+    addUtcDays(
+      parseRequiredScheduleDateKey(
+        args.date,
+        "projected scheduled watchlist duplicate date"
+      ).date,
+      NEAR_DATE_DUPLICATE_WINDOW_DAYS
+    )
+  );
+  const boundedDuplicateStartDate =
+    duplicateStartDate < coveredWindow.scheduleStartDate
+      ? args.date
+      : duplicateStartDate;
+  const boundedDuplicateEndDate =
+    duplicateEndDate > coveredWindow.scheduleEndDate
+      ? args.date
+      : duplicateEndDate;
+  const duplicateRows =
+    boundedDuplicateStartDate === args.date && boundedDuplicateEndDate === args.date
+      ? rows
+      : await getProjectedScheduleEvents(ctx, {
+          userId: args.userId,
+          startDate: boundedDuplicateStartDate,
+          endDate: boundedDuplicateEndDate,
+          mediaFilter: args.mediaFilter,
+        });
+  const duplicateProjectionById =
+    duplicateRows === rows
+      ? projectionById
+      : await getProjectionByIdForScheduleRows(ctx, args.userId, duplicateRows);
+  const duplicateCandidates = duplicateRows.flatMap((row) => {
+    const projection = duplicateProjectionById.get(row.feedProjectionId);
+    if (!projection) {
+      return [];
+    }
+    if (projection.mediaType !== "tv" && projection.mediaType !== "anime") {
+      return [];
+    }
+    if (args.mediaFilter && projection.mediaType !== args.mediaFilter) {
+      return [];
+    }
+    if (
+      (projection.status !== "watching" && projection.status !== "completed") ||
+      projection.watchedEpisodesCount <= 0
+    ) {
+      return [];
+    }
+    const watchlistId = getWatchlistIdForProjection(projection);
+    if (!watchlistId) {
+      return [];
+    }
+
+    return [
+      {
+        row,
+        entry: projectedScheduleEntryFromRow(row),
+        tracked: {
+          projection,
+          watchlistId,
+          showId: projection.showId,
+          mediaType: projection.mediaType,
+          status: projection.status,
+          lastWatchedAt: projection.lastWatchedAt,
+        },
+      },
+    ];
+  });
   const suppressedDuplicateGroups = getWatchedSameDayDuplicateGroupKeys(
-    candidates,
+    duplicateCandidates,
     {
       getGroupKey: (candidate) =>
         `${candidate.tracked.watchlistId}:${candidate.row.date}`,
+      getEntry: (candidate) => candidate.entry,
+      getShowId: (candidate) => candidate.tracked.showId,
+      watchedEpisodes,
+      scheduleAbsoluteSeasonOffsets,
+    }
+  );
+  const suppressedNearbyDuplicates = getWatchedNearbyDuplicateCandidateKeys(
+    duplicateCandidates,
+    {
+      getCandidateKey: (candidate) => String(candidate.row._id),
+      getRouteKey: (candidate) => candidate.tracked.watchlistId,
+      getDateKey: (candidate) => candidate.row.date,
       getEntry: (candidate) => candidate.entry,
       getShowId: (candidate) => candidate.tracked.showId,
       watchedEpisodes,
@@ -1875,6 +2219,10 @@ async function getProjectedTodayScheduledWatchlistFeed(
         `${candidate.tracked.watchlistId}:${candidate.row.date}`
       )
     ) {
+      continue;
+    }
+
+    if (suppressedNearbyDuplicates.has(String(candidate.row._id))) {
       continue;
     }
 
@@ -2451,6 +2799,26 @@ export const getHomeScheduleSignalMatches = internalQuery({
         scheduleAbsoluteSeasonOffsets,
       }
     );
+    const suppressedNearbyDuplicates = getWatchedNearbyDuplicateCandidateKeys(
+      candidates,
+      {
+        getCandidateKey: (candidate) =>
+          [
+            candidate.tracked.projectionId,
+            candidate.dayKey,
+            candidate.entry.showId,
+            candidate.seasonNumber,
+            candidate.episodeNumber,
+            candidate.entry.episode.airDate ?? "",
+          ].join(":"),
+        getRouteKey: (candidate) => String(candidate.tracked.projectionId),
+        getDateKey: (candidate) => candidate.dayKey,
+        getEntry: (candidate) => candidate.entry,
+        getShowId: (candidate) => candidate.tracked.showId,
+        watchedEpisodes,
+        scheduleAbsoluteSeasonOffsets,
+      }
+    );
 
     const matches = new Map<
       string,
@@ -2483,6 +2851,18 @@ export const getHomeScheduleSignalMatches = internalQuery({
           `${candidate.tracked.projectionId}:${candidate.dayKey}`
         )
       ) {
+        continue;
+      }
+
+      const nearbyCandidateKey = [
+        candidate.tracked.projectionId,
+        candidate.dayKey,
+        candidate.entry.showId,
+        candidate.seasonNumber,
+        candidate.episodeNumber,
+        candidate.entry.episode.airDate ?? "",
+      ].join(":");
+      if (suppressedNearbyDuplicates.has(nearbyCandidateKey)) {
         continue;
       }
 
@@ -3180,6 +3560,7 @@ export const getTodayScheduledWatchlistFeed = query({
 
     const candidates: Array<{
       tracked: (typeof trackedShows)[number];
+      dayKey: string;
       entry: CompactScheduleEntry;
       sourceMatchesTracked: boolean;
       airtimeMs: number;
@@ -3203,6 +3584,7 @@ export const getTodayScheduledWatchlistFeed = query({
 
         candidates.push({
           tracked,
+          dayKey: row.date,
           entry,
           sourceMatchesTracked: rowMediaType === tracked.mediaType,
           airtimeMs:
@@ -3268,10 +3650,93 @@ export const getTodayScheduledWatchlistFeed = query({
     const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
       scheduleOffsetRows
     );
+    const duplicateStartDate = formatDate(
+      addUtcDays(
+        parseRequiredScheduleDateKey(
+          dateKey,
+          "scheduled watchlist duplicate date"
+        ).date,
+        -NEAR_DATE_DUPLICATE_WINDOW_DAYS
+      )
+    );
+    const duplicateEndDate = formatDate(
+      addUtcDays(
+        parseRequiredScheduleDateKey(
+          dateKey,
+          "scheduled watchlist duplicate date"
+        ).date,
+        NEAR_DATE_DUPLICATE_WINDOW_DAYS
+      )
+    );
+    const duplicateRows = await ctx.db
+      .query("scheduleCache")
+      .withIndex("by_date", (q) =>
+        q.gte("date", duplicateStartDate).lte("date", duplicateEndDate)
+      )
+      .collect();
+    const duplicateCandidates: typeof candidates = [];
+
+    for (const duplicateRow of duplicateRows) {
+      if (mediaFilter && duplicateRow.mediaType !== mediaFilter) {
+        continue;
+      }
+
+      const rowMediaType = duplicateRow.mediaType as "tv" | "anime";
+      const entries = parseCachedScheduleEntries(duplicateRow.episodes);
+
+      for (const entry of entries) {
+        const tracked = findTrackedScheduleMatch(
+          entry,
+          rowMediaType,
+          trackedShows,
+          byExternalKey
+        );
+
+        if (!tracked) {
+          continue;
+        }
+
+        duplicateCandidates.push({
+          tracked,
+          dayKey: duplicateRow.date,
+          entry,
+          sourceMatchesTracked: rowMediaType === tracked.mediaType,
+          airtimeMs:
+            getEpisodeAirtimeTimestamp(entry.episode.airDate) ??
+            startOfDay(
+              parseRequiredScheduleDateKey(
+                duplicateRow.date,
+                "scheduled watchlist duplicate date"
+              ).date
+            ).getTime(),
+        });
+      }
+    }
     const suppressedDuplicateGroups = getWatchedSameDayDuplicateGroupKeys(
-      candidates,
+      duplicateCandidates,
       {
-        getGroupKey: (candidate) => `${candidate.tracked.watchlistId}:${dateKey}`,
+        getGroupKey: (candidate) =>
+          `${candidate.tracked.watchlistId}:${candidate.dayKey}`,
+        getEntry: (candidate) => candidate.entry,
+        getShowId: (candidate) => candidate.tracked.showId,
+        watchedEpisodes,
+        scheduleAbsoluteSeasonOffsets,
+      }
+    );
+    const suppressedNearbyDuplicates = getWatchedNearbyDuplicateCandidateKeys(
+      duplicateCandidates,
+      {
+        getCandidateKey: (candidate) =>
+          [
+            candidate.tracked.watchlistId,
+            candidate.dayKey,
+            candidate.entry.showId,
+            candidate.entry.episode.seasonNumber,
+            candidate.entry.episode.episodeNumber,
+            candidate.entry.episode.airDate ?? "",
+          ].join(":"),
+        getRouteKey: (candidate) => candidate.tracked.watchlistId,
+        getDateKey: (candidate) => candidate.dayKey,
         getEntry: (candidate) => candidate.entry,
         getShowId: (candidate) => candidate.tracked.showId,
         watchedEpisodes,
@@ -3282,8 +3747,22 @@ export const getTodayScheduledWatchlistFeed = query({
     const selectedByRoute = new Map<string, (typeof candidates)[number]>();
     for (const candidate of candidates) {
       if (
-        suppressedDuplicateGroups.has(`${candidate.tracked.watchlistId}:${dateKey}`)
+        suppressedDuplicateGroups.has(
+          `${candidate.tracked.watchlistId}:${candidate.dayKey}`
+        )
       ) {
+        continue;
+      }
+
+      const nearbyCandidateKey = [
+        candidate.tracked.watchlistId,
+        candidate.dayKey,
+        candidate.entry.showId,
+        candidate.entry.episode.seasonNumber,
+        candidate.entry.episode.episodeNumber,
+        candidate.entry.episode.airDate ?? "",
+      ].join(":");
+      if (suppressedNearbyDuplicates.has(nearbyCandidateKey)) {
         continue;
       }
 
@@ -3444,9 +3923,15 @@ export const getUpcomingSchedule = query({
       )
       .collect();
 
-    const grouped = new Map<
-      string,
-      {
+    const displayCandidates: Array<{
+      dayKey: string;
+      routeKey: string;
+      uniqueKey: string;
+      sameTrackedShowDayKey: string;
+      entry: CompactScheduleEntry;
+      sourceMatchesTracked: boolean;
+      tracked: (typeof trackedShows)[number];
+      scheduleEpisode: {
         routeId: string | null;
         showTitle: string;
         mediaType: "tv" | "anime";
@@ -3458,28 +3943,8 @@ export const getUpcomingSchedule = query({
           name?: string;
           airDate?: string;
         };
-      }[]
-    >();
-    const dedupe = new Map<
-      string,
-      {
-        dayKey: string;
-        index: number;
-        sourceMatchesTracked: boolean;
-        entry: CompactScheduleEntry;
-        tracked: (typeof trackedShows)[number];
-      }
-    >();
-    const sameTrackedShowDayDedupe = new Map<
-      string,
-      {
-        dayKey: string;
-        index: number;
-        entry: CompactScheduleEntry;
-        sourceMatchesTracked: boolean;
-        tracked: (typeof trackedShows)[number];
-      }
-    >();
+      };
+    }> = [];
 
     for (const row of rows) {
       const entries = parseCachedScheduleEntries(row.episodes);
@@ -3505,10 +3970,6 @@ export const getUpcomingSchedule = query({
           (startOfDay(bucketDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
 
-        if (!grouped.has(dayKey)) {
-          grouped.set(dayKey, []);
-        }
-
         const sourceMatchesTracked = rowMediaType === tracked.mediaType;
         const seriesKey = getScheduleSeriesDedupeTitle(
           tracked.normalizedTitle.length <= entry.normalizedTitle.length
@@ -3516,67 +3977,8 @@ export const getUpcomingSchedule = query({
             : entry.normalizedTitle
         );
         const uniqueKey = `${dayKey}:${seriesKey}:${getScheduleEpisodeDedupeKey(entry.episode)}`;
-        const existing = dedupe.get(uniqueKey);
-        const existingEpisode = existing ? grouped.get(existing.dayKey)?.[existing.index] : undefined;
-        const sameTrackedShowDayKey = `${dayKey}:${tracked.routeId ?? seriesKey}`;
-        const sameDayExisting = sameTrackedShowDayDedupe.get(sameTrackedShowDayKey);
-        const sameDayExistingEpisode = sameDayExisting
-          ? grouped.get(sameDayExisting.dayKey)?.[sameDayExisting.index]
-          : undefined;
-        if (
-          sameDayExisting &&
-          sameDayExistingEpisode &&
-          shouldCollapseSameTrackedShowDay(entry, sameDayExisting.entry)
-        ) {
-          const shouldReplaceSameDayExisting =
-            (!sameDayExisting.sourceMatchesTracked && sourceMatchesTracked) ||
-            ((sameDayExisting.sourceMatchesTracked === sourceMatchesTracked) &&
-              (shouldPreferScheduleCandidate(tracked, sameDayExisting.tracked) ||
-                shouldPreferSameTrackedShowDayEpisode(entry, sameDayExisting.entry)));
-
-          if (shouldReplaceSameDayExisting) {
-            const scheduleEpisode = {
-              routeId: tracked.routeId,
-              showTitle: tracked.title,
-              mediaType: tracked.mediaType,
-              posterUrl: tracked.posterUrl,
-              daysUntil,
-              episode: {
-                seasonNumber: entry.episode.seasonNumber,
-                episodeNumber: entry.episode.episodeNumber,
-                ...(entry.episode.name ? { name: entry.episode.name } : {}),
-                ...(entry.episode.airDate ? { airDate: entry.episode.airDate } : {}),
-              },
-            };
-
-            grouped.get(sameDayExisting.dayKey)![sameDayExisting.index] = scheduleEpisode;
-            sameTrackedShowDayDedupe.set(sameTrackedShowDayKey, {
-              dayKey: sameDayExisting.dayKey,
-              index: sameDayExisting.index,
-              entry,
-              sourceMatchesTracked,
-              tracked,
-            });
-          }
-          continue;
-        }
-
-        const shouldReplaceExisting =
-          !!existing &&
-          ((!existing.sourceMatchesTracked && sourceMatchesTracked) ||
-            ((existing.sourceMatchesTracked === sourceMatchesTracked) &&
-              (shouldPreferScheduleCandidate(tracked, existing.tracked) ||
-                (existingEpisode &&
-                  shouldPreferScheduleEpisode(
-                    {
-                      episode: {
-                        airDate: entry.episode.airDate,
-                      },
-                    },
-                    existingEpisode
-                  )))));
-        if (existing && !shouldReplaceExisting) continue;
-
+        const routeKey = tracked.routeId ?? seriesKey;
+        const sameTrackedShowDayKey = `${dayKey}:${routeKey}`;
         const scheduleEpisode = {
           routeId: tracked.routeId,
           showTitle: tracked.title,
@@ -3591,42 +3993,77 @@ export const getUpcomingSchedule = query({
           },
         };
 
-        const dayEpisodes = grouped.get(dayKey)!;
-        if (existing) {
-          dayEpisodes[existing.index] = scheduleEpisode;
-          dedupe.set(uniqueKey, {
-            dayKey,
-            index: existing.index,
-            entry,
-            sourceMatchesTracked,
-            tracked,
-          });
-          sameTrackedShowDayDedupe.set(sameTrackedShowDayKey, {
-            dayKey,
-            index: existing.index,
-            entry,
-            sourceMatchesTracked,
-            tracked,
-          });
-          continue;
-        }
-
-        dayEpisodes.push(scheduleEpisode);
-        dedupe.set(uniqueKey, {
+        displayCandidates.push({
           dayKey,
-          index: dayEpisodes.length - 1,
+          routeKey,
+          uniqueKey,
+          sameTrackedShowDayKey,
           entry,
           sourceMatchesTracked,
           tracked,
-        });
-        sameTrackedShowDayDedupe.set(sameTrackedShowDayKey, {
-          dayKey,
-          index: dayEpisodes.length - 1,
-          entry,
-          sourceMatchesTracked,
-          tracked,
+          scheduleEpisode,
         });
       }
+    }
+
+    const selectedCandidates: typeof displayCandidates = [];
+    for (const candidate of displayCandidates) {
+      const existingIndex = selectedCandidates.findIndex((existing) => {
+        if (candidate.uniqueKey === existing.uniqueKey) {
+          return true;
+        }
+
+        if (
+          candidate.sameTrackedShowDayKey === existing.sameTrackedShowDayKey &&
+          shouldCollapseSameTrackedShowDay(candidate.entry, existing.entry)
+        ) {
+          return true;
+        }
+
+        return (
+          candidate.routeKey === existing.routeKey &&
+          shouldCollapseSameTrackedShowNearbyDate(
+            candidate.entry,
+            existing.entry,
+            candidate.dayKey,
+            existing.dayKey
+          )
+        );
+      });
+
+      if (existingIndex === -1) {
+        selectedCandidates.push(candidate);
+        continue;
+      }
+
+      const existing = selectedCandidates[existingIndex];
+      const shouldReplace =
+        (!existing.sourceMatchesTracked && candidate.sourceMatchesTracked) ||
+        (existing.sourceMatchesTracked === candidate.sourceMatchesTracked &&
+          (shouldPreferScheduleCandidate(candidate.tracked, existing.tracked) ||
+            shouldPreferSameTrackedShowDayEpisode(candidate.entry, existing.entry) ||
+            shouldPreferScheduleEpisode(
+              {
+                episode: {
+                  airDate: candidate.entry.episode.airDate,
+                },
+              },
+              existing.scheduleEpisode
+            )));
+
+      if (shouldReplace) {
+        selectedCandidates[existingIndex] = candidate;
+      }
+    }
+
+    const grouped = new Map<
+      string,
+      (typeof displayCandidates)[number]["scheduleEpisode"][]
+    >();
+    for (const candidate of selectedCandidates) {
+      const dayEpisodes = grouped.get(candidate.dayKey) ?? [];
+      dayEpisodes.push(candidate.scheduleEpisode);
+      grouped.set(candidate.dayKey, dayEpisodes);
     }
 
     return Array.from(grouped.entries())
@@ -3728,10 +4165,19 @@ async function getFutureUpcomingCountsForUser(
       }
     }
 
+    const duplicateStartDate = formatDate(
+      addUtcDays(
+        parseRequiredScheduleDateKey(
+          range.startDate,
+          "future count duplicate start date"
+        ).date,
+        -NEAR_DATE_DUPLICATE_WINDOW_DAYS
+      )
+    );
     const rows = await ctx.db
       .query("scheduleCache")
       .withIndex("by_date", (q) =>
-        q.gte("date", range.startDate).lte("date", range.endDate)
+        q.gte("date", duplicateStartDate).lte("date", range.endDate)
       )
       .collect();
 
@@ -3743,8 +4189,10 @@ async function getFutureUpcomingCountsForUser(
       dayKey: string;
       daysUntil: number;
       entry: CompactScheduleEntry;
+      sourceMatchesTracked: boolean;
       tracked: (typeof trackedShows)[number] & { watchlistId: string };
     }> = [];
+    const duplicateCandidates: typeof countCandidates = [];
     const dedupe = new Set<string>();
     const nowMs = Date.now();
 
@@ -3781,24 +4229,29 @@ async function getFutureUpcomingCountsForUser(
         if (dedupe.has(uniqueKey)) continue;
         dedupe.add(uniqueKey);
 
-        countCandidates.push({
+        const candidate = {
           dayKey,
           daysUntil,
           entry,
+          sourceMatchesTracked: rowMediaType === tracked.mediaType,
           tracked: tracked as (typeof trackedShows)[number] & {
             watchlistId: string;
           },
-        });
+        };
+        duplicateCandidates.push(candidate);
+        if (dayKey >= range.startDate) {
+          countCandidates.push(candidate);
+        }
       }
     }
 
     const watchedEpisodes = await getWatchedScheduleEpisodeIndexForShows(
       ctx,
       args.userId,
-      countCandidates.map((candidate) => candidate.tracked.showId)
+      duplicateCandidates.map((candidate) => candidate.tracked.showId)
     );
     const scheduleAbsoluteSeasonOffsets = getScheduleAbsoluteSeasonOffsets(
-      countCandidates.map((candidate) => ({
+      duplicateCandidates.map((candidate) => ({
         showId: candidate.tracked.showId,
         seasonNumber: candidate.entry.episode.seasonNumber,
         episodeNumber: candidate.entry.episode.episodeNumber,
@@ -3806,7 +4259,7 @@ async function getFutureUpcomingCountsForUser(
       }))
     );
     const suppressedDuplicateGroups = getWatchedSameDayDuplicateGroupKeys(
-      countCandidates,
+      duplicateCandidates,
       {
         getGroupKey: (candidate) =>
           `${candidate.tracked.watchlistId}:${candidate.dayKey}`,
@@ -3816,37 +4269,72 @@ async function getFutureUpcomingCountsForUser(
         scheduleAbsoluteSeasonOffsets,
       }
     );
-    const countedSameTrackedShowDay = new Map<string, CompactScheduleEntry>();
-
-    for (const candidate of countCandidates) {
+    const suppressedNearbyDuplicates = getWatchedNearbyDuplicateCandidateKeys(
+      duplicateCandidates,
+      {
+        getCandidateKey: (candidate) =>
+          [
+            candidate.tracked.watchlistId,
+            candidate.dayKey,
+            candidate.entry.showId,
+            candidate.entry.episode.seasonNumber,
+            candidate.entry.episode.episodeNumber,
+            candidate.entry.episode.airDate ?? "",
+          ].join(":"),
+        getRouteKey: (candidate) => candidate.tracked.watchlistId,
+        getDateKey: (candidate) => candidate.dayKey,
+        getEntry: (candidate) => candidate.entry,
+        getShowId: (candidate) => candidate.tracked.showId,
+        watchedEpisodes,
+        scheduleAbsoluteSeasonOffsets,
+      }
+    );
+    const eligibleCountCandidates = countCandidates.filter((candidate) => {
       const sameTrackedShowDayKey = `${candidate.tracked.watchlistId}:${candidate.dayKey}`;
       if (suppressedDuplicateGroups.has(sameTrackedShowDayKey)) {
-        continue;
+        return false;
       }
 
-      if (
-        isWatchedScheduleEpisode(
-          watchedEpisodes,
-          candidate.tracked.showId,
-          candidate.entry.episode.seasonNumber,
-          candidate.entry.episode.episodeNumber,
-          scheduleAbsoluteSeasonOffsets
-        )
-      ) {
-        continue;
+      const nearbyCandidateKey = [
+        candidate.tracked.watchlistId,
+        candidate.dayKey,
+        candidate.entry.showId,
+        candidate.entry.episode.seasonNumber,
+        candidate.entry.episode.episodeNumber,
+        candidate.entry.episode.airDate ?? "",
+      ].join(":");
+      if (suppressedNearbyDuplicates.has(nearbyCandidateKey)) {
+        return false;
       }
 
-      const sameTrackedShowDayEntry = countedSameTrackedShowDay.get(
-        sameTrackedShowDayKey
+      return !isWatchedScheduleEpisode(
+        watchedEpisodes,
+        candidate.tracked.showId,
+        candidate.entry.episode.seasonNumber,
+        candidate.entry.episode.episodeNumber,
+        scheduleAbsoluteSeasonOffsets
       );
-      if (
-        sameTrackedShowDayEntry &&
-        shouldCollapseSameTrackedShowDay(candidate.entry, sameTrackedShowDayEntry)
-      ) {
-        continue;
-      }
-      countedSameTrackedShowDay.set(sameTrackedShowDayKey, candidate.entry);
+    });
+    const selectedCountCandidates = selectNearbyScheduleDuplicateCandidates(
+      eligibleCountCandidates,
+      {
+        getRouteKey: (candidate) => candidate.tracked.watchlistId,
+        getDateKey: (candidate) => candidate.dayKey,
+        getEntry: (candidate) => candidate.entry,
+        shouldPrefer: (candidate, current) => {
+          if (candidate.sourceMatchesTracked !== current.sourceMatchesTracked) {
+            return candidate.sourceMatchesTracked;
+          }
 
+          return shouldPreferSameTrackedShowDayEpisode(
+            candidate.entry,
+            current.entry
+          );
+        },
+      }
+    );
+
+    for (const candidate of selectedCountCandidates) {
       const airtimeMs = getEpisodeAirtimeTimestamp(candidate.entry.episode.airDate);
       const isFutureDay = candidate.daysUntil > 0;
       const isTodayBeforeAirtime =
