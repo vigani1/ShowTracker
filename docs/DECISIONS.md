@@ -18,6 +18,7 @@ Most frequently relevant:
 - [ADR-0021](ADR-0021-provider-cache-total-pruning.md): provider-verified cache total pruning.
 - [ADR-0022](ADR-0022-home-feed-pagination-stability.md): Home feed pagination stability.
 - [ADR-0023](ADR-0023-adjacent-date-watched-schedule-duplicates.md): adjacent-date watched duplicates.
+- [ADR-0024](ADR-0024-home-watchlist-tab-return-stability.md): Home Watchlist tab return stability.
 
 ## Navigation
 
@@ -56,6 +57,7 @@ Most frequently relevant:
 | [ADR-0021](ADR-0021-provider-cache-total-pruning.md) | Provider-verified totals can prune stale cache rows safely. |
 | [ADR-0022](ADR-0022-home-feed-pagination-stability.md) | Home holds resolved feed pages during pagination refetches so section expansion does not collapse. |
 | [ADR-0023](ADR-0023-adjacent-date-watched-schedule-duplicates.md) | Adjacent-date watched schedule duplicates collapse when providers disagree by one day. |
+| [ADR-0024](ADR-0024-home-watchlist-tab-return-stability.md) | Home keeps the last Watchlist view stable while users visit Schedule and return. |
 
 ## Rule For New ADRs
 

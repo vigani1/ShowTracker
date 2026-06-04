@@ -61,6 +61,10 @@ type WatchlistScheduleCounts = {
   unavailableCount: number;
 };
 
+type WatchlistFutureUpcomingCount = WatchlistScheduleCounts & {
+  routeId: string;
+};
+
 type UpcomingEpisode = {
   routeId: string | null;
   showTitle: string;
@@ -1573,7 +1577,7 @@ export function HomeScreen() {
     activeFeed as WatchlistItem[] | undefined,
     {
       contextKey: `${watchlistFeedContextKey}:active`,
-      isLoading: activeTab === "watchlist" && activeFeed === undefined,
+      isLoading: activeTab !== "watchlist" || activeFeed === undefined,
     }
   );
   const stableTodayScheduledWatchlistFeed = useStableDisplayValue(
@@ -1581,21 +1585,33 @@ export function HomeScreen() {
     {
       contextKey: `${watchlistFeedContextKey}:today:${todayKey}`,
       isLoading:
-        activeTab === "watchlist" && todayScheduledWatchlistFeed === undefined,
+        activeTab !== "watchlist" ||
+        todayScheduledWatchlistFeed === undefined,
     }
   );
   const stablePausedFeed = useStableDisplayValue(
     pausedFeed as WatchlistItem[] | undefined,
     {
       contextKey: `${watchlistFeedContextKey}:paused`,
-      isLoading: activeTab === "watchlist" && pausedFeed === undefined,
+      isLoading: activeTab !== "watchlist" || pausedFeed === undefined,
     }
   );
   const stableNotStartedFeed = useStableDisplayValue(
     notStartedFeed as WatchlistItem[] | undefined,
     {
       contextKey: `${watchlistFeedContextKey}:not-started`,
-      isLoading: activeTab === "watchlist" && notStartedFeed === undefined,
+      isLoading: activeTab !== "watchlist" || notStartedFeed === undefined,
+    }
+  );
+  const stableWatchlistFutureUpcomingCounts = useStableDisplayValue(
+    watchlistFutureUpcomingCounts as
+      | WatchlistFutureUpcomingCount[]
+      | undefined,
+    {
+      contextKey: watchlistFutureCountsQueryKey,
+      isLoading:
+        activeTab !== "watchlist" ||
+        watchlistFutureUpcomingCounts === undefined,
     }
   );
 
@@ -1636,9 +1652,7 @@ export function HomeScreen() {
       WatchlistScheduleCounts
     >();
 
-    for (const entry of (watchlistFutureUpcomingCounts ?? []) as (WatchlistScheduleCounts & {
-      routeId: string;
-    })[]) {
+    for (const entry of stableWatchlistFutureUpcomingCounts ?? []) {
       counts.set(entry.routeId, {
         availableCount: entry.availableCount ?? 0,
         futureCount: entry.futureCount,
@@ -1647,7 +1661,7 @@ export function HomeScreen() {
     }
 
     return counts;
-  }, [watchlistFutureUpcomingCounts]);
+  }, [stableWatchlistFutureUpcomingCounts]);
 
   const getScheduleAttentionCountForItem = useCallback(
     (item: WatchlistItem) =>
@@ -1836,9 +1850,9 @@ export function HomeScreen() {
     resolvedFutureCountsQueryKey === watchlistFutureCountsQueryKey;
   const isWatchlistFutureCountsLoading =
     activeTab === "watchlist" &&
-    activeFeed !== undefined &&
+    stableActiveFeed !== undefined &&
     (!hasResolvedFutureCountsForCurrentKey ||
-      watchlistFutureUpcomingCounts === undefined);
+      stableWatchlistFutureUpcomingCounts === undefined);
   const upcomingCount = upcomingGroups.reduce((sum, group) => sum + group.episodes.length, 0);
   const visibleWatchlistItems = useMemo(
     () => filteredWatchlist.slice(0, watchlistVisibleCount),
@@ -2012,6 +2026,10 @@ export function HomeScreen() {
   }, [notStartedSectionWatchlist.length, secondarySectionPageSize]);
 
   useEffect(() => {
+    if (activeTab !== "watchlist") {
+      return;
+    }
+
     if (
       stableActiveFeed === undefined ||
       stablePausedFeed === undefined ||
@@ -2031,6 +2049,7 @@ export function HomeScreen() {
       });
     }
   }, [
+    activeTab,
     filteredWatchlist,
     isWatchlistFilterSettling,
     stableActiveFeed,
