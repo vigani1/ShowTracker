@@ -8,7 +8,7 @@ Accepted
 
 On June 4, 2026, Classroom of the Elite stayed in Home watchlist attention after the user marked the visible current episode as watched. The Schedule page also showed the same generic episode on two dates:
 
-- June 3, 2026: `tmdb:tv:72517`, source `tvmaze`, direct tracked-source match, `S04E13`, `Episode 13`, date-only `2026-06-03`.
+- June 3, 2026: `tmdb:tv:72517`, source `tvmaze`, direct tracked-source match, `S04E13`, `Obscured by the Rain`, date-only `2026-06-03`.
 - June 4, 2026: `tmdb:tv:72517`, source `anilist`, title-fallback anime source, `S01E13`, `Episode 13`, `2026-06-04T12:30:00.000Z`.
 
 The watched row matched the tracked TV episode shape, so the direct TVMaze `S04E13` row was recognized as watched. The AniList title-fallback `S01E13` row used anime season-local numbering and was one day later, so the watched filter did not recognize it. Because ADR-0020 only suppressed watched duplicates inside `tracked show + same date` groups, the adjacent-day AniList copy survived and continued to feed Schedule, same-day Home schedule attention, future watchlist counts, and cached Home schedule signals.
@@ -24,7 +24,7 @@ Before this change:
 
 ## Decision
 
-Schedule duplicate handling now recognizes a bounded adjacent-date duplicate window of one day for the same tracked route/show. A near-date pair collapses when it either has the same schedule episode dedupe key or the same generic `Episode N` number. Same-day behavior remains delegated to ADR-0020's existing same-day predicate.
+Schedule duplicate handling now recognizes a bounded adjacent-date duplicate window of one day for the same tracked route/show. A near-date pair collapses when it either has the same schedule episode dedupe key, has the same generic `Episode N` number, or has the same provider-local episode number with at least one generic/missing episode name. Same-day behavior remains delegated to ADR-0020's existing same-day predicate.
 
 Convex read paths now apply this rule in both projection-backed and fallback cache-scan paths:
 
@@ -47,7 +47,7 @@ Keeping source-matching preference matters for Classroom because the tracked row
 
 Provider IDs remain the preferred match source. TVMaze/TMDB rows that match the tracked TV route are higher confidence than AniList title-fallback rows bridged into a TV route.
 
-Generic names in the form `Episode N` are usable as duplicate evidence only inside the same tracked route/show and the one-day window. This does not make title fallback more trusted for release mutation or provider identity.
+Generic names in the form `Episode N` are usable as duplicate evidence only inside the same tracked route/show and the one-day window. When one provider supplies a descriptive name and the other supplies only a generic/missing name, matching provider-local episode numbers are also treated as duplicate evidence inside that same narrow route/date boundary. This does not make title fallback more trusted for release mutation or provider identity.
 
 Watched episode rows remain the source of truth for user progress. Adjacent-date suppression hides an unwatched-shaped duplicate only when it collapses with a watched candidate for the same tracked show/route.
 
@@ -76,7 +76,7 @@ Local checks for this change:
 - `npx tsc --noEmit --pretty false`
 - `git diff --check`
 
-The schedule-confidence fixture suite now includes an adjacent-date duplicate shaped like the Classroom regression: a direct TVMaze `S04E13` row and an AniList title-fallback `S01E13` row with the same `Episode 13` generic name on adjacent dates. Validation asserts that the projection keeps only the direct TVMaze row.
+The schedule-confidence fixture suite now includes an adjacent-date duplicate shaped like the Classroom regression: a direct TVMaze `S04E13` row with a descriptive episode name and an AniList title-fallback `S01E13` row with the generic `Episode 13` name on adjacent dates. Validation asserts that the projection keeps only the direct TVMaze row.
 
 Production diagnosis used `npx convex data --prod userScheduleEvents --limit 20000 --format jsonl` filtered to Classroom of the Elite and confirmed the June 3 direct TVMaze row plus June 4 AniList title-fallback row described above.
 

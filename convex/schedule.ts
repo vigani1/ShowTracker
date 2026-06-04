@@ -538,9 +538,17 @@ function hasSameScheduleEpisodeIdentity(
   const currentGenericEpisodeNumber = getGenericScheduleEpisodeNumber(
     current.episode.name
   );
-  return (
+  if (
     typeof nextGenericEpisodeNumber === "number" &&
     nextGenericEpisodeNumber === currentGenericEpisodeNumber
+  ) {
+    return true;
+  }
+
+  return (
+    next.episode.episodeNumber === current.episode.episodeNumber &&
+    (isGenericScheduleEpisodeName(next.episode.name) ||
+      isGenericScheduleEpisodeName(current.episode.name))
   );
 }
 

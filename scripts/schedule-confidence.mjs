@@ -525,7 +525,7 @@ const fixtureProviderEvents = [
     region: "US",
     seasonNumber: 4,
     episodeNumber: 13,
-    name: "Episode 13",
+    name: "Obscured by the Rain",
     airDate: "2026-05-13",
     providers: { tmdbId: 1017, tvmazeId: 9017 },
   },
@@ -3032,9 +3032,17 @@ function hasSameProjectedEpisodeIdentity(next, current) {
   const currentGenericEpisodeNumber = genericEpisodeNumberFromName(
     current.payload.episodeName
   );
-  return (
+  if (
     typeof nextGenericEpisodeNumber === "number" &&
     nextGenericEpisodeNumber === currentGenericEpisodeNumber
+  ) {
+    return true;
+  }
+
+  return (
+    next.payload.episodeNumber === current.payload.episodeNumber &&
+    (isGenericEpisodeName(next.payload.episodeName) ||
+      isGenericEpisodeName(current.payload.episodeName))
   );
 }
 
