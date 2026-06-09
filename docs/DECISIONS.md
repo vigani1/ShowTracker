@@ -19,6 +19,7 @@ Most frequently relevant:
 - [ADR-0022](ADR-0022-home-feed-pagination-stability.md): Home feed pagination stability.
 - [ADR-0023](ADR-0023-adjacent-date-watched-schedule-duplicates.md): adjacent-date watched duplicates.
 - [ADR-0024](ADR-0024-home-watchlist-tab-return-stability.md): Home Watchlist tab return stability.
+- [ADR-0025](ADR-0025-tmdb-auth-fallback-schedule-maintenance.md): TMDB auth fallback for schedule maintenance.
 
 ## Navigation
 
@@ -58,6 +59,7 @@ Most frequently relevant:
 | [ADR-0022](ADR-0022-home-feed-pagination-stability.md) | Home holds resolved feed pages during pagination refetches so section expansion does not collapse. |
 | [ADR-0023](ADR-0023-adjacent-date-watched-schedule-duplicates.md) | Adjacent-date watched schedule duplicates collapse when providers disagree by one day. |
 | [ADR-0024](ADR-0024-home-watchlist-tab-return-stability.md) | Home keeps the last Watchlist view stable while users visit Schedule and return. |
+| [ADR-0025](ADR-0025-tmdb-auth-fallback-schedule-maintenance.md) | TMDB auth fallback keeps provider facts flowing for schedule maintenance. |
 
 ## Rule For New ADRs
 

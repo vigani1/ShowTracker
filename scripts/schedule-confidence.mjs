@@ -2157,16 +2157,22 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-function getTmdbAuth() {
-  const token = process.env.EXPO_PUBLIC_TMDB_READ_ACCESS_TOKEN?.trim();
-  const key = process.env.EXPO_PUBLIC_TMDB_API_KEY?.trim();
+function getTmdbAuthCandidates(env = process.env) {
+  const token = env.EXPO_PUBLIC_TMDB_READ_ACCESS_TOKEN?.trim();
+  const key = env.EXPO_PUBLIC_TMDB_API_KEY?.trim();
+  const candidates = [];
   if (token && !token.startsWith("your_")) {
-    return { headers: { Authorization: `Bearer ${token}` }, apiKey: null };
+    candidates.push({ headers: { Authorization: `Bearer ${token}` }, apiKey: null });
   }
   if (key && !key.startsWith("your_")) {
-    return { headers: {}, apiKey: key };
+    candidates.push({ headers: {}, apiKey: key });
   }
-  return null;
+  return candidates;
+}
+
+function isRetryableTmdbAuthError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith("401 ") || message.startsWith("403 ");
 }
 
 function getTmdbReleasedTvEpisodeCount(details) {
@@ -2269,21 +2275,15 @@ function getAniListReleasedEpisodeCount(media) {
   return null;
 }
 
-async function fetchTmdbDetails(item, nowMs = Date.now()) {
-  if (!item.tmdb_id || item.media_type === "anime") {
-    return { events: [], metadata: null };
-  }
-  const auth = getTmdbAuth();
-  if (!auth) {
-    return { events: [], metadata: null };
-  }
+async function fetchTmdbDetailsWithAuth(item, auth, nowMs, options = {}) {
   const base = process.env.EXPO_PUBLIC_TMDB_BASE_URL?.replace(/\/+$/, "") ?? "https://api.themoviedb.org/3";
   const url = new URL(`${base}/${item.media_type}/${item.tmdb_id}`);
   url.searchParams.set("append_to_response", "external_ids");
   if (auth.apiKey) {
     url.searchParams.set("api_key", auth.apiKey);
   }
-  const details = await fetchJson(url, { headers: auth.headers });
+  const fetchJsonImpl = options.fetchJson ?? fetchJson;
+  const details = await fetchJsonImpl(url, { headers: auth.headers });
   const externalIds = details.external_ids ?? {};
   const imdbId = externalIds.imdb_id ?? details.imdb_id ?? item.imdb_id;
   const events = [];
@@ -2296,7 +2296,7 @@ async function fetchTmdbDetails(item, nowMs = Date.now()) {
       if (auth.apiKey) {
         seasonUrl.searchParams.set("api_key", auth.apiKey);
       }
-      const seasonDetails = await fetchJson(seasonUrl, { headers: auth.headers });
+      const seasonDetails = await fetchJsonImpl(seasonUrl, { headers: auth.headers });
       hydratedSeasons.push(seasonDetails);
       if (Array.isArray(seasonDetails.episodes)) {
         sources.push(...seasonDetails.episodes);
@@ -2342,6 +2342,29 @@ async function fetchTmdbDetails(item, nowMs = Date.now()) {
     });
   }
   return { events, metadata };
+}
+
+async function fetchTmdbDetails(item, nowMs = Date.now(), options = {}) {
+  if (!item.tmdb_id || item.media_type === "anime") {
+    return { events: [], metadata: null };
+  }
+  const authCandidates = options.authCandidates ?? getTmdbAuthCandidates();
+  if (authCandidates.length === 0) {
+    return { events: [], metadata: null };
+  }
+
+  let lastError = null;
+  for (const auth of authCandidates) {
+    try {
+      return await fetchTmdbDetailsWithAuth(item, auth, nowMs, options);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableTmdbAuthError(error)) {
+        throw error;
+      }
+    }
+  }
+  throw lastError;
 }
 
 async function resolveTvMazeShowForItem(item) {
@@ -4721,7 +4744,85 @@ function assertValidation(condition, message, details = {}) {
   }
 }
 
-function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
+async function validateTmdbAuthFallback() {
+  let bearerAttempts = 0;
+  let apiKeyAttempts = 0;
+  const result = await fetchTmdbDetails(
+    {
+      tmdb_id: 30983,
+      media_type: "tv",
+      title: "TMDB Fallback Show",
+      imdb_id: null,
+    },
+    fixtureNowMs,
+    {
+      authCandidates: [
+        { headers: { Authorization: "Bearer invalid" }, apiKey: null },
+        { headers: {}, apiKey: "valid-key" },
+      ],
+      fetchJson: async (url, options = {}) => {
+        if (options.headers?.Authorization) {
+          bearerAttempts += 1;
+          throw new Error("401 Unauthorized: invalid bearer");
+        }
+        apiKeyAttempts += 1;
+        const urlText = String(url);
+        if (urlText.includes("/season/1")) {
+          return {
+            season_number: 1,
+            episodes: [
+              {
+                season_number: 1,
+                episode_number: 1,
+                air_date: "2026-05-01",
+                name: "Episode 1",
+              },
+              {
+                season_number: 1,
+                episode_number: 2,
+                air_date: "2026-05-20",
+                name: "Episode 2",
+              },
+            ],
+          };
+        }
+        return {
+          name: "TMDB Fallback Show",
+          external_ids: { imdb_id: "ttfallback" },
+          number_of_episodes: 2,
+          seasons: [{ season_number: 1, episode_count: 2 }],
+          last_episode_to_air: {
+            season_number: 1,
+            episode_number: 1,
+            air_date: "2026-05-01",
+            name: "Episode 1",
+          },
+          next_episode_to_air: {
+            season_number: 1,
+            episode_number: 2,
+            air_date: "2026-05-20",
+            name: "Episode 2",
+          },
+        };
+      },
+    }
+  );
+
+  const nextEvent = result.events.find((event) => event.episodeNumber === 2);
+  assertValidation(
+    bearerAttempts === 1 &&
+      apiKeyAttempts === 2 &&
+      result.metadata?.releasedEpisodes === 1 &&
+      result.metadata?.totalEpisodes === 2 &&
+      Boolean(nextEvent),
+    "TMDB auth fallback should retry API-key auth after a bearer auth failure.",
+    { bearerAttempts, apiKeyAttempts, result }
+  );
+
+  return { bearerAttempts, apiKeyAttempts };
+}
+
+async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   const facts = new Map(
     db
       .prepare("SELECT * FROM release_facts")
@@ -4748,6 +4849,7 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
     legacyProjectionPayload
   );
   const fixtureUserProjection = projectionPayload.users.find((user) => user.userId === "fixture-user");
+  const tmdbAuthFallback = await validateTmdbAuthFallback();
   const staleAniListCacheDeltas =
     buildScheduleCacheProviderMaintenanceDeltasFromMedia(
       [
@@ -5234,12 +5336,13 @@ function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   );
 
   return {
-    checks: 21,
+    checks: 22,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,
     projectedEvents: projectionPayload.metrics.eventCount,
     projectedCountRows: projectionPayload.metrics.countRowCount,
+    tmdbAuthFallback,
   };
 }
 
@@ -5320,7 +5423,7 @@ async function main() {
     });
     const exported = exportDeltas(db, deltaPath);
     const audited = auditReport(db, auditPath);
-    const validated = validateFixtureResults(db, summary, deltaPath);
+    const validated = await validateFixtureResults(db, summary, deltaPath);
     db.close();
     console.log(JSON.stringify({ seeded, summary, exported, audited, validated }, null, 2));
     return;
