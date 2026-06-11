@@ -214,6 +214,14 @@ function getCaughtUpLine(showId: string, date = new Date()) {
   return CAUGHT_UP_LINES[index];
 }
 
+function normalizePositiveEpisodeCount(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return Math.floor(value);
+}
+
 const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
 
 type WatchActionTarget =
@@ -2868,7 +2876,7 @@ export function ShowDetailScreen() {
           sum + Math.min(getSeasonWatchedCount(payload.seasonNumber), payload.episodes.length),
         0
       );
-      const showActionEpisodeCount = totalEpisodesCount ?? releasedEpisodeCount;
+      const showActionEpisodeCount = watchableEpisodeCount ?? releasedEpisodeCount;
       const isFullyWatched =
         showActionEpisodeCount > 0
           ? totalWatchedEpisodesCount >= showActionEpisodeCount
@@ -3499,25 +3507,14 @@ export function ShowDetailScreen() {
   // Stats
   const watchedEpisodesCount = totalWatchedEpisodesCount;
   const totalEpisodesCount = useMemo(() => {
-    if (show?.totalEpisodes) return show.totalEpisodes;
+    const showTotalEpisodes = normalizePositiveEpisodeCount(show?.totalEpisodes);
+    if (showTotalEpisodes !== null) return showTotalEpisodes;
+
     const inferred = seasons.reduce((sum, season) => {
       return sum + (season.episodeCount ?? season.episodes?.length ?? 0);
     }, 0);
     return inferred > 0 ? inferred : null;
   }, [seasons, show?.totalEpisodes]);
-
-  const clampedWatchedEpisodesCount =
-    totalEpisodesCount !== null
-      ? Math.min(watchedEpisodesCount, totalEpisodesCount)
-      : watchedEpisodesCount;
-
-  const watchProgressRatio = totalEpisodesCount
-    ? Math.min(1, clampedWatchedEpisodesCount / totalEpisodesCount)
-    : 0;
-  const watchProgressPercent =
-    totalEpisodesCount && clampedWatchedEpisodesCount >= totalEpisodesCount
-      ? 100
-      : Math.floor(watchProgressRatio * 100);
 
   const releasedEpisodeCountForShowAction = useMemo(() => {
     let count = 0;
@@ -3534,8 +3531,55 @@ export function ShowDetailScreen() {
     return count > 0 ? count : null;
   }, [seasons]);
 
+  const showReleasedEpisodesCount = useMemo(() => {
+    const releasedEpisodes = normalizePositiveEpisodeCount(show?.releasedEpisodes);
+    if (releasedEpisodes === null) {
+      return null;
+    }
+
+    return totalEpisodesCount !== null
+      ? Math.min(releasedEpisodes, totalEpisodesCount)
+      : releasedEpisodes;
+  }, [show?.releasedEpisodes, totalEpisodesCount]);
+
+  const watchableEpisodeCount = useMemo(() => {
+    const releasedBase =
+      showReleasedEpisodesCount ?? releasedEpisodeCountForShowAction;
+
+    if (releasedBase === null) {
+      return totalEpisodesCount;
+    }
+
+    const watchableEpisodes = Math.max(watchedEpisodesCount, releasedBase);
+    if (watchableEpisodes <= 0) {
+      return totalEpisodesCount;
+    }
+
+    return totalEpisodesCount !== null
+      ? Math.min(watchableEpisodes, totalEpisodesCount)
+      : watchableEpisodes;
+  }, [
+    releasedEpisodeCountForShowAction,
+    showReleasedEpisodesCount,
+    totalEpisodesCount,
+    watchedEpisodesCount,
+  ]);
+
+  const clampedWatchedEpisodesCount =
+    watchableEpisodeCount !== null
+      ? Math.min(watchedEpisodesCount, watchableEpisodeCount)
+      : watchedEpisodesCount;
+
+  const watchProgressRatio = watchableEpisodeCount
+    ? Math.min(1, clampedWatchedEpisodesCount / watchableEpisodeCount)
+    : 0;
+  const watchProgressPercent =
+    watchableEpisodeCount && clampedWatchedEpisodesCount >= watchableEpisodeCount
+      ? 100
+      : Math.floor(watchProgressRatio * 100);
+
   const showActionEpisodeCount =
-    totalEpisodesCount ?? releasedEpisodeCountForShowAction;
+    watchableEpisodeCount ?? releasedEpisodeCountForShowAction;
   const isShowFullyWatched =
     showActionEpisodeCount !== null &&
     totalWatchedEpisodesCount >= showActionEpisodeCount;
@@ -3771,8 +3815,8 @@ export function ShowDetailScreen() {
         kind: "caught-up",
         text: line.text,
         credit: line.credit,
-        progressLabel: totalEpisodesCount
-          ? `${Math.min(totalWatchedEpisodesCount, totalEpisodesCount)}/${totalEpisodesCount} episodes`
+        progressLabel: watchableEpisodeCount
+          ? `${Math.min(totalWatchedEpisodesCount, watchableEpisodeCount)}/${watchableEpisodeCount} episodes`
           : `${totalWatchedEpisodesCount} episodes watched`,
       });
     }
@@ -3788,8 +3832,8 @@ export function ShowDetailScreen() {
     railAnchorMeta.latestWatchedIndex,
     show,
     seasonWatchedKeyErrors,
-    totalEpisodesCount,
     totalWatchedEpisodesCount,
+    watchableEpisodeCount,
     watchedEpisodeKeys,
   ]);
 
@@ -4023,8 +4067,8 @@ export function ShowDetailScreen() {
                   Watch Progress
                 </Text>
                 <Text className="text-sm font-bold text-primary">
-                  {totalEpisodesCount
-                    ? `${clampedWatchedEpisodesCount}/${totalEpisodesCount}`
+                  {watchableEpisodeCount
+                    ? `${clampedWatchedEpisodesCount}/${watchableEpisodeCount}`
                     : clampedWatchedEpisodesCount}{" "}
                   episodes
                 </Text>
