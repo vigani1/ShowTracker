@@ -1707,13 +1707,16 @@ export function HomeScreen() {
         upcomingCounts,
         watchlistAirtimeMode
       );
+      const hasDisplayableScheduleAttention =
+        availableScheduleCount > 0 ||
+        (hasAvailableScheduleSignal && hasActionableEpisode);
 
       if (item.status === "paused") return false;
       if (item.status === "dropped") return false;
       if (item.trackingState === "upcoming") return false;
       if (
         item.status === "completed" &&
-        !hasAvailableScheduleSignal &&
+        !hasDisplayableScheduleAttention &&
         !hasSameDayScheduleAttention
       ) {
         return false;
@@ -1723,7 +1726,7 @@ export function HomeScreen() {
       }
       if (
         !hasActionableEpisode &&
-        !hasAvailableScheduleSignal &&
+        !hasDisplayableScheduleAttention &&
         !hasSameDayScheduleAttention
       ) {
         return false;
@@ -1732,7 +1735,7 @@ export function HomeScreen() {
       if (
         typeof item.remainingEpisodes === "number" &&
         item.remainingEpisodes <= 0 &&
-        !hasAvailableScheduleSignal &&
+        !hasDisplayableScheduleAttention &&
         !hasSameDayScheduleAttention
       ) {
         return false;

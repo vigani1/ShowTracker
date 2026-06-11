@@ -21,6 +21,7 @@ Most frequently relevant:
 - [ADR-0024](ADR-0024-home-watchlist-tab-return-stability.md): Home Watchlist tab return stability.
 - [ADR-0025](ADR-0025-tmdb-auth-fallback-schedule-maintenance.md): TMDB auth fallback for schedule maintenance.
 - [ADR-0026](ADR-0026-detail-watchable-progress.md): detail watchable progress denominator.
+- [ADR-0027](ADR-0027-home-caught-up-schedule-signal-guard.md): Home caught-up schedule signal guard.
 
 ## Navigation
 
@@ -62,6 +63,7 @@ Most frequently relevant:
 | [ADR-0024](ADR-0024-home-watchlist-tab-return-stability.md) | Home keeps the last Watchlist view stable while users visit Schedule and return. |
 | [ADR-0025](ADR-0025-tmdb-auth-fallback-schedule-maintenance.md) | TMDB auth fallback keeps provider facts flowing for schedule maintenance. |
 | [ADR-0026](ADR-0026-detail-watchable-progress.md) | Detail progress uses released/watchable denominators while catalog totals and upcoming rows remain visible. |
+| [ADR-0027](ADR-0027-home-caught-up-schedule-signal-guard.md) | Home hides caught-up active rows when schedule counts prove the remaining episodes are future-only. |
 
 ## Rule For New ADRs
 
