@@ -67,6 +67,20 @@ npm run schedule-confidence:dev:workflow
 
 Evidence files are written under `.schedule-confidence/`.
 
+## VPS Runtime
+
+The private schedule-confidence runtime is reachable with:
+
+```bash
+ssh showtracker-vps
+```
+
+Its repo checkout is `/opt/showtracker`. The systemd timer is
+`showtracker-schedule-confidence.timer`, and the service runs
+`scripts/ops/run-schedule-confidence.sh`, which fetches and hard-resets the
+checkout to `origin/main` before importing, reconciling, auditing, and applying
+provider deltas.
+
 ## Audits Should Surface
 
 - Missing provider links.

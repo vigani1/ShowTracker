@@ -88,6 +88,18 @@ npm run schedule-confidence:diagnose-projections
 
 Local evidence is written under `.schedule-confidence/`, which is ignored.
 
+## VPS Operations
+
+Use `ssh showtracker-vps` for the private ShowTracker VPS. The schedule-confidence checkout lives at `/opt/showtracker`, and the production timer is `showtracker-schedule-confidence.timer`.
+
+When explicitly asked to update the VPS checkout, use the existing repo deployment shape:
+
+```bash
+ssh showtracker-vps "cd /opt/showtracker && git fetch origin main && git reset --hard origin/main"
+```
+
+The timer's service script also hard-resets `/opt/showtracker` to `origin/main` before each scheduled schedule-confidence run.
+
 ## Common Rules
 
 - Use `@/` absolute imports where the repo does.
