@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, View, Text, ActivityIndicator } from "react-native";
+import { Pressable, View, Text, ActivityIndicator, ScrollView } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { NormalizedEpisode } from "@/lib/api/types";
 import { SwipeableEpisodeCard } from "@/components/SwipeableEpisodeCard";
@@ -36,35 +36,89 @@ interface SeasonAccordionProps {
   initialEpisodeWindowIndex?: number | null;
 }
 
-const LARGE_SEASON_WINDOW_THRESHOLD = 80;
-const LARGE_SEASON_WINDOW_SIZE = 40;
-const LARGE_SEASON_WINDOW_STEP = 40;
+const LARGE_SEASON_PAGE_SIZE = 100;
+const LARGE_SEASON_OVERFLOW_BUFFER = 25;
+const LARGE_SEASON_WINDOW_THRESHOLD =
+  LARGE_SEASON_PAGE_SIZE + LARGE_SEASON_OVERFLOW_BUFFER;
 
-function getInitialEpisodeWindowRange(
+function getEpisodePageCount(episodeCount: number) {
+  return Math.max(1, Math.ceil(episodeCount / LARGE_SEASON_PAGE_SIZE));
+}
+
+function getClampedEpisodePageIndex(episodeCount: number, pageIndex: number) {
+  const maxPageIndex = getEpisodePageCount(episodeCount) - 1;
+  return Math.max(0, Math.min(pageIndex, maxPageIndex));
+}
+
+function getInitialEpisodePageIndex(
   episodeCount: number,
   initialIndex?: number | null
 ) {
   if (episodeCount <= 0) {
-    return { start: 0, end: -1 };
+    return 0;
   }
 
   if (episodeCount <= LARGE_SEASON_WINDOW_THRESHOLD) {
-    return { start: 0, end: episodeCount - 1 };
+    return 0;
   }
 
   const safeInitialIndex =
     typeof initialIndex === "number" && Number.isFinite(initialIndex)
       ? Math.max(0, Math.min(initialIndex, episodeCount - 1))
       : 0;
-  const start = Math.max(
-    0,
-    Math.min(safeInitialIndex - 8, episodeCount - LARGE_SEASON_WINDOW_SIZE)
+  return getClampedEpisodePageIndex(
+    episodeCount,
+    Math.floor(safeInitialIndex / LARGE_SEASON_PAGE_SIZE)
   );
+}
+
+function getEpisodePageRange(episodeCount: number, pageIndex: number) {
+  if (episodeCount <= 0) {
+    return { pageIndex: 0, start: 0, end: -1 };
+  }
+
+  const safePageIndex = getClampedEpisodePageIndex(episodeCount, pageIndex);
+  const start = safePageIndex * LARGE_SEASON_PAGE_SIZE;
 
   return {
+    pageIndex: safePageIndex,
     start,
-    end: Math.min(episodeCount - 1, start + LARGE_SEASON_WINDOW_SIZE - 1),
+    end: Math.min(episodeCount - 1, start + LARGE_SEASON_PAGE_SIZE - 1),
   };
+}
+
+function formatEpisodeRange(start: number, end: number) {
+  return `${start + 1}-${end + 1}`;
+}
+
+interface EpisodePageIconButtonProps {
+  accessibilityLabel: string;
+  disabled: boolean;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+}
+
+function EpisodePageIconButton({
+  accessibilityLabel,
+  disabled,
+  icon,
+  onPress,
+}: EpisodePageIconButtonProps) {
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ disabled }}
+      className="h-9 w-9 items-center justify-center rounded-lg border border-border-default bg-bg-surface"
+      style={({ pressed }) => ({
+        opacity: disabled ? 0.35 : pressed ? 0.78 : 1,
+      })}
+    >
+      <Ionicons name={icon} size={15} color={disabled ? "#52525b" : "#d4d4d8"} />
+    </Pressable>
+  );
 }
 
 export function SeasonAccordion({
@@ -96,15 +150,38 @@ export function SeasonAccordion({
     : (episodeCount != null && episodeCount > 0 && watchedCount >= episodeCount);
   const hasUnreleased = episodes.length > 0 && releasedCount < episodes.length;
   const displayName = name || `Season ${seasonNumber}`;
-  const [episodeWindowRange, setEpisodeWindowRange] = useState(() =>
-    getInitialEpisodeWindowRange(episodes.length, initialEpisodeWindowIndex)
+  const [episodeWindowPage, setEpisodeWindowPage] = useState(() =>
+    getInitialEpisodePageIndex(episodes.length, initialEpisodeWindowIndex)
   );
+  const [isEpisodePagePickerOpen, setIsEpisodePagePickerOpen] = useState(false);
   const shouldWindowEpisodes = episodes.length > LARGE_SEASON_WINDOW_THRESHOLD;
+  const episodePageCount = shouldWindowEpisodes
+    ? getEpisodePageCount(episodes.length)
+    : 1;
+  const safeEpisodeWindowPage = shouldWindowEpisodes
+    ? getClampedEpisodePageIndex(episodes.length, episodeWindowPage)
+    : 0;
+  const episodeWindowRange = useMemo(
+    () => getEpisodePageRange(episodes.length, safeEpisodeWindowPage),
+    [episodes.length, safeEpisodeWindowPage]
+  );
+  const episodePageOptions = useMemo(() => {
+    if (!shouldWindowEpisodes) {
+      return [];
+    }
+
+    return Array.from({ length: episodePageCount }, (_, pageIndex) =>
+      getEpisodePageRange(episodes.length, pageIndex)
+    );
+  }, [episodePageCount, episodes.length, shouldWindowEpisodes]);
+  const canGoToPreviousEpisodePage = safeEpisodeWindowPage > 0;
+  const canGoToNextEpisodePage = safeEpisodeWindowPage < episodePageCount - 1;
 
   useEffect(() => {
-    setEpisodeWindowRange(
-      getInitialEpisodeWindowRange(episodes.length, initialEpisodeWindowIndex)
+    setEpisodeWindowPage(
+      getInitialEpisodePageIndex(episodes.length, initialEpisodeWindowIndex)
     );
+    setIsEpisodePagePickerOpen(false);
   }, [episodes.length, initialEpisodeWindowIndex, isExpanded, seasonNumber]);
 
   const visibleEpisodes = useMemo(() => {
@@ -115,30 +192,17 @@ export function SeasonAccordion({
     return episodes.slice(episodeWindowRange.start, episodeWindowRange.end + 1);
   }, [episodeWindowRange.end, episodeWindowRange.start, episodes, shouldWindowEpisodes]);
 
+  const selectEpisodePage = (pageIndex: number) => {
+    setEpisodeWindowPage(getClampedEpisodePageIndex(episodes.length, pageIndex));
+    setIsEpisodePagePickerOpen(false);
+  };
+
   const shiftEpisodeWindow = (direction: "previous" | "next") => {
-    setEpisodeWindowRange((currentRange) => {
-      const currentSize = Math.max(
-        0,
-        currentRange.end - currentRange.start
-      );
-
-      if (direction === "previous") {
-        const start = Math.max(0, currentRange.start - LARGE_SEASON_WINDOW_STEP);
-        return {
-          start,
-          end: Math.min(episodes.length - 1, start + currentSize),
-        };
-      }
-
-      const end = Math.min(
-        episodes.length - 1,
-        currentRange.end + LARGE_SEASON_WINDOW_STEP
-      );
-      return {
-        start: Math.max(0, end - currentSize),
-        end,
-      };
+    setEpisodeWindowPage((currentPage) => {
+      const delta = direction === "previous" ? -1 : 1;
+      return getClampedEpisodePageIndex(episodes.length, currentPage + delta);
     });
+    setIsEpisodePagePickerOpen(false);
   };
 
   // Button is enabled if episodes haven't been loaded yet, or if there are released episodes
@@ -269,34 +333,128 @@ export function SeasonAccordion({
               <View className="gap-3">
                 {shouldWindowEpisodes ? (
                   <View className="gap-2 rounded-xl border border-border-default bg-bg-base p-3">
-                    <View className="flex-row flex-wrap items-center justify-between gap-2">
-                      <Text className="text-xs font-semibold text-text-secondary">
-                        Episodes {episodeWindowRange.start + 1}-{episodeWindowRange.end + 1} of{" "}
-                        {episodes.length}
-                      </Text>
-                      <View className="flex-row items-center gap-2">
-                        <Pressable
-                          disabled={episodeWindowRange.start <= 0}
+                    <View className="flex-row flex-wrap items-center justify-between gap-3">
+                      <View className="gap-0.5">
+                        <Text className="text-xs font-semibold text-text-secondary">
+                          Episodes{" "}
+                          {formatEpisodeRange(
+                            episodeWindowRange.start,
+                            episodeWindowRange.end
+                          )}{" "}
+                          of {episodes.length}
+                        </Text>
+                        <Text className="text-[11px] text-text-muted">
+                          Page {safeEpisodeWindowPage + 1} of {episodePageCount}
+                        </Text>
+                      </View>
+
+                      <View className="flex-row flex-wrap items-center gap-1.5">
+                        <EpisodePageIconButton
+                          disabled={!canGoToPreviousEpisodePage}
+                          icon="play-skip-back"
+                          accessibilityLabel="Go to first episode page"
+                          onPress={() => selectEpisodePage(0)}
+                        />
+                        <EpisodePageIconButton
+                          disabled={!canGoToPreviousEpisodePage}
+                          icon="chevron-back"
+                          accessibilityLabel="Go to previous episode page"
                           onPress={() => shiftEpisodeWindow("previous")}
-                          accessibilityRole="button"
-                          className="rounded-lg border border-border-default bg-bg-surface px-3 py-2 disabled:opacity-40"
-                        >
-                          <Text className="text-[11px] font-bold uppercase text-text-secondary">
-                            Earlier
-                          </Text>
-                        </Pressable>
+                        />
+
                         <Pressable
-                          disabled={episodeWindowRange.end >= episodes.length - 1}
-                          onPress={() => shiftEpisodeWindow("next")}
+                          onPress={() => setIsEpisodePagePickerOpen((open) => !open)}
                           accessibilityRole="button"
-                          className="rounded-lg border border-border-default bg-bg-surface px-3 py-2 disabled:opacity-40"
+                          accessibilityLabel="Select episode page"
+                          accessibilityState={{ expanded: isEpisodePagePickerOpen }}
+                          className="min-w-[150px] flex-row items-center justify-between gap-2 rounded-lg border border-border-default bg-bg-surface px-3 py-2"
+                          style={({ pressed }) => ({
+                            opacity: pressed ? 0.82 : 1,
+                          })}
                         >
-                          <Text className="text-[11px] font-bold uppercase text-text-secondary">
-                            Later
+                          <Text
+                            numberOfLines={1}
+                            className="flex-1 text-[11px] font-bold uppercase text-text-secondary"
+                          >
+                            {formatEpisodeRange(
+                              episodeWindowRange.start,
+                              episodeWindowRange.end
+                            )}
                           </Text>
+                          <Ionicons
+                            name={isEpisodePagePickerOpen ? "chevron-up" : "chevron-down"}
+                            size={14}
+                            color="#a1a1aa"
+                          />
                         </Pressable>
+
+                        <EpisodePageIconButton
+                          disabled={!canGoToNextEpisodePage}
+                          icon="chevron-forward"
+                          accessibilityLabel="Go to next episode page"
+                          onPress={() => shiftEpisodeWindow("next")}
+                        />
+                        <EpisodePageIconButton
+                          disabled={!canGoToNextEpisodePage}
+                          icon="play-skip-forward"
+                          accessibilityLabel="Go to last episode page"
+                          onPress={() => selectEpisodePage(episodePageCount - 1)}
+                        />
                       </View>
                     </View>
+
+                    {isEpisodePagePickerOpen ? (
+                      <View className="overflow-hidden rounded-lg border border-border-default bg-bg-surface">
+                        <ScrollView
+                          nestedScrollEnabled
+                          keyboardShouldPersistTaps="handled"
+                          style={{ maxHeight: 260 }}
+                        >
+                          <View className="gap-1 p-1">
+                            {episodePageOptions.map((option) => {
+                              const isSelected =
+                                option.pageIndex === safeEpisodeWindowPage;
+                              const pageEpisodeCount = option.end - option.start + 1;
+
+                              return (
+                                <Pressable
+                                  key={option.pageIndex}
+                                  onPress={() => selectEpisodePage(option.pageIndex)}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Show episodes ${formatEpisodeRange(
+                                    option.start,
+                                    option.end
+                                  )}`}
+                                  className={`flex-row items-center gap-3 rounded-md px-3 py-2.5 ${
+                                    isSelected ? "bg-primary/15" : "bg-transparent"
+                                  }`}
+                                  style={({ pressed }) => ({
+                                    opacity: pressed ? 0.82 : 1,
+                                  })}
+                                >
+                                  <View className="flex-1">
+                                    <Text
+                                      className={`text-sm font-semibold ${
+                                        isSelected ? "text-primary" : "text-text-primary"
+                                      }`}
+                                    >
+                                      Episodes {formatEpisodeRange(option.start, option.end)}
+                                    </Text>
+                                    <Text className="text-[11px] text-text-muted">
+                                      {pageEpisodeCount} episode
+                                      {pageEpisodeCount === 1 ? "" : "s"}
+                                    </Text>
+                                  </View>
+                                  {isSelected ? (
+                                    <Ionicons name="checkmark" size={16} color="#ef4444" />
+                                  ) : null}
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                        </ScrollView>
+                      </View>
+                    ) : null}
                   </View>
                 ) : null}
 

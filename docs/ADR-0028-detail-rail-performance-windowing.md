@@ -26,7 +26,7 @@ The detail quick rail now uses fixed-width windowing inside the existing horizon
 
 Rail images are only mounted for the rendered window. On web, rail images also request lazy/asynchronous image decoding.
 
-Expanded seasons with more than 80 loaded episodes now render a focused 40-episode window. The initial window is anchored to the same next-relevant episode used by the quick rail when that episode belongs to the season. Earlier/Later controls shift the window through the loaded season without mounting every card at once. Smaller seasons keep rendering all loaded episodes.
+Expanded seasons now render all episodes through a 125-episode buffer. Above that, they render 100-episode pages. The initial page is anchored to the same next-relevant episode used by the quick rail when that episode belongs to the season. First, previous, range-picker, next, and last controls move through the loaded season without mounting every card at once. Smaller seasons, including just-over-100 totals such as 110 or 120 episodes, keep rendering all loaded episodes.
 
 Status selection now closes the menu and updates the top action label optimistically while the Convex mutation runs. The underlying progress, watched keys, Home/watchlist projections, and persisted status still come from Convex. If the mutation fails, the optimistic label rolls back and the existing error message path is used.
 
@@ -36,7 +36,7 @@ Status selection now closes the menu and updates the top action label optimistic
 
 The lag was dominated by client rendering and image mounting, not by a change in release eligibility. Preserving the `ScrollView` and existing prepend compensation avoids the previous class of rail jumps while reducing the mounted work for very large shows.
 
-Windowing expanded huge seasons prevents the auto-expanded accordion from undoing the rail optimization. A focused window keeps the user's next area visible while still allowing navigation through the full loaded season.
+Windowing expanded huge seasons prevents the auto-expanded accordion from undoing the rail optimization. A 100-episode page is large enough to reduce paging friction while still bounding image/card mounting on thousand-episode shows. The 25-episode overflow buffer avoids pointless pagination for seasons only slightly above 100 episodes, while totals such as 131 episodes become two predictable pages.
 
 Optimistic status feedback improves perceived responsiveness without changing server-side write order or Home eligibility. Home and watchlist state still update through the same Convex mutation and projection paths.
 
@@ -58,7 +58,7 @@ When previous seasons are loaded and prepended, the existing first-item anchor i
 
 The caught-up card keeps its wider card width in spacer calculations. The loading card is also included in the virtual width when present.
 
-Huge expanded seasons render a fixed-size episode window. The full episode payload remains in client state for actions and navigation, but hidden episode cards and images are not mounted until the user moves the window.
+Huge expanded seasons render fixed 100-episode pages after the 125-episode threshold. The full episode payload remains in client state for actions and navigation, but hidden episode cards and images are not mounted until the user moves pages.
 
 If a status mutation fails, the optimistic action label returns to the latest subscribed tracking state.
 
@@ -74,9 +74,10 @@ Required local checks:
 
 Manual web checks:
 
-- Open `/show/tmdb:tv:30983` and confirm the quick rail and expanded season mount small rendered windows rather than every episode card.
+- Open `/show/tmdb:tv:30983` and confirm the quick rail and expanded season mount bounded rendered windows rather than every episode card.
 - Confirm the rail initially anchors near the next relevant episode.
 - Drag/scroll left and right, including near rail edges, and confirm adjacent loads do not jump the current position.
+- Use the season paging controls to jump to first, previous, selected range, next, and last episode pages.
 - Change a status from the top action menu and confirm the menu closes immediately, the label updates optimistically, and the persisted Convex state catches up.
 - Open `/show/tmdb:tv:37854` and confirm ordinary long-running shows still render and scroll correctly.
 
