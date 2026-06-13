@@ -1,4 +1,4 @@
-import { Pressable, View, Text, ActivityIndicator, Image } from "react-native";
+import { Pressable, View, Text, ActivityIndicator, Image, Platform } from "react-native";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
 interface EpisodeAvailability {
@@ -62,6 +62,7 @@ export function EpisodeCard({
             source={{ uri: toHttpsImageUrl(stillUrl) }}
             className="h-full w-full"
             resizeMode="cover"
+            {...(Platform.OS === "web" ? { loading: "lazy", decoding: "async" } : {})}
           />
         ) : (
           <View className="h-full w-full items-center justify-center bg-bg-elevated">

@@ -4404,6 +4404,14 @@ export function ShowDetailScreen() {
               <View className="gap-3">
                 {seasons.map((season) => {
                   const episodes = season.episodes ?? [];
+                  const initialEpisodeWindowIndex =
+                    railAnchorEpisode?.seasonNumber === season.seasonNumber
+                      ? episodes.findIndex(
+                          (episode) =>
+                            episode.seasonNumber === railAnchorEpisode.seasonNumber &&
+                            episode.episodeNumber === railAnchorEpisode.episodeNumber
+                        )
+                      : null;
                   // Only calculate released count if episodes are loaded
                   // Otherwise pass 0 to disable the button until loaded
                   const releasedCount = episodes.length > 0
@@ -4433,6 +4441,11 @@ export function ShowDetailScreen() {
                       onEpisodeSwipeAction={(episode, action) => {
                         void handleEpisodeSwipeAction(episode, action);
                       }}
+                      initialEpisodeWindowIndex={
+                        initialEpisodeWindowIndex !== null && initialEpisodeWindowIndex >= 0
+                          ? initialEpisodeWindowIndex
+                          : null
+                      }
                     />
                   );
                 })}

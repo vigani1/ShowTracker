@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { Pressable, View, Text, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { NormalizedEpisode } from "@/lib/api/types";
@@ -32,6 +33,38 @@ interface SeasonAccordionProps {
     action: "watch" | "unwatch" | "rewatch"
   ) => void;
   episodeWatchCounts?: Record<string, number>;
+  initialEpisodeWindowIndex?: number | null;
+}
+
+const LARGE_SEASON_WINDOW_THRESHOLD = 80;
+const LARGE_SEASON_WINDOW_SIZE = 40;
+const LARGE_SEASON_WINDOW_STEP = 40;
+
+function getInitialEpisodeWindowRange(
+  episodeCount: number,
+  initialIndex?: number | null
+) {
+  if (episodeCount <= 0) {
+    return { start: 0, end: -1 };
+  }
+
+  if (episodeCount <= LARGE_SEASON_WINDOW_THRESHOLD) {
+    return { start: 0, end: episodeCount - 1 };
+  }
+
+  const safeInitialIndex =
+    typeof initialIndex === "number" && Number.isFinite(initialIndex)
+      ? Math.max(0, Math.min(initialIndex, episodeCount - 1))
+      : 0;
+  const start = Math.max(
+    0,
+    Math.min(safeInitialIndex - 8, episodeCount - LARGE_SEASON_WINDOW_SIZE)
+  );
+
+  return {
+    start,
+    end: Math.min(episodeCount - 1, start + LARGE_SEASON_WINDOW_SIZE - 1),
+  };
 }
 
 export function SeasonAccordion({
@@ -53,6 +86,7 @@ export function SeasonAccordion({
   onToggleEpisode,
   onEpisodeSwipeAction,
   episodeWatchCounts,
+  initialEpisodeWindowIndex,
 }: SeasonAccordionProps) {
   // Check if all episodes are watched
   // When episodes are loaded, compare against released count
@@ -62,6 +96,50 @@ export function SeasonAccordion({
     : (episodeCount != null && episodeCount > 0 && watchedCount >= episodeCount);
   const hasUnreleased = episodes.length > 0 && releasedCount < episodes.length;
   const displayName = name || `Season ${seasonNumber}`;
+  const [episodeWindowRange, setEpisodeWindowRange] = useState(() =>
+    getInitialEpisodeWindowRange(episodes.length, initialEpisodeWindowIndex)
+  );
+  const shouldWindowEpisodes = episodes.length > LARGE_SEASON_WINDOW_THRESHOLD;
+
+  useEffect(() => {
+    setEpisodeWindowRange(
+      getInitialEpisodeWindowRange(episodes.length, initialEpisodeWindowIndex)
+    );
+  }, [episodes.length, initialEpisodeWindowIndex, isExpanded, seasonNumber]);
+
+  const visibleEpisodes = useMemo(() => {
+    if (!shouldWindowEpisodes) {
+      return episodes;
+    }
+
+    return episodes.slice(episodeWindowRange.start, episodeWindowRange.end + 1);
+  }, [episodeWindowRange.end, episodeWindowRange.start, episodes, shouldWindowEpisodes]);
+
+  const shiftEpisodeWindow = (direction: "previous" | "next") => {
+    setEpisodeWindowRange((currentRange) => {
+      const currentSize = Math.max(
+        0,
+        currentRange.end - currentRange.start
+      );
+
+      if (direction === "previous") {
+        const start = Math.max(0, currentRange.start - LARGE_SEASON_WINDOW_STEP);
+        return {
+          start,
+          end: Math.min(episodes.length - 1, start + currentSize),
+        };
+      }
+
+      const end = Math.min(
+        episodes.length - 1,
+        currentRange.end + LARGE_SEASON_WINDOW_STEP
+      );
+      return {
+        start: Math.max(0, end - currentSize),
+        end,
+      };
+    });
+  };
 
   // Button is enabled if episodes haven't been loaded yet, or if there are released episodes
   const canMarkSeason = episodes.length === 0 || releasedCount > 0;
@@ -189,7 +267,40 @@ export function SeasonAccordion({
               </View>
             ) : (
               <View className="gap-3">
-                {episodes.map((episode) => {
+                {shouldWindowEpisodes ? (
+                  <View className="gap-2 rounded-xl border border-border-default bg-bg-base p-3">
+                    <View className="flex-row flex-wrap items-center justify-between gap-2">
+                      <Text className="text-xs font-semibold text-text-secondary">
+                        Episodes {episodeWindowRange.start + 1}-{episodeWindowRange.end + 1} of{" "}
+                        {episodes.length}
+                      </Text>
+                      <View className="flex-row items-center gap-2">
+                        <Pressable
+                          disabled={episodeWindowRange.start <= 0}
+                          onPress={() => shiftEpisodeWindow("previous")}
+                          accessibilityRole="button"
+                          className="rounded-lg border border-border-default bg-bg-surface px-3 py-2 disabled:opacity-40"
+                        >
+                          <Text className="text-[11px] font-bold uppercase text-text-secondary">
+                            Earlier
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          disabled={episodeWindowRange.end >= episodes.length - 1}
+                          onPress={() => shiftEpisodeWindow("next")}
+                          accessibilityRole="button"
+                          className="rounded-lg border border-border-default bg-bg-surface px-3 py-2 disabled:opacity-40"
+                        >
+                          <Text className="text-[11px] font-bold uppercase text-text-secondary">
+                            Later
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                ) : null}
+
+                {visibleEpisodes.map((episode) => {
                   const key = `${episode.seasonNumber}:${episode.episodeNumber}`;
                   const watched = watchedEpisodeKeys.has(key);
                   const isUpdating = pendingEpisodeKeys[key] || false;
