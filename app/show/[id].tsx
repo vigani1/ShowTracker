@@ -889,6 +889,7 @@ export function ShowDetailScreen() {
   const [hasRailInitialized, setHasRailInitialized] = useState(false);
   const [seasonWatchedKeys, setSeasonWatchedKeys] = useState<Record<number, Set<string>>>({});
   const [optimisticTrackingStatus, setOptimisticTrackingStatus] = useState<ShowTrackingStatus | null>(null);
+  const [optimisticIsInWatchlist, setOptimisticIsInWatchlist] = useState<boolean | null>(null);
   const [watchActionTarget, setWatchActionTarget] = useState<WatchActionTarget | null>(null);
   const [isWatchActionRunning, setIsWatchActionRunning] = useState(false);
   const [nextSeasonPrompt, setNextSeasonPrompt] = useState<NextSeasonPrompt | null>(null);
@@ -936,6 +937,7 @@ export function ShowDetailScreen() {
     setHasRailInitialized(false);
     setMovieWatchCount(null);
     setOptimisticTrackingStatus(null);
+    setOptimisticIsInWatchlist(null);
     setWatchActionTarget(null);
     setNextSeasonPrompt(null);
     setPreviousEpisodesPrompt(null);
@@ -987,20 +989,35 @@ export function ShowDetailScreen() {
   const trackingLoaded = tracking !== undefined || !canTrackShow;
   const isInWatchlist = trackingLoaded && tracking?.inWatchlist === true;
   
-  // Use optimistic status if set, otherwise fall back to query result
+  // Use optimistic action-bar state if set, otherwise fall back to query result.
   const activeTrackingStatus: ShowTrackingStatus = optimisticTrackingStatus ?? (
     isTrackingStatus(tracking?.status)
       ? tracking.status
       : "plan_to_watch"
   );
+  const displayIsInWatchlist = optimisticIsInWatchlist ?? isInWatchlist;
+  const displayTrackingStatus = optimisticTrackingStatus ?? tracking?.status;
   
-  // Reset optimistic status when tracking query updates
+  // Reset optimistic state once the subscribed tracking query catches up.
   useEffect(() => {
-    if (tracking?.status && optimisticTrackingStatus !== null) {
+    if (
+      optimisticTrackingStatus !== null &&
+      tracking?.status === optimisticTrackingStatus
+    ) {
       setOptimisticTrackingStatus(null);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tracking?.status]);
+    if (
+      optimisticIsInWatchlist !== null &&
+      tracking?.inWatchlist === optimisticIsInWatchlist
+    ) {
+      setOptimisticIsInWatchlist(null);
+    }
+  }, [
+    optimisticIsInWatchlist,
+    optimisticTrackingStatus,
+    tracking?.inWatchlist,
+    tracking?.status,
+  ]);
 
   useEffect(() => {
     if (isRemovingFromWatchlist && tracking?.inWatchlist === false) {
@@ -2216,13 +2233,23 @@ export function ShowDetailScreen() {
       return false;
     }
     if (isInWatchlist && tracking?.status === nextStatus) {
+      setIsStatusMenuVisible(false);
       return true;
     }
 
     const payload = buildShowPayload(show);
+    const fallbackOptimisticStatus = isTrackingStatus(tracking?.status)
+      ? tracking.status
+      : null;
+    const fallbackOptimisticInWatchlist = trackingLoaded
+      ? tracking?.inWatchlist === true
+      : null;
 
     setIsSettingStatus(true);
     setTrackingError(null);
+    setOptimisticTrackingStatus(nextStatus);
+    setOptimisticIsInWatchlist(true);
+    setIsStatusMenuVisible(false);
     try {
       if (!isInWatchlist && show.mediaType === "anime") {
         await addAnimeToWatchlistWithRelations(payload);
@@ -2235,6 +2262,8 @@ export function ShowDetailScreen() {
       return true;
     } catch (mutationError) {
       console.error("Failed to update watch status", mutationError);
+      setOptimisticTrackingStatus(fallbackOptimisticStatus);
+      setOptimisticIsInWatchlist(fallbackOptimisticInWatchlist);
       setTrackingError("Could not update watch status.");
       return false;
     } finally {
@@ -2242,11 +2271,8 @@ export function ShowDetailScreen() {
     }
   };
 
-  const handleSelectStatusFromMenu = async (nextStatus: ShowTrackingStatus) => {
-    const didUpdate = await handleSetTrackingStatus(nextStatus);
-    if (didUpdate) {
-      setIsStatusMenuVisible(false);
-    }
+  const handleSelectStatusFromMenu = (nextStatus: ShowTrackingStatus) => {
+    void handleSetTrackingStatus(nextStatus);
   };
 
   const handleOpenAddToWatchlistPrompt = () => {
@@ -3978,11 +4004,11 @@ export function ShowDetailScreen() {
                 statusLabel={
                   !trackingLoaded
                     ? "Loading"
-                    : isInWatchlist
+                    : displayIsInWatchlist
                       ? activeTrackingOption.label
                       : "Not Tracked"
                 }
-                isTracked={isInWatchlist}
+                isTracked={displayIsInWatchlist}
                 isFavorite={isFavorite}
                 canAddToList
                 isBusy={!canTrackShow || isStatusMenuBusy}
@@ -4076,8 +4102,8 @@ export function ShowDetailScreen() {
               <ProgressBar progress={watchProgressRatio} height={8} animated />
               <View className="mt-3 flex-row items-center justify-between">
                 <Text className="text-xs text-text-muted">
-                  {isInWatchlist
-                    ? `Saved${tracking?.status ? ` · ${formatTrackingStatus(tracking.status)}` : ""}`
+                  {displayIsInWatchlist
+                    ? `Saved${displayTrackingStatus ? ` · ${formatTrackingStatus(displayTrackingStatus)}` : ""}`
                     : trackingLoaded
                       ? "Add to watchlist to track your progress"
                       : "Loading tracking..."}

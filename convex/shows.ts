@@ -8070,7 +8070,7 @@ export const getMovieWatchHistory = query({
   },
 });
 
-// Get all episode watch counts for a show (for displaying rewatch counts)
+// Get rewatch counts for a show. Count 1 is visually equivalent to no count.
 export const getEpisodeWatchCounts = query({
   args: showLookupInput,
   handler: async (ctx, args) => {
@@ -8090,11 +8090,13 @@ export const getEpisodeWatchCounts = query({
       .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", show._id))
       .take(5000);
 
-    return watchedEpisodes.map((entry) => ({
-      season: entry.season,
-      episode: entry.episode,
-      count: entry.watchCount ?? 1,
-    }));
+    return watchedEpisodes
+      .filter((entry) => (entry.watchCount ?? 1) > 1)
+      .map((entry) => ({
+        season: entry.season,
+        episode: entry.episode,
+        count: entry.watchCount ?? 1,
+      }));
   },
 });
 

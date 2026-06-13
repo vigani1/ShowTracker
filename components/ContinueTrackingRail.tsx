@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -55,7 +55,11 @@ type ContinueTrackingRailProps = {
 const LOAD_MORE_THRESHOLD_PX = 180;
 const RAIL_CARD_WIDTH = 192;
 const RAIL_CARD_GAP = 12;
+const RAIL_CAUGHT_UP_CARD_WIDTH = 256;
+const RAIL_LOADING_CARD_WIDTH = 96;
 const RAIL_SIDE_PADDING = 16;
+const RAIL_MIN_RENDERED_ITEMS = 10;
+const RAIL_OVERSCAN_PX = (RAIL_CARD_WIDTH + RAIL_CARD_GAP) * 4;
 const DRAG_CLICK_SUPPRESSION_MS = 120;
 
 function getRailItemKey(item: ContinueTrackingRailItem) {
@@ -64,6 +68,116 @@ function getRailItemKey(item: ContinueTrackingRailItem) {
   }
 
   return `${item.episode.seasonNumber}:${item.episode.episodeNumber}`;
+}
+
+function getRailItemWidth(item: ContinueTrackingRailItem) {
+  return item.kind === "caught-up" ? RAIL_CAUGHT_UP_CARD_WIDTH : RAIL_CARD_WIDTH;
+}
+
+function getInitialVirtualRange(initialScrollIndex: number) {
+  const start = Math.max(0, initialScrollIndex - Math.floor(RAIL_MIN_RENDERED_ITEMS / 2));
+  return {
+    start,
+    end: start + RAIL_MIN_RENDERED_ITEMS - 1,
+  };
+}
+
+function clampVirtualRange(
+  range: { start: number; end: number },
+  itemCount: number
+) {
+  if (itemCount <= 0) {
+    return { start: 0, end: -1 };
+  }
+
+  const start = Math.max(0, Math.min(range.start, itemCount - 1));
+  const end = Math.max(start, Math.min(range.end, itemCount - 1));
+  return { start, end };
+}
+
+function areVirtualRangesEqual(
+  left: { start: number; end: number },
+  right: { start: number; end: number }
+) {
+  return left.start === right.start && left.end === right.end;
+}
+
+function findFirstIntersectingItem(
+  offsets: number[],
+  widths: number[],
+  boundary: number
+) {
+  let low = 0;
+  let high = offsets.length - 1;
+  let answer = 0;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (offsets[mid] + widths[mid] >= boundary) {
+      answer = mid;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  return answer;
+}
+
+function findLastIntersectingItem(offsets: number[], boundary: number) {
+  let low = 0;
+  let high = offsets.length - 1;
+  let answer = offsets.length - 1;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (offsets[mid] <= boundary) {
+      answer = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return answer;
+}
+
+function getVisibleRailRange({
+  offsetX,
+  viewportWidth,
+  offsets,
+  widths,
+}: {
+  offsetX: number;
+  viewportWidth: number;
+  offsets: number[];
+  widths: number[];
+}) {
+  if (offsets.length === 0) {
+    return { start: 0, end: -1 };
+  }
+
+  const safeViewportWidth = Math.max(viewportWidth, RAIL_CARD_WIDTH);
+  const startBoundary = Math.max(0, offsetX - RAIL_OVERSCAN_PX);
+  const endBoundary = offsetX + safeViewportWidth + RAIL_OVERSCAN_PX;
+  let start = findFirstIntersectingItem(offsets, widths, startBoundary);
+  let end = findLastIntersectingItem(offsets, endBoundary);
+
+  while (end - start + 1 < Math.min(RAIL_MIN_RENDERED_ITEMS, offsets.length)) {
+    if (start > 0) {
+      start -= 1;
+    }
+    if (end - start + 1 >= Math.min(RAIL_MIN_RENDERED_ITEMS, offsets.length)) {
+      break;
+    }
+    if (end < offsets.length - 1) {
+      end += 1;
+    } else if (start === 0) {
+      break;
+    }
+  }
+
+  return { start, end };
 }
 
 export function ContinueTrackingRail({
@@ -87,11 +201,85 @@ export function ContinueTrackingRail({
   const hasAutoPositionedRef = useRef(false);
   const isDragClickSuppressedRef = useRef(false);
   const dragClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialScrollIndexRef = useRef(initialScrollIndex);
+  const [railViewportWidth, setRailViewportWidth] = useState(0);
+  const [visibleRange, setVisibleRange] = useState(() =>
+    getInitialVirtualRange(initialScrollIndex)
+  );
+
+  const railEntries = useMemo(() => {
+    const entries: {
+      key: string;
+      kind: "item" | "loading";
+      item?: ContinueTrackingRailItem;
+      width: number;
+    }[] = items.map((item) => ({
+      key: getRailItemKey(item),
+      kind: "item" as const,
+      item,
+      width: getRailItemWidth(item),
+    }));
+
+    if (isLoadingMore) {
+      entries.push({
+        key: "loading-more",
+        kind: "loading",
+        width: RAIL_LOADING_CARD_WIDTH,
+      });
+    }
+
+    return entries;
+  }, [isLoadingMore, items]);
+
+  const railMetrics = useMemo(() => {
+    const offsets: number[] = [];
+    const widths = railEntries.map((entry) => entry.width);
+    let cursor = RAIL_SIDE_PADDING;
+
+    for (let index = 0; index < railEntries.length; index += 1) {
+      offsets.push(cursor);
+      cursor += railEntries[index].width;
+      if (index < railEntries.length - 1) {
+        cursor += RAIL_CARD_GAP;
+      }
+    }
+
+    return {
+      offsets,
+      widths,
+      totalWidth: cursor + RAIL_SIDE_PADDING,
+    };
+  }, [railEntries]);
+
+  const effectiveViewportWidth = railViewportWidth || Math.min(width, 960);
+
+  const updateVisibleRangeForOffset = useCallback((offsetX: number) => {
+    const nextRange = getVisibleRailRange({
+      offsetX,
+      viewportWidth: effectiveViewportWidth,
+      offsets: railMetrics.offsets,
+      widths: railMetrics.widths,
+    });
+
+    setVisibleRange((currentRange) =>
+      areVirtualRangesEqual(currentRange, nextRange) ? currentRange : nextRange
+    );
+  }, [effectiveViewportWidth, railMetrics.offsets, railMetrics.widths]);
+
+  useEffect(() => {
+    initialScrollIndexRef.current = initialScrollIndex;
+  }, [initialScrollIndex]);
+
+  useEffect(() => {
+    updateVisibleRangeForOffset(scrollOffsetXRef.current);
+  }, [updateVisibleRangeForOffset]);
 
   useEffect(() => {
     hasAutoPositionedRef.current = false;
     previousItemKeysRef.current = [];
     isDragClickSuppressedRef.current = false;
+    scrollOffsetXRef.current = 0;
+    setVisibleRange(getInitialVirtualRange(initialScrollIndexRef.current));
   }, [resetScrollKey]);
 
   useEffect(() => {
@@ -114,7 +302,8 @@ export function ContinueTrackingRail({
     const nextOffset = scrollOffsetXRef.current + offsetDelta;
     scrollViewRef.current?.scrollTo({ x: nextOffset, animated: false });
     scrollOffsetXRef.current = nextOffset;
-  }, [items]);
+    updateVisibleRangeForOffset(nextOffset);
+  }, [items, updateVisibleRangeForOffset]);
 
   useEffect(() => {
     return () => {
@@ -127,6 +316,7 @@ export function ContinueTrackingRail({
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     scrollOffsetXRef.current = contentOffset.x;
+    updateVisibleRangeForOffset(contentOffset.x);
 
     if (isLoadingMore) {
       return;
@@ -200,7 +390,27 @@ export function ContinueTrackingRail({
     scrollViewRef.current?.scrollTo({ x: targetX, animated: false });
     scrollOffsetXRef.current = targetX;
     hasAutoPositionedRef.current = true;
+    updateVisibleRangeForOffset(targetX);
   };
+
+  const virtualRange = clampVirtualRange(visibleRange, railEntries.length);
+  const renderedEntries =
+    virtualRange.end >= virtualRange.start
+      ? railEntries.slice(virtualRange.start, virtualRange.end + 1)
+      : [];
+  const leftSpacerWidth =
+    renderedEntries.length > 0
+      ? railMetrics.offsets[virtualRange.start] ?? RAIL_SIDE_PADDING
+      : RAIL_SIDE_PADDING;
+  const renderedSegmentEnd =
+    renderedEntries.length > 0
+      ? (railMetrics.offsets[virtualRange.end] ?? RAIL_SIDE_PADDING) +
+        (railMetrics.widths[virtualRange.end] ?? 0)
+      : RAIL_SIDE_PADDING;
+  const rightSpacerWidth =
+    renderedEntries.length > 0
+      ? Math.max(RAIL_SIDE_PADDING, railMetrics.totalWidth - renderedSegmentEnd)
+      : RAIL_SIDE_PADDING;
 
   return (
     <View
@@ -232,16 +442,49 @@ export function ContinueTrackingRail({
         horizontal
         showsHorizontalScrollIndicator
         scrollEventThrottle={16}
+        onLayout={(event) => {
+          const nextWidth = event.nativeEvent.layout.width;
+          setRailViewportWidth((currentWidth) =>
+            Math.abs(currentWidth - nextWidth) > 1 ? nextWidth : currentWidth
+          );
+        }}
         onScroll={handleScroll}
         onContentSizeChange={autoPositionToAnchor}
-        contentContainerStyle={{ gap: 12, paddingHorizontal: 16, paddingBottom: 4 }}
+        contentContainerStyle={{ paddingBottom: 4 }}
       >
-        {items.map((item, index) => {
+        <View pointerEvents="none" style={{ width: leftSpacerWidth }} />
+
+        {renderedEntries.map((entry, renderedIndex) => {
+          const realIndex = virtualRange.start + renderedIndex;
+          const marginRight =
+            realIndex < virtualRange.end && realIndex < railEntries.length - 1
+              ? RAIL_CARD_GAP
+              : 0;
+
+          if (entry.kind === "loading") {
+            return (
+              <View
+                key={entry.key}
+                className="items-center justify-center rounded-2xl border border-border-default bg-bg-base"
+                style={{ width: entry.width, marginRight }}
+              >
+                <ActivityIndicator size="small" color="#ef4444" />
+                <Text className="mt-2 text-[11px] text-text-secondary">Loading</Text>
+              </View>
+            );
+          }
+
+          const item = entry.item;
+          if (!item) {
+            return null;
+          }
+
           if (item.kind === "caught-up") {
             return (
               <View
                 key="caught-up"
                 className="w-64 justify-between overflow-hidden rounded-2xl border border-emerald-400/30 bg-emerald-500/10 p-4"
+                style={{ marginRight }}
               >
                 <View className="flex-row items-center gap-2">
                   <View className="h-9 w-9 items-center justify-center rounded-full bg-emerald-500/20">
@@ -274,7 +517,7 @@ export function ContinueTrackingRail({
                 ? `Watched ${watchCount}x`
                 : "Watched"
               : availability.isReleased
-                ? index === 0
+                ? realIndex === 0
                   ? "Start"
                   : "Watch"
                 : availability.dateLabel;
@@ -293,6 +536,7 @@ export function ContinueTrackingRail({
               accessibilityRole="button"
               className="w-48 overflow-hidden rounded-2xl border-2 border-border-default bg-bg-base active:bg-bg-elevated/70 disabled:opacity-45"
               style={({ pressed }) => ({
+                marginRight,
                 transform: [{ scale: pressed ? 0.985 : 1 }],
               })}
             >
@@ -302,6 +546,9 @@ export function ContinueTrackingRail({
                     source={{ uri: imageUrl }}
                     className="absolute inset-0 h-full w-full"
                     resizeMode="cover"
+                    {...(Platform.OS === "web"
+                      ? { loading: "lazy", decoding: "async" }
+                      : {})}
                   />
                 ) : null}
                 <View className="absolute inset-0 bg-black/45" />
@@ -370,12 +617,7 @@ export function ContinueTrackingRail({
           );
         })}
 
-        {isLoadingMore ? (
-          <View className="w-24 items-center justify-center rounded-2xl border border-border-default bg-bg-base">
-            <ActivityIndicator size="small" color="#ef4444" />
-            <Text className="mt-2 text-[11px] text-text-secondary">Loading</Text>
-          </View>
-        ) : null}
+        <View pointerEvents="none" style={{ width: rightSpacerWidth }} />
       </ScrollView>
 
       {isDesktopWeb ? (
