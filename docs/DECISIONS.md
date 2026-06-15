@@ -26,6 +26,7 @@ Most frequently relevant:
 - [ADR-0029](ADR-0029-positive-backlog-release-freshness.md): positive released backlog and provider freshness stamps.
 - [ADR-0030](ADR-0030-terminal-total-watchlist-backlog.md): terminal totals preserve watchlist backlog.
 - [ADR-0031](ADR-0031-watched-anchor-schedule-counts.md): watched anchors suppress stale schedule counts.
+- [ADR-0032](ADR-0032-terminal-total-release-denominator-guard.md): terminal totals do not override positive released counts.
 
 ## Navigation
 
@@ -72,6 +73,7 @@ Most frequently relevant:
 | [ADR-0029](ADR-0029-positive-backlog-release-freshness.md) | Home treats fresh positive released backlog as actionable and client payloads without release facts do not freshen provider metadata. |
 | [ADR-0030](ADR-0030-terminal-total-watchlist-backlog.md) | Terminal TV/anime totals preserve Home backlog when stale released counts collapse to zero. |
 | [ADR-0031](ADR-0031-watched-anchor-schedule-counts.md) | Watched episode anchors suppress stale Home schedule counts and widened totals repair affected aggregates. |
+| [ADR-0032](ADR-0032-terminal-total-release-denominator-guard.md) | Terminal raw totals rescue missing release counts but do not override positive released/watchable denominators. |
 
 ## Rule For New ADRs
 

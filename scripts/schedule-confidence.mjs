@@ -249,10 +249,26 @@ const fixtureLibrary = [
     title: "Sparse Old Total Trap",
     mediaType: "tv",
     status: "watching",
+    showStatus: "ended",
     watchedEpisodesCount: 220,
     totalEpisodes: 378,
     releasedEpisodes: 378,
     tmdbId: 1012,
+    lastWatchedAt: Date.UTC(2026, 4, 1),
+  },
+  {
+    id: "fixture-terminal-positive-released-caught-up",
+    userId: "fixture-user",
+    showId: "show-terminal-positive-released-caught-up",
+    title: "Terminal Positive Released Caught Up",
+    mediaType: "tv",
+    status: "watching",
+    showStatus: "ended",
+    watchedEpisodesCount: 161,
+    totalEpisodes: 184,
+    releasedEpisodes: 161,
+    remainingEpisodes: 0,
+    tmdbId: 1021,
     lastWatchedAt: Date.UTC(2026, 4, 1),
   },
   {
@@ -496,6 +512,18 @@ const fixtureProviderEvents = [
     name: "Old Series Finale",
     airDate: "2022-04-29T00:00:00.000Z",
     providers: { tmdbId: 1020 },
+  },
+  {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:tv:1021",
+    title: "Terminal Positive Released Caught Up",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 7,
+    episodeNumber: 161,
+    name: "Old Series Finale",
+    airDate: "2007-11-09T00:00:00.000Z",
+    providers: { tmdbId: 1021 },
   },
   {
     sourceProvider: "tvmaze",
@@ -1902,7 +1930,11 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const importedWatchableEpisodes =
     typeof importedRemainingEpisodes === "number" && importedRemainingEpisodes > 0
       ? watchedEpisodesCount + Math.floor(importedRemainingEpisodes)
-      : null;
+      : typeof importedRemainingEpisodes === "number" &&
+          importedRemainingEpisodes === 0 &&
+          positiveIntegerOrNull(item.released_episodes) !== null
+        ? watchedEpisodesCount
+        : null;
   const providerIds = compactProviderIds({
     tmdbId: item.tmdb_id,
     tvmazeId: item.tvmaze_id ?? match.rows.find((row) => row.tvmaze_id !== null)?.tvmaze_id,
@@ -1919,7 +1951,10 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     isTerminalLifecycleStatus(item.show_status) &&
     positiveIntegerOrNull(item.total_episodes);
   const hasTerminalKnownTotal =
-    typeof terminalKnownTotalEpisodes === "number" && !hasKnownFutureEvents;
+    typeof terminalKnownTotalEpisodes === "number" &&
+    !hasKnownFutureEvents &&
+    positiveIntegerOrNull(item.released_episodes) === null &&
+    importedWatchableEpisodes === null;
   const hasSparseOldReleaseHistory =
     !hasKnownFutureEvents &&
     releasedEvents.length <= 1 &&
@@ -5124,6 +5159,17 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
     {
       fact: facts.get("show-terminal-ended-total"),
       delta: byShowId.get("show-terminal-ended-total"),
+    }
+  );
+  assertValidation(
+    facts.get("show-terminal-positive-released-caught-up")?.released_episodes === 161 &&
+      facts.get("show-terminal-positive-released-caught-up")?.total_episodes === 184 &&
+      byShowId.get("show-terminal-positive-released-caught-up")?.simulatedProjection.remainingEpisodes === 0 &&
+      byShowId.get("show-terminal-positive-released-caught-up")?.simulatedProjection.hasHomeAttention === false,
+    "Terminal rows with a positive released/watchable count should not use inflated raw totals as Home backlog.",
+    {
+      fact: facts.get("show-terminal-positive-released-caught-up"),
+      delta: byShowId.get("show-terminal-positive-released-caught-up"),
     }
   );
   assertValidation(

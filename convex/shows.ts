@@ -27,6 +27,7 @@ import type { NormalizedShow } from "@/lib/api/types";
 const RELATION_SYNC_THROTTLE_MS = 1000 * 60 * 60 * 24 * 30;
 const FRANCHISE_AUTO_SYNC_FRESH_MS = 1000 * 60 * 60 * 24 * 30;
 const REFRESH_THROTTLE_MS = 1000 * 60 * 60;
+const SCHEDULE_CONFIDENCE_TOKEN_ENV = "SCHEDULE_CONFIDENCE_IMPORT_TOKEN";
 const AUDIT_PAGE_SIZE_DEFAULT = 5;
 const AUDIT_PAGE_SIZE_MAX = 10;
 const AUDIT_LIVE_LOOKUP_FRESH_MS = 1000 * 60 * 60 * 6;
@@ -2282,6 +2283,16 @@ async function getCurrentUserId(ctx: QueryCtx | MutationCtx | ActionCtx) {
   return userId as Id<"users">;
 }
 
+function requireScheduleConfidenceImportToken(importToken: string) {
+  const expected = process.env[SCHEDULE_CONFIDENCE_TOKEN_ENV]?.trim();
+  if (!expected) {
+    throw new Error(`${SCHEDULE_CONFIDENCE_TOKEN_ENV} is not configured.`);
+  }
+  if (importToken !== expected) {
+    throw new Error("Invalid schedule confidence import token.");
+  }
+}
+
 type UserShowTrackingAggregates = {
   watchedEpisodesCount: number;
   watchedTotalCount: number;
@@ -2647,8 +2658,8 @@ function getWatchableEpisodeCountForShow(
     isTerminalLifecycleStatus(show.status) &&
     typeof totalEpisodes === "number"
   ) {
-    return typeof releasedEpisodes === "number"
-      ? Math.max(releasedEpisodes, totalEpisodes)
+    return typeof releasedEpisodes === "number" && releasedEpisodes > 0
+      ? Math.min(releasedEpisodes, totalEpisodes)
       : totalEpisodes;
   }
 
@@ -4269,6 +4280,38 @@ export const repairShowMetadataById = internalAction({
   handler: async (ctx, args): ReturnType<typeof refreshShowMetadataAndRepairTracking> => {
     return refreshShowMetadataAndRepairTracking(ctx, args.showId, {
       force: args.force,
+    });
+  },
+});
+
+export const repairShowMetadataByProvider = action({
+  args: {
+    importToken: v.string(),
+    ...showLookupInput,
+    force: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): ReturnType<typeof refreshShowMetadataAndRepairTracking> => {
+    requireScheduleConfidenceImportToken(args.importToken);
+    const show = await ctx.runQuery(internal.shows.findShowByLookupForRefresh, {
+      tmdbId: args.tmdbId,
+      tvdbId: args.tvdbId,
+      anilistId: args.anilistId,
+      malId: args.malId,
+      tvmazeId: args.tvmazeId,
+      mediaType: args.mediaType,
+    });
+    if (!show) {
+      return {
+        refreshed: false,
+        repairedUsers: 0,
+        resumedUserShows: 0,
+        externalShowId: null,
+        reason: "show_not_found" as const,
+      };
+    }
+
+    return refreshShowMetadataAndRepairTracking(ctx, show._id, {
+      force: args.force ?? true,
     });
   },
 });

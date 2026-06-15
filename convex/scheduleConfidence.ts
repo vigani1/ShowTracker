@@ -343,8 +343,8 @@ function getWatchableEpisodeCountForShow(
     isTerminalLifecycleStatus(show.status) &&
     typeof totalEpisodes === "number"
   ) {
-    return typeof releasedEpisodes === "number"
-      ? Math.max(releasedEpisodes, totalEpisodes)
+    return typeof releasedEpisodes === "number" && releasedEpisodes > 0
+      ? Math.min(releasedEpisodes, totalEpisodes)
       : totalEpisodes;
   }
 
