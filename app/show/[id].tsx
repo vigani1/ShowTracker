@@ -3569,8 +3569,12 @@ export function ShowDetailScreen() {
   }, [show?.releasedEpisodes, totalEpisodesCount]);
 
   const watchableEpisodeCount = useMemo(() => {
+    const releasedCandidates = [
+      showReleasedEpisodesCount,
+      releasedEpisodeCountForShowAction,
+    ].filter((count): count is number => typeof count === "number");
     const releasedBase =
-      showReleasedEpisodesCount ?? releasedEpisodeCountForShowAction;
+      releasedCandidates.length > 0 ? Math.max(...releasedCandidates) : null;
 
     if (releasedBase === null) {
       return totalEpisodesCount;

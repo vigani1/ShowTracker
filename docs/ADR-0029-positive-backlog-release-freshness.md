@@ -10,7 +10,7 @@ On June 15, 2026, production `/show/tmdb:tv:60625` loaded Rick and Morty as a tr
 
 Production data showed the bug had two parts:
 
-- `shows.releasedEpisodes` and the user feed projection could remain stale at `84` even while the detail season payload showed `85` released episodes.
+- `shows.releasedEpisodes`, the detail progress header, and the user feed projection could remain stale at `84` even while the detail season payload showed `85` released episodes.
 - After a forced metadata repair updated the projection to `watchedEpisodesCount: 84`, `remainingEpisodes: 1`, `newEpisodeSignalAt: 2026-06-14`, and `homeSortAt: 2026-06-14`, Home still hid the row because the ADR-0027 client guard compared `futureCount: 6` against `remainingEpisodes: 1` and classified the row as future-only.
 
 This was introduced by the interaction between older client mutation payloads and ADR-0027. Detail/watch mutations preserve existing `releasedEpisodes`, but they also stamped `lastUpdated` with the client time even when the payload did not carry release-count freshness. That made stale `releasedEpisodes` look fresh and allowed `refreshTrackedShowMetadata` to throttle. ADR-0027 then added a final future-only display guard for caught-up rows, but its positive-remaining branch also hid real released backlog when future scheduled rows existed.
@@ -30,11 +30,15 @@ Client-origin show upserts that do not include a `releasedEpisodes` field no lon
 
 Home now treats a positive `remainingEpisodes` value with a fresh `newEpisodeSignalAt` as actionable backlog before applying the future-count veto. The future-only guard still hides caught-up rows and positive-remaining rows that have no fresh release signal and whose schedule counts prove all remaining entries are unavailable/future.
 
+Detail progress now uses the larger released count when loaded season payloads prove more episodes have aired than the show-level provider summary reports. Raw planned totals still bound the denominator and upcoming episode rows remain visible.
+
 ## Reasoning
 
 `lastUpdated` controls provider refresh throttling, so it must represent provider freshness rather than any client write touching a show row. Preserving it for payloads without release facts allows the existing refresh action to fetch TMDB season details and repair stale release counts instead of being blocked by a cosmetic or tracking mutation.
 
 Home `remainingEpisodes` is intended to mean released/watchable backlog after ADR-0009 and ADR-0026. Future scheduled rows are separate facts. They can prove a caught-up row is future-only, but they should not cancel a fresh release signal that says there is released backlog.
+
+The detail route already loads season payloads to render episode cards. When those payloads expose a newly aired episode, they are stronger evidence for watchable progress than a stale TMDB `last_episode_to_air` summary. Using the larger released count keeps the detail route and Home aligned without treating future rows as watched backlog.
 
 This keeps ADR-0027's caught-up protection intact while avoiding the Rick and Morty false negative.
 
@@ -53,6 +57,8 @@ Client payloads from detail/import/list flows may have useful catalog fields but
 Caught-up rows with `remainingEpisodes <= 0` and only future rows remain hidden.
 
 A watching row with positive remaining episodes and a fresh release signal appears even when future episodes are also scheduled.
+
+A detail route with loaded season episodes can show `84/85` progress even if the show-level summary still reports `84` released episodes.
 
 A positive-remaining row with no fresh release signal can still be hidden when schedule counts prove the remaining count is future-only.
 
@@ -78,10 +84,10 @@ git diff --check
 npx convex deploy --dry-run --yes
 ```
 
-Production verification should open Home while logged in and confirm Rick and Morty appears as `1 left` after deploy. It should also confirm caught-up future-only rows such as the ADR-0027 Classroom of the Elite case remain hidden.
+Production verification should open Home while logged in and confirm Rick and Morty appears as `1 left` after deploy. It should also open `/show/tmdb:tv:60625` and confirm detail Watch Progress reads `84/85 episodes` while S09E04 is the next watchable episode. It should also confirm caught-up future-only rows such as the ADR-0027 Classroom of the Elite case remain hidden.
 
 ## Rollback Notes
 
-Rollback by reverting the `buildShowPatch` freshness preservation in `convex/shows.ts` and the positive-backlog release-signal guard in `app/(tabs)/home/index.tsx`.
+Rollback by reverting the `buildShowPatch` freshness preservation in `convex/shows.ts`, the positive-backlog release-signal guard in `app/(tabs)/home/index.tsx`, and the season-proven released-count preference in `app/show/[id].tsx`.
 
 If rollback is needed because stale future-only rows reappear, inspect whether those rows have positive `remainingEpisodes` without reliable `releasedEpisodes` and repair the projection source before weakening the released/watchable backlog contract.
