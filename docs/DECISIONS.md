@@ -25,6 +25,7 @@ Most frequently relevant:
 - [ADR-0028](ADR-0028-detail-rail-performance-windowing.md): detail rail performance windowing.
 - [ADR-0029](ADR-0029-positive-backlog-release-freshness.md): positive released backlog and provider freshness stamps.
 - [ADR-0030](ADR-0030-terminal-total-watchlist-backlog.md): terminal totals preserve watchlist backlog.
+- [ADR-0031](ADR-0031-watched-anchor-schedule-counts.md): watched anchors suppress stale schedule counts.
 
 ## Navigation
 
@@ -70,6 +71,7 @@ Most frequently relevant:
 | [ADR-0028](ADR-0028-detail-rail-performance-windowing.md) | Detail quick rails render a fixed-width virtual window while status labels update optimistically. |
 | [ADR-0029](ADR-0029-positive-backlog-release-freshness.md) | Home treats fresh positive released backlog as actionable and client payloads without release facts do not freshen provider metadata. |
 | [ADR-0030](ADR-0030-terminal-total-watchlist-backlog.md) | Terminal TV/anime totals preserve Home backlog when stale released counts collapse to zero. |
+| [ADR-0031](ADR-0031-watched-anchor-schedule-counts.md) | Watched episode anchors suppress stale Home schedule counts and widened totals repair affected aggregates. |
 
 ## Rule For New ADRs
 

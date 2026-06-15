@@ -10,6 +10,7 @@ const SCHEDULE_PROJECTION_EVENT_LIMIT = 1000;
 const SCHEDULE_PROJECTION_COUNT_LIMIT = 1000;
 const SCHEDULE_PROJECTION_MAX_WINDOW_DAYS = 180;
 const SCHEDULE_CONFIDENCE_TOKEN_ENV = "SCHEDULE_CONFIDENCE_IMPORT_TOKEN";
+const WATCHED_EPISODE_ANCHOR_LIMIT = 128;
 const SYNTHETIC_PREFIX = "SC Synthetic";
 const SYNTHETIC_NOW = Date.UTC(2026, 4, 14, 12, 0, 0);
 const SYNTHETIC_SCHEDULE_CACHE_DATES = [
@@ -354,6 +355,196 @@ function getWatchableEpisodeCountForShow(
   }
 
   return totalEpisodes;
+}
+
+function getEpisodeLastWatchedAt(
+  entry: Pick<Doc<"watchedEpisodes">, "watchedAt" | "watchHistory">
+) {
+  const latestHistoryEntry = Array.isArray(entry.watchHistory)
+    ? entry.watchHistory
+        .filter((value) => typeof value === "number" && Number.isFinite(value))
+        .reduce<number | undefined>(
+          (latest, value) =>
+            typeof latest === "number" ? Math.max(latest, value) : value,
+          undefined
+        )
+    : undefined;
+
+  if (typeof latestHistoryEntry === "number") {
+    return latestHistoryEntry;
+  }
+
+  return typeof entry.watchedAt === "number" && Number.isFinite(entry.watchedAt)
+    ? entry.watchedAt
+    : undefined;
+}
+
+function isWatchedEpisodeWithinKnownShowBounds(
+  show: Pick<Doc<"shows">, "mediaType" | "totalEpisodes" | "totalSeasons">,
+  entry: Pick<Doc<"watchedEpisodes">, "season" | "episode">
+) {
+  if (
+    !Number.isFinite(entry.season) ||
+    entry.season < 1 ||
+    !Number.isFinite(entry.episode) ||
+    entry.episode < 1
+  ) {
+    return false;
+  }
+
+  const totalSeasons = positiveOptionalCount(show.totalSeasons);
+  if (typeof totalSeasons === "number" && entry.season > totalSeasons) {
+    return false;
+  }
+
+  const totalEpisodes = positiveOptionalCount(show.totalEpisodes);
+  const isSingleSeasonShow = show.mediaType === "anime" || totalSeasons === 1;
+  if (
+    isSingleSeasonShow &&
+    typeof totalEpisodes === "number" &&
+    entry.season === 1 &&
+    entry.episode > totalEpisodes
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function computeWatchedEpisodeAggregates(
+  watchedEpisodes: Doc<"watchedEpisodes">[],
+  show: Pick<Doc<"shows">, "mediaType" | "totalEpisodes" | "totalSeasons">
+) {
+  const uniqueEpisodeKeys = new Set<string>();
+  let watchedTotalCount = 0;
+  let watchedRuntimeMinutes = 0;
+  let lastWatchedAt: number | undefined;
+
+  for (const entry of watchedEpisodes) {
+    if (!isWatchedEpisodeWithinKnownShowBounds(show, entry)) {
+      continue;
+    }
+
+    uniqueEpisodeKeys.add(`${entry.season}:${entry.episode}`);
+
+    const watchCount = entry.watchCount ?? 1;
+    watchedTotalCount += watchCount;
+
+    const runtime = typeof entry.runtime === "number" ? entry.runtime : 0;
+    watchedRuntimeMinutes += runtime * watchCount;
+
+    const episodeLastWatchedAt = getEpisodeLastWatchedAt(entry);
+    if (
+      typeof episodeLastWatchedAt === "number" &&
+      (typeof lastWatchedAt !== "number" ||
+        episodeLastWatchedAt > lastWatchedAt)
+    ) {
+      lastWatchedAt = episodeLastWatchedAt;
+    }
+  }
+
+  return {
+    watchedEpisodesCount: uniqueEpisodeKeys.size,
+    watchedTotalCount,
+    watchedRuntimeMinutes,
+    lastWatchedAt,
+  };
+}
+
+async function computeTrackingAggregatesForUserShow(
+  ctx: QueryCtx | MutationCtx,
+  userShow: Doc<"userShows">,
+  show: Pick<Doc<"shows">, "mediaType" | "totalEpisodes" | "totalSeasons">
+) {
+  const watchedEpisodes = await ctx.db
+    .query("watchedEpisodes")
+    .withIndex("by_user_show", (q) =>
+      q.eq("userId", userShow.userId).eq("showId", userShow.showId)
+    )
+    .collect();
+
+  return computeWatchedEpisodeAggregates(watchedEpisodes, show);
+}
+
+function shouldRepairTrackingAggregatesForShowPatch(
+  previousShow: Doc<"shows">,
+  patchedShow: Doc<"shows">
+) {
+  if (previousShow.mediaType !== "tv" && previousShow.mediaType !== "anime") {
+    return false;
+  }
+
+  const previousTotal = positiveOptionalCount(previousShow.totalEpisodes);
+  const nextTotal = positiveOptionalCount(patchedShow.totalEpisodes);
+  return (
+    typeof previousTotal === "number" &&
+    typeof nextTotal === "number" &&
+    nextTotal > previousTotal
+  );
+}
+
+function addTrackingAggregatePatch(
+  patch: Partial<Doc<"userShows">>,
+  userShow: Doc<"userShows">,
+  aggregate: ReturnType<typeof computeWatchedEpisodeAggregates>
+) {
+  let changed = false;
+  changed =
+    setChangedField(
+      patch,
+      userShow,
+      "watchedEpisodesCount",
+      aggregate.watchedEpisodesCount
+    ) || changed;
+  changed =
+    setChangedField(
+      patch,
+      userShow,
+      "watchedTotalCount",
+      aggregate.watchedTotalCount
+    ) || changed;
+  changed =
+    setChangedField(
+      patch,
+      userShow,
+      "watchedRuntimeMinutes",
+      aggregate.watchedRuntimeMinutes
+    ) || changed;
+  changed =
+    setChangedField(patch, userShow, "lastWatchedAt", aggregate.lastWatchedAt) ||
+    changed;
+  return changed;
+}
+
+function maybeClearCaughtUpSignalFromAggregate(
+  patch: Partial<Doc<"userShows">>,
+  userShow: Doc<"userShows">,
+  show: Pick<
+    Doc<"shows">,
+    "mediaType" | "status" | "releasedEpisodes" | "totalEpisodes"
+  >,
+  aggregate: ReturnType<typeof computeWatchedEpisodeAggregates>
+) {
+  if (Object.prototype.hasOwnProperty.call(patch, "newEpisodeSignalAt")) {
+    return false;
+  }
+
+  const watchableEpisodes = getWatchableEpisodeCountForShow(show);
+  if (
+    typeof watchableEpisodes !== "number" ||
+    aggregate.watchedEpisodesCount < watchableEpisodes ||
+    typeof userShow.newEpisodeSignalAt !== "number"
+  ) {
+    return false;
+  }
+
+  const lastWatchedAt = aggregate.lastWatchedAt ?? userShow.addedAt ?? 0;
+  if (userShow.newEpisodeSignalAt <= lastWatchedAt) {
+    return false;
+  }
+
+  patch.newEpisodeSignalAt = undefined;
+  return true;
 }
 
 function parseDateKey(value: string | undefined) {
@@ -1280,6 +1471,26 @@ export const exportTrackedLibrary = query({
     const shows = await Promise.all(
       page.page.map((projection) => ctx.db.get(projection.showId))
     );
+    const watchedEpisodeAnchors = await Promise.all(
+      page.page.map(async (projection) => {
+        if (projection.mediaType !== "tv" && projection.mediaType !== "anime") {
+          return [];
+        }
+
+        const rows = await ctx.db
+          .query("watchedEpisodes")
+          .withIndex("by_user_show_season_episode", (q) =>
+            q.eq("userId", projection.userId).eq("showId", projection.showId)
+          )
+          .order("desc")
+          .take(WATCHED_EPISODE_ANCHOR_LIMIT);
+
+        return rows.map((row) => ({
+          season: row.season,
+          episode: row.episode,
+        }));
+      })
+    );
     const showStatusById = new Map(
       page.page.map((projection, index) => [
         projection.showId,
@@ -1289,7 +1500,7 @@ export const exportTrackedLibrary = query({
 
     return {
       ...page,
-      page: page.page.map((projection) => ({
+      page: page.page.map((projection, index) => ({
         projectionId: projection._id,
         userId: projection.userId,
         showId: projection.showId,
@@ -1300,6 +1511,7 @@ export const exportTrackedLibrary = query({
         status: projection.status,
         showStatus: showStatusById.get(projection.showId) ?? null,
         watchedEpisodesCount: projection.watchedEpisodesCount,
+        watchedEpisodeAnchors: watchedEpisodeAnchors[index],
         totalEpisodes: projection.totalEpisodes ?? null,
         remainingEpisodes: projection.remainingEpisodes ?? null,
         tmdbId: projection.tmdbId ?? null,
@@ -1700,6 +1912,7 @@ export const applyReleaseDeltas = mutation({
       resumedAutoPausedShows: 0,
       clearedStaleEpisodeSignals: 0,
       repairedStaleProjections: 0,
+      repairedTrackingAggregates: 0,
       scheduleCacheRowsUpdated: 0,
       scheduleCacheRowsSkipped: 0,
       skippedTitleFallback: 0,
@@ -1765,6 +1978,8 @@ export const applyReleaseDeltas = mutation({
         result.skippedUnchangedShows += 1;
       }
       const patchedShow = { ...show, ...showPatch };
+      const shouldRepairTrackingAggregates =
+        shouldRepairTrackingAggregatesForShowPatch(show, patchedShow);
 
       if (!scheduleCacheAlreadyMaintained) {
         const scheduleCacheResult = await upsertScheduleCacheEntry(ctx, delta);
@@ -1791,10 +2006,25 @@ export const applyReleaseDeltas = mutation({
         .take(1000);
 
       for (const userShow of userShows) {
-        const watchedCount = Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0));
+        const userPatch: Partial<Doc<"userShows">> = {};
+        const trackingAggregate = shouldRepairTrackingAggregates
+          ? await computeTrackingAggregatesForUserShow(ctx, userShow, patchedShow)
+          : null;
+
+        if (
+          trackingAggregate &&
+          addTrackingAggregatePatch(userPatch, userShow, trackingAggregate)
+        ) {
+          result.repairedTrackingAggregates += 1;
+        }
+
+        const watchedCount =
+          trackingAggregate?.watchedEpisodesCount ??
+          Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0));
+        const lastWatchedAt =
+          trackingAggregate?.lastWatchedAt ?? userShow.lastWatchedAt;
         const hasReleasedUnwatched =
           typeof releasedEpisodes === "number" && watchedCount < releasedEpisodes;
-        const userPatch: Partial<Doc<"userShows">> = {};
 
         if (hasReleasedUnwatched && signalAt !== null) {
           const nextSignalAt = Math.max(
@@ -1825,10 +2055,22 @@ export const applyReleaseDeltas = mutation({
           typeof releasedEpisodes === "number" &&
           watchedCount >= releasedEpisodes &&
           typeof userShow.newEpisodeSignalAt === "number" &&
-          userShow.newEpisodeSignalAt > (userShow.lastWatchedAt ?? userShow.addedAt ?? 0)
+          userShow.newEpisodeSignalAt > (lastWatchedAt ?? userShow.addedAt ?? 0)
         ) {
           setChangedField(userPatch, userShow, "newEpisodeSignalAt", undefined);
           result.clearedStaleEpisodeSignals += 1;
+        }
+
+        if (trackingAggregate) {
+          const cleared = maybeClearCaughtUpSignalFromAggregate(
+            userPatch,
+            userShow,
+            patchedShow,
+            trackingAggregate
+          );
+          if (cleared) {
+            result.clearedStaleEpisodeSignals += 1;
+          }
         }
 
         if (Object.keys(userPatch).length > 0) {
@@ -1852,6 +2094,87 @@ export const applyReleaseDeltas = mutation({
         } else {
           result.skippedUnchangedFeedProjections += 1;
         }
+      }
+    }
+
+    return result;
+  },
+});
+
+export const repairTrackingAggregatesForShow = mutation({
+  args: {
+    importToken: v.string(),
+    mediaType: mediaTypeValidator,
+    providerIds: providerIdsValidator,
+  },
+  handler: async (ctx, args) => {
+    requireImportToken(args.importToken);
+
+    const show = await findShowByProviderIds(ctx, {
+      mediaType: args.mediaType,
+      providerIds: args.providerIds,
+    });
+    if (!show) {
+      return {
+        matchedShow: false,
+        scannedUserShows: 0,
+        patchedUserShows: 0,
+        repairedTrackingAggregates: 0,
+        clearedStaleEpisodeSignals: 0,
+        patchedFeedProjections: 0,
+      };
+    }
+
+    const userShows = await ctx.db
+      .query("userShows")
+      .withIndex("by_showId", (q) => q.eq("showId", show._id))
+      .take(1000);
+
+    const result = {
+      matchedShow: true,
+      showId: show._id,
+      scannedUserShows: userShows.length,
+      patchedUserShows: 0,
+      repairedTrackingAggregates: 0,
+      clearedStaleEpisodeSignals: 0,
+      patchedFeedProjections: 0,
+    };
+
+    for (const userShow of userShows) {
+      const aggregate = await computeTrackingAggregatesForUserShow(
+        ctx,
+        userShow,
+        show
+      );
+      const userPatch: Partial<Doc<"userShows">> = {};
+
+      if (addTrackingAggregatePatch(userPatch, userShow, aggregate)) {
+        result.repairedTrackingAggregates += 1;
+      }
+
+      if (
+        maybeClearCaughtUpSignalFromAggregate(
+          userPatch,
+          userShow,
+          show,
+          aggregate
+        )
+      ) {
+        result.clearedStaleEpisodeSignals += 1;
+      }
+
+      if (Object.keys(userPatch).length > 0) {
+        await ctx.db.patch(userShow._id, userPatch);
+        result.patchedUserShows += 1;
+      }
+
+      const projectionPatched = await patchProjectionForUserShow(
+        ctx,
+        { ...userShow, ...userPatch },
+        show
+      );
+      if (projectionPatched) {
+        result.patchedFeedProjections += 1;
       }
     }
 

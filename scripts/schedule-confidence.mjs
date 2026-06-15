@@ -298,6 +298,21 @@ const fixtureLibrary = [
     tvmazeId: 9016,
   },
   {
+    id: "fixture-watched-anchor-drift",
+    userId: "fixture-user",
+    showId: "show-watched-anchor-drift",
+    title: "Watched Anchor Drift",
+    mediaType: "tv",
+    status: "watching",
+    watchedEpisodesCount: 1203,
+    watchedEpisodeAnchors: [{ season: 1, episode: 1204 }],
+    totalEpisodes: 1204,
+    releasedEpisodes: 1204,
+    remainingEpisodes: 1,
+    tmdbId: 1018,
+    lastWatchedAt: Date.UTC(2026, 4, 13),
+  },
+  {
     id: "fixture-adjacent-date-duplicate",
     userId: "fixture-user",
     showId: "show-adjacent-date-duplicate",
@@ -555,6 +570,18 @@ const fixtureProviderEvents = [
     providers: { tmdbId: 1016, tvmazeId: 9016 },
   },
   {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:tv:1018",
+    title: "Watched Anchor Drift",
+    mediaType: "tv",
+    region: "JP",
+    seasonNumber: 1,
+    episodeNumber: 1204,
+    name: "Already Watched Today",
+    airDate: "2026-05-14T10:00:00.000Z",
+    providers: { tmdbId: 1018 },
+  },
+  {
     sourceProvider: "tvmaze",
     providerShowId: "tvmaze:9017",
     title: "Adjacent Date Duplicate",
@@ -764,6 +791,7 @@ function initDb(db) {
       status TEXT NOT NULL,
       show_status TEXT,
       watched_episodes_count INTEGER NOT NULL DEFAULT 0,
+      watched_episode_anchors_json TEXT,
       total_episodes INTEGER,
       released_episodes INTEGER,
       remaining_episodes INTEGER,
@@ -889,6 +917,7 @@ function initDb(db) {
   addColumnIfMissing(db, "library_items", "new_episode_signal_at", "INTEGER");
   addColumnIfMissing(db, "library_items", "poster_url", "TEXT");
   addColumnIfMissing(db, "library_items", "show_status", "TEXT");
+  addColumnIfMissing(db, "library_items", "watched_episode_anchors_json", "TEXT");
   addColumnIfMissing(db, "audit_issues", "run_id", "TEXT");
   addColumnIfMissing(db, "audit_issues", "issue_key", "TEXT");
   db.exec(`
@@ -1147,6 +1176,53 @@ function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
+function normalizeWatchedEpisodeAnchors(value) {
+  let parsed = value;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      parsed = [];
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  const anchors = [];
+  const seen = new Set();
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const season = Math.floor(numberOrNull(entry.season) ?? 0);
+    const episode = Math.floor(numberOrNull(entry.episode) ?? 0);
+    if (season < 1 || episode < 1) {
+      continue;
+    }
+    const key = `${season}:${episode}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    anchors.push({ season, episode });
+  }
+
+  return anchors.sort(
+    (a, b) => b.season - a.season || b.episode - a.episode
+  );
+}
+
+function serializeWatchedEpisodeAnchors(value) {
+  const anchors = normalizeWatchedEpisodeAnchors(value);
+  return anchors.length > 0 ? JSON.stringify(anchors) : null;
+}
+
+function parseWatchedEpisodeAnchors(value) {
+  return normalizeWatchedEpisodeAnchors(value);
+}
+
 function clearFixtures(db) {
   db.exec(`
     DELETE FROM library_items WHERE id LIKE 'fixture-%';
@@ -1162,11 +1238,11 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
   db.prepare(`
     INSERT INTO library_items (
       id, user_id, show_id, projection_id, user_show_id, title, normalized_title,
-      media_type, poster_url, status, show_status, watched_episodes_count, total_episodes, released_episodes,
+      media_type, poster_url, status, show_status, watched_episodes_count, watched_episode_anchors_json, total_episodes, released_episodes,
       remaining_episodes, new_episode_signal_at, tmdb_id, tvmaze_id, anilist_id,
       mal_id, imdb_id, first_aired, last_watched_at, imported_at
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(id) DO UPDATE SET
       user_id = excluded.user_id,
@@ -1180,6 +1256,7 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
       status = excluded.status,
       show_status = excluded.show_status,
       watched_episodes_count = excluded.watched_episodes_count,
+      watched_episode_anchors_json = excluded.watched_episode_anchors_json,
       total_episodes = excluded.total_episodes,
       released_episodes = excluded.released_episodes,
       remaining_episodes = excluded.remaining_episodes,
@@ -1205,6 +1282,11 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
     item.status,
     stringOrNull(item.showStatus ?? item.show_status),
     Math.max(0, Math.floor(numberOrNull(item.watchedEpisodesCount ?? item.watched_episodes_count) ?? 0)),
+    serializeWatchedEpisodeAnchors(
+      item.watchedEpisodeAnchors ??
+        item.watched_episode_anchors ??
+        item.watched_episode_anchors_json
+    ),
     numberOrNull(item.totalEpisodes ?? item.total_episodes),
     numberOrNull(item.releasedEpisodes ?? item.released_episodes),
     numberOrNull(item.remainingEpisodes ?? item.remaining_episodes),
@@ -3256,6 +3338,9 @@ function createScheduleProjectionCandidate(item, row, matchConfidence, windows, 
       0,
       Math.floor(numberOrNull(item.watched_episodes_count) ?? 0)
     ),
+    watchedEpisodeAnchors: parseWatchedEpisodeAnchors(
+      item.watched_episode_anchors_json
+    ),
   };
 }
 
@@ -3397,6 +3482,30 @@ function getScheduleAbsoluteSeasonOffsets(events) {
 }
 
 function isProjectedScheduleEventWatched(event, scheduleAbsoluteSeasonOffsets) {
+  const { payload } = event;
+  const watchedEpisodeAnchors = event.watchedEpisodeAnchors ?? [];
+  if (
+    watchedEpisodeAnchors.some(
+      (anchor) =>
+        anchor.season === payload.seasonNumber &&
+        anchor.episode === payload.episodeNumber
+    )
+  ) {
+    return true;
+  }
+
+  const scheduleAbsoluteOffset = scheduleAbsoluteSeasonOffsets.get(
+    getProjectedScheduleSeasonKey(payload)
+  );
+  if (
+    typeof scheduleAbsoluteOffset === "number" &&
+    watchedEpisodeAnchors.some(
+      (anchor) => anchor.episode === scheduleAbsoluteOffset + payload.episodeNumber
+    )
+  ) {
+    return true;
+  }
+
   const watchedCount = Math.max(
     0,
     Math.floor(numberOrNull(event.watchedEpisodesCount) ?? 0)
@@ -3405,7 +3514,6 @@ function isProjectedScheduleEventWatched(event, scheduleAbsoluteSeasonOffsets) {
     return false;
   }
 
-  const { payload } = event;
   if (
     hasProviderAbsoluteEpisodeNumber(payload.seasonNumber, payload.episodeNumber) &&
     payload.episodeNumber <= watchedCount
@@ -3413,9 +3521,6 @@ function isProjectedScheduleEventWatched(event, scheduleAbsoluteSeasonOffsets) {
     return true;
   }
 
-  const scheduleAbsoluteOffset = scheduleAbsoluteSeasonOffsets.get(
-    getProjectedScheduleSeasonKey(payload)
-  );
   if (typeof scheduleAbsoluteOffset !== "number") {
     return false;
   }
@@ -3844,7 +3949,9 @@ async function importConvex(db, options) {
         mediaType: item.mediaType,
         posterUrl: item.posterUrl,
         status: item.status,
+        showStatus: item.showStatus,
         watchedEpisodesCount: item.watchedEpisodesCount,
+        watchedEpisodeAnchors: item.watchedEpisodeAnchors,
         totalEpisodes: item.totalEpisodes,
         releasedEpisodes:
           item.tmdbId || item.tvmazeId || item.anilistId || item.malId || item.imdbId
@@ -5371,6 +5478,14 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
       providerYearCount?.unavailableCount === 2,
     "Schedule projection count should suppress watched provider-year episodes.",
     providerYearCount
+  );
+  const watchedAnchorDriftCount = fixtureUserProjection?.counts.filter(
+    (row) => row.routeId === "tmdb:tv:1018"
+  );
+  assertValidation(
+    (watchedAnchorDriftCount?.length ?? 0) === 0,
+    "Schedule projection count should suppress exact watched anchors even when aggregate count is stale.",
+    watchedAnchorDriftCount
   );
   const adjacentDateDuplicateEvents =
     fixtureUserProjection?.events.filter(
