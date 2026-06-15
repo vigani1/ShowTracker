@@ -3543,7 +3543,8 @@ export function ShowDetailScreen() {
   }, [seasons, show?.totalEpisodes]);
 
   const releasedEpisodeCountForShowAction = useMemo(() => {
-    let count = 0;
+    let loadedReleasedCount = 0;
+    let absoluteReleasedCount = 0;
 
     for (const season of seasons) {
       const episodes = season.episodes ?? [];
@@ -3551,9 +3552,39 @@ export function ShowDetailScreen() {
         continue;
       }
 
-      count += episodes.filter((episode) => isEpisodeReleased(episode.airDate)).length;
+      let releasedInSeason = 0;
+      let highestReleasedEpisodeNumber = 0;
+      for (const episode of episodes) {
+        if (!isEpisodeReleased(episode.airDate)) {
+          continue;
+        }
+
+        releasedInSeason += 1;
+        highestReleasedEpisodeNumber = Math.max(
+          highestReleasedEpisodeNumber,
+          episode.episodeNumber
+        );
+      }
+
+      loadedReleasedCount += releasedInSeason;
+      if (highestReleasedEpisodeNumber <= 0) {
+        continue;
+      }
+
+      const previousSeasonEpisodes = seasons
+        .filter((summary) => summary.seasonNumber > 0 && summary.seasonNumber < season.seasonNumber)
+        .reduce((sum, summary) => {
+          const episodeCount = summary.episodeCount ?? summary.episodes?.length ?? 0;
+          return sum + Math.max(0, Math.floor(episodeCount));
+        }, 0);
+
+      absoluteReleasedCount = Math.max(
+        absoluteReleasedCount,
+        previousSeasonEpisodes + Math.max(releasedInSeason, highestReleasedEpisodeNumber)
+      );
     }
 
+    const count = Math.max(loadedReleasedCount, absoluteReleasedCount);
     return count > 0 ? count : null;
   }, [seasons]);
 

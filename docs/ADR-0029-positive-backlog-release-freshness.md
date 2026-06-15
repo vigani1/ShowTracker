@@ -30,7 +30,7 @@ Client-origin show upserts that do not include a `releasedEpisodes` field no lon
 
 Home now treats a positive `remainingEpisodes` value with a fresh `newEpisodeSignalAt` as actionable backlog before applying the future-count veto. The future-only guard still hides caught-up rows and positive-remaining rows that have no fresh release signal and whose schedule counts prove all remaining entries are unavailable/future.
 
-Detail progress now uses the larger released count when loaded season payloads prove more episodes have aired than the show-level provider summary reports. Raw planned totals still bound the denominator and upcoming episode rows remain visible.
+Detail progress now uses the larger released count when loaded season payloads prove more episodes have aired than the show-level provider summary reports. When only the current season is fully loaded, previous season summary counts are combined with the highest released episode number in the loaded season. Raw planned totals still bound the denominator and upcoming episode rows remain visible.
 
 ## Reasoning
 
@@ -38,7 +38,7 @@ Detail progress now uses the larger released count when loaded season payloads p
 
 Home `remainingEpisodes` is intended to mean released/watchable backlog after ADR-0009 and ADR-0026. Future scheduled rows are separate facts. They can prove a caught-up row is future-only, but they should not cancel a fresh release signal that says there is released backlog.
 
-The detail route already loads season payloads to render episode cards. When those payloads expose a newly aired episode, they are stronger evidence for watchable progress than a stale TMDB `last_episode_to_air` summary. Using the larger released count keeps the detail route and Home aligned without treating future rows as watched backlog.
+The detail route already loads season payloads to render episode cards. When those payloads expose a newly aired episode, they are stronger evidence for watchable progress than a stale TMDB `last_episode_to_air` summary. Combining the loaded season's released episode number with previous season summary counts keeps the detail route and Home aligned without requiring every prior season to be hydrated.
 
 This keeps ADR-0027's caught-up protection intact while avoiding the Rick and Morty false negative.
 
@@ -58,7 +58,7 @@ Caught-up rows with `remainingEpisodes <= 0` and only future rows remain hidden.
 
 A watching row with positive remaining episodes and a fresh release signal appears even when future episodes are also scheduled.
 
-A detail route with loaded season episodes can show `84/85` progress even if the show-level summary still reports `84` released episodes.
+A detail route with the current season loaded can show `84/85` progress even if the show-level summary still reports `84` released episodes.
 
 A positive-remaining row with no fresh release signal can still be hidden when schedule counts prove the remaining count is future-only.
 
