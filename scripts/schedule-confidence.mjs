@@ -30,6 +30,16 @@ const maxProjectionRepairEpisodeDelta = 3;
 const absoluteScheduleEpisodeMin = 100;
 const sameSourceEpisodeAliasMinDelta = 10;
 const nearDateDuplicateWindowDays = 1;
+const terminalShowLifecycleStatuses = new Set([
+  "ended",
+  "finished",
+  "finished airing",
+  "completed",
+  "complete",
+  "released",
+  "canceled",
+  "cancelled",
+]);
 
 const directFixtureDate = "2026-05-13T21:00:00.000Z";
 const bridgedFixtureDate = "2026-05-14T18:00:00.000Z";
@@ -246,6 +256,21 @@ const fixtureLibrary = [
     lastWatchedAt: Date.UTC(2026, 4, 1),
   },
   {
+    id: "fixture-terminal-ended-total",
+    userId: "fixture-user",
+    showId: "show-terminal-ended-total",
+    title: "Terminal Ended Total",
+    mediaType: "tv",
+    status: "watching",
+    showStatus: "ended",
+    watchedEpisodesCount: 4,
+    totalEpisodes: 44,
+    releasedEpisodes: 0,
+    remainingEpisodes: 0,
+    tmdbId: 1020,
+    lastWatchedAt: Date.UTC(2026, 4, 1),
+  },
+  {
     id: "fixture-post-watch-count-drift",
     userId: "fixture-user",
     showId: "show-post-watch-count-drift",
@@ -444,6 +469,18 @@ const fixtureProviderEvents = [
     name: "Old Finale",
     airDate: "2007-02-08T00:00:00.000Z",
     providers: { tmdbId: 1012 },
+  },
+  {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:1020",
+    title: "Terminal Ended Total",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 4,
+    episodeNumber: 14,
+    name: "Old Series Finale",
+    airDate: "2022-04-29T00:00:00.000Z",
+    providers: { tmdbId: 1020 },
   },
   {
     sourceProvider: "tvmaze",
@@ -725,6 +762,7 @@ function initDb(db) {
       media_type TEXT NOT NULL,
       poster_url TEXT,
       status TEXT NOT NULL,
+      show_status TEXT,
       watched_episodes_count INTEGER NOT NULL DEFAULT 0,
       total_episodes INTEGER,
       released_episodes INTEGER,
@@ -850,6 +888,7 @@ function initDb(db) {
   addColumnIfMissing(db, "library_items", "remaining_episodes", "INTEGER");
   addColumnIfMissing(db, "library_items", "new_episode_signal_at", "INTEGER");
   addColumnIfMissing(db, "library_items", "poster_url", "TEXT");
+  addColumnIfMissing(db, "library_items", "show_status", "TEXT");
   addColumnIfMissing(db, "audit_issues", "run_id", "TEXT");
   addColumnIfMissing(db, "audit_issues", "issue_key", "TEXT");
   db.exec(`
@@ -876,6 +915,11 @@ function positiveIntegerOrNull(value) {
     return null;
   }
   return Math.floor(numeric);
+}
+
+function isTerminalLifecycleStatus(status) {
+  const normalized = stringOrNull(status)?.toLowerCase();
+  return normalized ? terminalShowLifecycleStatuses.has(normalized) : false;
 }
 
 function stringOrNull(value) {
@@ -1118,11 +1162,11 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
   db.prepare(`
     INSERT INTO library_items (
       id, user_id, show_id, projection_id, user_show_id, title, normalized_title,
-      media_type, poster_url, status, watched_episodes_count, total_episodes, released_episodes,
+      media_type, poster_url, status, show_status, watched_episodes_count, total_episodes, released_episodes,
       remaining_episodes, new_episode_signal_at, tmdb_id, tvmaze_id, anilist_id,
       mal_id, imdb_id, first_aired, last_watched_at, imported_at
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(id) DO UPDATE SET
       user_id = excluded.user_id,
@@ -1134,6 +1178,7 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
       media_type = excluded.media_type,
       poster_url = excluded.poster_url,
       status = excluded.status,
+      show_status = excluded.show_status,
       watched_episodes_count = excluded.watched_episodes_count,
       total_episodes = excluded.total_episodes,
       released_episodes = excluded.released_episodes,
@@ -1158,6 +1203,7 @@ function upsertLibraryItem(db, item, importedAt = Date.now()) {
     item.mediaType ?? item.media_type,
     stringOrNull(item.posterUrl ?? item.poster_url),
     item.status,
+    stringOrNull(item.showStatus ?? item.show_status),
     Math.max(0, Math.floor(numberOrNull(item.watchedEpisodesCount ?? item.watched_episodes_count) ?? 0)),
     numberOrNull(item.totalEpisodes ?? item.total_episodes),
     numberOrNull(item.releasedEpisodes ?? item.released_episodes),
@@ -1787,11 +1833,24 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     latestReleased &&
     typeof item.last_watched_at === "number" &&
     latestReleased.air_timestamp <= item.last_watched_at;
+  const terminalKnownTotalEpisodes =
+    isTerminalLifecycleStatus(item.show_status) &&
+    positiveIntegerOrNull(item.total_episodes);
+  const hasTerminalKnownTotal =
+    typeof terminalKnownTotalEpisodes === "number" && !hasKnownFutureEvents;
   const hasSparseOldReleaseHistory =
     !hasKnownFutureEvents &&
     releasedEvents.length <= 1 &&
     latestReleaseIsAlreadyWatched;
-  const rawReleasedEpisodes = hasKnownFutureEvents
+  const rawReleasedEpisodes = hasTerminalKnownTotal
+    ? Math.max(
+        terminalKnownTotalEpisodes,
+        item.released_episodes ?? 0,
+        watchedEpisodesCount,
+        releasedEvents.length,
+        ...releasedEvents.map((row) => row.episode_number)
+      )
+    : hasKnownFutureEvents
     ? Math.max(watchedEpisodesCount, releasedEvents.length)
     : hasSparseOldReleaseHistory
       ? Math.max(watchedEpisodesCount, releasedEvents.length)
@@ -1803,6 +1862,7 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
           ...releasedEvents.map((row) => row.episode_number)
         );
   const timestampCappedReleasedEpisodes =
+    !hasTerminalKnownTotal &&
     latestReleaseIsAlreadyWatched &&
     (releasedEvents.length <= watchedEpisodesCount ||
       rawReleasedEpisodes - watchedEpisodesCount <= 1)
@@ -4947,6 +5007,17 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
     byShowId.get("show-future")?.simulatedProjection.hasUpcomingSchedule === true &&
       byShowId.get("show-future")?.simulatedProjection.hasHomeAttention === false,
     "Future scheduled episode was not distinguished from available-now attention."
+  );
+  assertValidation(
+    facts.get("show-terminal-ended-total")?.released_episodes === 44 &&
+      facts.get("show-terminal-ended-total")?.total_episodes === 44 &&
+      byShowId.get("show-terminal-ended-total")?.simulatedProjection.remainingEpisodes === 40 &&
+      byShowId.get("show-terminal-ended-total")?.simulatedProjection.hasHomeAttention === true,
+    "Terminal ended shows with a trusted total should not be capped to watched progress by sparse old events.",
+    {
+      fact: facts.get("show-terminal-ended-total"),
+      delta: byShowId.get("show-terminal-ended-total"),
+    }
   );
   assertValidation(
     byShowId.get("show-stale-signal-break")?.clearStaleEpisodeSignal === true &&

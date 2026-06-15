@@ -202,14 +202,7 @@ function buildFeedProjectionFields(
   const watchedCount = Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0));
   const totalEpisodes =
     typeof show.totalEpisodes === "number" ? show.totalEpisodes : undefined;
-  const releasedEpisodes =
-    typeof show.releasedEpisodes === "number"
-      ? typeof totalEpisodes === "number"
-        ? Math.min(show.releasedEpisodes, totalEpisodes)
-        : show.releasedEpisodes
-      : undefined;
-  const watchableEpisodes =
-    typeof releasedEpisodes === "number" ? releasedEpisodes : totalEpisodes;
+  const watchableEpisodes = getWatchableEpisodeCountForShow(show);
   const remainingEpisodes =
     typeof watchableEpisodes === "number"
       ? Math.max(watchableEpisodes - watchedCount, 0)
@@ -2560,6 +2553,16 @@ function shouldBypassTrackedShowMetadataRefreshThrottle(show: Doc<"shows">) {
     return false;
   }
 
+  const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
+  const releasedEpisodes = normalizeNonNegativeEpisodeCount(show.releasedEpisodes);
+  if (
+    isTerminalLifecycleStatus(show.status) &&
+    typeof totalEpisodes === "number" &&
+    (typeof releasedEpisodes !== "number" || releasedEpisodes < totalEpisodes)
+  ) {
+    return true;
+  }
+
   if (
     typeof show.releasedEpisodes !== "number" ||
     !Number.isFinite(show.releasedEpisodes) ||
@@ -2615,12 +2618,47 @@ function normalizePositiveEpisodeCount(value?: number | null) {
   return Math.floor(value);
 }
 
+function normalizeNonNegativeEpisodeCount(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
 function isTerminalLifecycleStatus(status?: string) {
   const normalized = status?.trim().toLowerCase();
   if (!normalized) {
     return false;
   }
   return TERMINAL_SHOW_LIFECYCLE_STATUSES.has(normalized);
+}
+
+function getWatchableEpisodeCountForShow(
+  show: Pick<
+    Doc<"shows">,
+    "mediaType" | "status" | "releasedEpisodes" | "totalEpisodes"
+  >
+) {
+  const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
+  const releasedEpisodes = normalizeNonNegativeEpisodeCount(show.releasedEpisodes);
+
+  if (
+    show.mediaType !== "movie" &&
+    isTerminalLifecycleStatus(show.status) &&
+    typeof totalEpisodes === "number"
+  ) {
+    return typeof releasedEpisodes === "number"
+      ? Math.max(releasedEpisodes, totalEpisodes)
+      : totalEpisodes;
+  }
+
+  if (typeof releasedEpisodes === "number") {
+    return typeof totalEpisodes === "number"
+      ? Math.min(releasedEpisodes, totalEpisodes)
+      : releasedEpisodes;
+  }
+
+  return totalEpisodes;
 }
 
 function getImportedStatusFromProgress(
@@ -8137,7 +8175,7 @@ function shouldAutoPause(
 function hasWatchedKnownEpisodeTotal(
   show: Pick<
     Doc<"shows">,
-    "mediaType" | "releasedEpisodes" | "totalEpisodes"
+    "mediaType" | "status" | "releasedEpisodes" | "totalEpisodes"
   >,
   watchedEpisodesCount: number
 ) {
@@ -8145,27 +8183,12 @@ function hasWatchedKnownEpisodeTotal(
     return false;
   }
 
-  const releasedEpisodes = normalizePositiveEpisodeCount(show.releasedEpisodes);
-  if (typeof releasedEpisodes === "number") {
-    const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
-    const watchableEpisodes =
-      typeof totalEpisodes === "number"
-        ? Math.min(releasedEpisodes, totalEpisodes)
-        : releasedEpisodes;
-
-    return watchedEpisodesCount >= watchableEpisodes;
-  }
-
-  const totalEpisodes = normalizePositiveEpisodeCount(show.totalEpisodes);
-  if (typeof totalEpisodes !== "number") {
+  const watchableEpisodes = getWatchableEpisodeCountForShow(show);
+  if (typeof watchableEpisodes !== "number") {
     return false;
   }
 
-  if (watchedEpisodesCount < totalEpisodes) {
-    return false;
-  }
-
-  return true;
+  return watchedEpisodesCount >= watchableEpisodes;
 }
 
 function shouldResumeAutoPausedForRecentReleasedSignal(

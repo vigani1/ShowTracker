@@ -20,6 +20,16 @@ const SYNTHETIC_SCHEDULE_CACHE_DATES = [
   "2026-05-30",
 ];
 const SCHEDULE_MOVE_PRUNE_WINDOW_DAYS = 45;
+const TERMINAL_SHOW_LIFECYCLE_STATUSES = new Set([
+  "ended",
+  "finished",
+  "finished airing",
+  "completed",
+  "complete",
+  "released",
+  "canceled",
+  "cancelled",
+]);
 
 const mediaTypeValidator = v.union(
   v.literal("tv"),
@@ -308,6 +318,44 @@ function clampOptionalCount(value: number | undefined) {
   return Math.max(0, Math.floor(value));
 }
 
+function positiveOptionalCount(value: number | undefined) {
+  const count = clampOptionalCount(value);
+  return typeof count === "number" && count > 0 ? count : undefined;
+}
+
+function isTerminalLifecycleStatus(status?: string) {
+  const normalized = status?.trim().toLowerCase();
+  return normalized ? TERMINAL_SHOW_LIFECYCLE_STATUSES.has(normalized) : false;
+}
+
+function getWatchableEpisodeCountForShow(
+  show: Pick<
+    Doc<"shows">,
+    "mediaType" | "status" | "releasedEpisodes" | "totalEpisodes"
+  >
+) {
+  const totalEpisodes = positiveOptionalCount(show.totalEpisodes);
+  const releasedEpisodes = clampOptionalCount(show.releasedEpisodes);
+
+  if (
+    show.mediaType !== "movie" &&
+    isTerminalLifecycleStatus(show.status) &&
+    typeof totalEpisodes === "number"
+  ) {
+    return typeof releasedEpisodes === "number"
+      ? Math.max(releasedEpisodes, totalEpisodes)
+      : totalEpisodes;
+  }
+
+  if (typeof releasedEpisodes === "number") {
+    return typeof totalEpisodes === "number"
+      ? Math.min(releasedEpisodes, totalEpisodes)
+      : releasedEpisodes;
+  }
+
+  return totalEpisodes;
+}
+
 function parseDateKey(value: string | undefined) {
   if (!value) {
     return null;
@@ -578,14 +626,7 @@ function buildProjectionFields(
   const watchedCount = Math.max(0, Math.floor(userShow.watchedEpisodesCount ?? 0));
   const totalEpisodes =
     typeof show.totalEpisodes === "number" ? show.totalEpisodes : undefined;
-  const releasedEpisodes =
-    typeof show.releasedEpisodes === "number"
-      ? typeof totalEpisodes === "number"
-        ? Math.min(show.releasedEpisodes, totalEpisodes)
-        : show.releasedEpisodes
-      : undefined;
-  const watchableEpisodes =
-    typeof releasedEpisodes === "number" ? releasedEpisodes : totalEpisodes;
+  const watchableEpisodes = getWatchableEpisodeCountForShow(show);
   const remainingEpisodes =
     typeof watchableEpisodes === "number"
       ? Math.max(watchableEpisodes - watchedCount, 0)
@@ -1236,6 +1277,15 @@ export const exportTrackedLibrary = query({
       ...args.paginationOpts,
       numItems: Math.min(args.paginationOpts.numItems, IMPORT_BATCH_LIMIT),
     });
+    const shows = await Promise.all(
+      page.page.map((projection) => ctx.db.get(projection.showId))
+    );
+    const showStatusById = new Map(
+      page.page.map((projection, index) => [
+        projection.showId,
+        shows[index]?.status ?? null,
+      ])
+    );
 
     return {
       ...page,
@@ -1248,6 +1298,7 @@ export const exportTrackedLibrary = query({
         mediaType: projection.mediaType,
         posterUrl: projection.posterUrl ?? null,
         status: projection.status,
+        showStatus: showStatusById.get(projection.showId) ?? null,
         watchedEpisodesCount: projection.watchedEpisodesCount,
         totalEpisodes: projection.totalEpisodes ?? null,
         remainingEpisodes: projection.remainingEpisodes ?? null,
