@@ -2215,6 +2215,10 @@ function buildShowPatch(
     existing?.relatedAnilistIds,
     incoming.relatedAnilistIds
   );
+  const carriesReleaseFreshness = Object.prototype.hasOwnProperty.call(
+    incoming,
+    "releasedEpisodes"
+  );
 
   const rootAnilistId =
     incoming.rootAnilistId ??
@@ -2233,6 +2237,10 @@ function buildShowPatch(
     tvmazeId: incoming.tvmazeId ?? existing?.tvmazeId,
     imdbId: incoming.imdbId ?? existing?.imdbId,
     releasedEpisodes: incoming.releasedEpisodes ?? existing?.releasedEpisodes,
+    lastUpdated:
+      existing && incoming.mediaType !== "movie" && !carriesReleaseFreshness
+        ? existing.lastUpdated
+        : incoming.lastUpdated,
     anilistFormat: incoming.anilistFormat ?? existing?.anilistFormat,
     animeSeason: incoming.animeSeason ?? existing?.animeSeason,
     animeSeasonYear: incoming.animeSeasonYear ?? existing?.animeSeasonYear,

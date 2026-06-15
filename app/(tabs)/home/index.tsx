@@ -170,6 +170,13 @@ function hasWatchlistActionableEpisode(
     return false;
   }
 
+  const hasFreshReleaseSignal =
+    typeof item.newEpisodeSignalAt === "number" &&
+    item.newEpisodeSignalAt > (item.lastWatchedAt ?? 0);
+  if (hasFreshReleaseSignal) {
+    return true;
+  }
+
   const unavailableUpcomingCount =
     mode === "after_airtime"
       ? counts?.unavailableCount ?? 0
