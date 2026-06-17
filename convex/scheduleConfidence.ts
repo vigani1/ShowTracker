@@ -312,6 +312,26 @@ function normalizeTitle(title: string) {
   return title.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+function isAnimeSeasonTitleVariant(
+  scheduleNormalizedTitle: string,
+  trackedNormalizedTitle: string
+) {
+  if (
+    !scheduleNormalizedTitle ||
+    !trackedNormalizedTitle ||
+    scheduleNormalizedTitle === trackedNormalizedTitle ||
+    !scheduleNormalizedTitle.startsWith(trackedNormalizedTitle)
+  ) {
+    return false;
+  }
+
+  const suffix = scheduleNormalizedTitle.slice(trackedNormalizedTitle.length);
+
+  return /^(?:s\d+|season\d*|\d+(?:st|nd|rd|th)?season|part\d*|cour\d*|finalseason)/.test(
+    suffix
+  );
+}
+
 function clampOptionalCount(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -1168,14 +1188,18 @@ async function pruneMovedScheduleCacheEntries(
       const isExactTitleMatch =
         entry.normalizedTitle === args.normalizedTitle &&
         args.normalizedTitle.length > 0;
+      const isSeasonTitleVariantMatch =
+        args.normalizedTitle.length > 0 &&
+        isAnimeSeasonTitleVariant(entry.normalizedTitle, args.normalizedTitle);
+      const isTrustedTitleMatch = isExactTitleMatch || isSeasonTitleVariantMatch;
 
-      if (!isDurableSameShow && !isExactTitleMatch) {
+      if (!isDurableSameShow && !isTrustedTitleMatch) {
         return true;
       }
 
       const episodeNumberKey = `${entry.episode.seasonNumber}:${entry.episode.episodeNumber}`;
       if (
-        isExactTitleMatch &&
+        isTrustedTitleMatch &&
         typeof args.totalEpisodes === "number" &&
         entry.episode.episodeNumber > args.totalEpisodes
       ) {
@@ -1186,7 +1210,7 @@ async function pruneMovedScheduleCacheEntries(
       if (isDurableSameShow && desiredNumberDates && !desiredNumberDates.has(row.date)) {
         return false;
       }
-      if (isExactTitleMatch && desiredNumberDates && !desiredNumberDates.has(row.date)) {
+      if (isTrustedTitleMatch && desiredNumberDates && !desiredNumberDates.has(row.date)) {
         return false;
       }
 
@@ -1197,7 +1221,7 @@ async function pruneMovedScheduleCacheEntries(
       if (isDurableSameShow && desiredNameDates && !desiredNameDates.has(row.date)) {
         return false;
       }
-      if (isExactTitleMatch && desiredNameDates && !desiredNameDates.has(row.date)) {
+      if (isTrustedTitleMatch && desiredNameDates && !desiredNameDates.has(row.date)) {
         return false;
       }
 

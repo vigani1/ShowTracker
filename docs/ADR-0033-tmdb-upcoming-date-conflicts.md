@@ -28,6 +28,9 @@ Production data showed:
 - After the direct TV row moved to June 24, an AniList title-fallback season
   variant for the same generic episode could still project onto the TMDB route on
   June 17.
+- The global schedule cache still contained the AniList season-variant row, so
+  the Schedule tab could show the title on June 17 even after watchlist counts
+  were corrected.
 
 ## Current Behavior
 
@@ -52,6 +55,10 @@ title-variant row to coexist with the direct TV row when the dates differed by a
 week. Nearby duplicate collapse only covered one-day disagreements, so Schedule
 could still show the old date even after Home counts were future-only.
 
+The Convex schedule-cache prune only treated exact normalized titles as trusted
+title matches. It did not prune `thebeginningaftertheendseason2` when the
+trusted TMDB route title was `thebeginningaftertheend`.
+
 ## Decision
 
 For TMDB-tracked TV rows, release fact dedupe now prefers a direct TMDB row when
@@ -68,6 +75,11 @@ User schedule projection dedupe now collapses direct tracked-provider rows
 against lower-confidence title-fallback moved-date rows for the same tracked
 route and same generic episode within the existing moved-date window. The direct
 tracked row wins regardless of provider-row insertion order.
+
+Schedule-cache moved-row pruning now treats anime season-title variants as
+trusted title matches, using the same variant shape as the schedule projection
+matcher. That allows a trusted direct moved-date fact to prune stale global
+AniList season rows that would otherwise keep the old date visible.
 
 This rule only changes the release fact used by the server-owned reconciler. It
 does not change client matching, provider ID matching, title fallback, status
@@ -90,6 +102,11 @@ Once direct provider evidence exists for the tracked route, a title-fallback
 season variant should not keep an older date alive on Schedule. This keeps
 Schedule aligned with the direct route while preserving title fallback for rows
 that have no direct counterpart.
+
+Pruning season variants in the schedule-cache path keeps global Schedule and
+user-specific projections consistent. The prune still requires a trusted direct
+or bridged release fact and the same episode number or generic episode name on a
+date outside the trusted fact dates.
 
 Keeping the rule limited to future same-number date disagreements avoids
 reversing ADR-0016. If a provider says an episode is already released while
@@ -143,6 +160,10 @@ Projection validation inserts the lower-confidence AniList-shaped moved-date row
 before and after the direct TMDB-shaped row. Both orders must produce exactly one
 projected event on June 24.
 
+Production verification must confirm that neither the direct TV row nor the
+AniList season-variant row keeps `/home` Schedule showing `The Beginning After
+the End` on June 17, 2026.
+
 Production verification should run the VPS schedule-confidence job after deploy,
 then confirm `/show/tmdb:tv:274671`, Home, and Schedule no longer show S02E12 as
 available on June 17 while preserving the June 24 upcoming row.
@@ -151,7 +172,8 @@ available on June 17 while preserving the June 24 upcoming row.
 
 Rollback by removing the TMDB future-date preference, same-provider same-episode
 provider-event replacement, and direct-vs-title-fallback moved-date projection
-collapse in `scripts/schedule-confidence.mjs`, then re-running
+collapse in `scripts/schedule-confidence.mjs`; and by restoring exact-title-only
+schedule-cache pruning in `convex/scheduleConfidence.ts`; then re-running
 schedule-confidence projections.
 
 If rollback is considered because a real TVMaze-only future schedule row
