@@ -1395,9 +1395,27 @@ function upsertProviderEvent(db, event, insertedAt = Date.now()) {
     ...providerIdsFromRecord(event),
     ...providerIdsFromRecord(event.providers ?? {}),
   };
+  const seasonNumber = Number(event.seasonNumber);
+  const episodeNumber = Number(event.episodeNumber);
   const eventId =
     event.id ??
-    `${event.sourceProvider}:${event.providerShowId}:${event.seasonNumber}:${event.episodeNumber}:${event.airDate}`;
+    `${event.sourceProvider}:${event.providerShowId}:${seasonNumber}:${episodeNumber}:${event.airDate}`;
+  db.prepare(`
+    DELETE FROM provider_events
+    WHERE source_provider = ?
+      AND provider_show_id = ?
+      AND media_type = ?
+      AND season_number = ?
+      AND episode_number = ?
+      AND id != ?
+  `).run(
+    event.sourceProvider,
+    event.providerShowId,
+    event.mediaType,
+    seasonNumber,
+    episodeNumber,
+    eventId
+  );
   db.prepare(`
     INSERT INTO provider_events (
       id, source_provider, provider_show_id, title, normalized_title, media_type,
@@ -1430,8 +1448,8 @@ function upsertProviderEvent(db, event, insertedAt = Date.now()) {
     normalizeTitle(event.title),
     event.mediaType,
     stringOrNull(event.region),
-    Number(event.seasonNumber),
-    Number(event.episodeNumber),
+    seasonNumber,
+    episodeNumber,
     stringOrNull(event.name),
     event.airDate,
     parseAirTimestamp(event.airDate),
@@ -5586,6 +5604,42 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
       upcomingTmdbDateConflictFact.upcomingEpisodes.length === 1,
     "TMDB-tracked future date conflicts should keep the TMDB next date instead of stale TVMaze rows.",
     { upcomingTmdbDateConflictFact }
+  );
+  const providerDateMoveDb = new DatabaseSync(":memory:");
+  initDb(providerDateMoveDb);
+  upsertProviderEvent(providerDateMoveDb, {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:tv:274671",
+    title: "Upcoming TMDB Date Conflict",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 2,
+    episodeNumber: 12,
+    name: "Episode 12",
+    airDate: "2026-06-17",
+    providers: { tmdbId: 274671 },
+  }, fixtureNowMs);
+  upsertProviderEvent(providerDateMoveDb, {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:tv:274671",
+    title: "Upcoming TMDB Date Conflict",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 2,
+    episodeNumber: 12,
+    name: "Episode 12",
+    airDate: "2026-06-24",
+    providers: { tmdbId: 274671 },
+  }, fixtureNowMs + 1);
+  const providerDateMoveRows = providerDateMoveDb
+    .prepare("SELECT air_date FROM provider_events ORDER BY air_date")
+    .all();
+  providerDateMoveDb.close();
+  assertValidation(
+    providerDateMoveRows.length === 1 &&
+      providerDateMoveRows[0]?.air_date === "2026-06-24",
+    "Fresh provider fetches should replace stale same-provider same-episode dates.",
+    { providerDateMoveRows }
   );
   const sameSourceAliasDedupe = dedupeSingleShowEventsForSchedule([
     {
