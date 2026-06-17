@@ -4,6 +4,13 @@
 
 ShowTracker is a fast, minimal, open source tracker for shows, anime, and movies. It should feel like a cleaner TVTime replacement: discover media, track progress, manage a Home watchlist, see upcoming/released episodes, build custom lists, and inspect watch statistics from one Expo codebase.
 
+## How To Work
+
+- Treat user bug reports as requests to fix and ship. Use live URLs/screenshots when provided, make the smallest correct change, and verify the result in production.
+- Default delivery is: branch, validate, commit, push, PR, merge to `main` once checks pass, let Netlify deploy, deploy Convex when backend behavior changed, sync/run the VPS when schedule-confidence is involved, then test the live app with Browser tooling.
+- Use docs as project memory and code as current behavior. When they disagree, trust code for diagnosis and update docs only when the task is documentation work or the needed doc fix is clear.
+- For Home, Watchlist, Schedule, release availability, provider matching, duplicate collapse, route IDs, or projections, read `docs/DECISIONS.md` and the relevant ADRs before changing behavior.
+
 Read these first when the task is broad:
 
 - `docs/GOALS.md` for the durable product direction and non-goals.
@@ -11,6 +18,8 @@ Read these first when the task is broad:
 - `docs/DECISIONS.md` for the ADR map.
 - `docs/ARCHITECTURE.md` for the current system shape.
 - `docs/DEVELOPMENT.md` for commands and validation.
+- `docs/BROWSER_AUTOMATION.md` when the task involves live UI, screenshots, auth/session state, or Browser verification.
+- `docs/SCHEDULE_CONFIDENCE.md` when the task involves release dates, schedule freshness, Home attention, provider reconciliation, or the VPS job.
 
 ## Current Stack
 
@@ -40,7 +49,7 @@ Read these first when the task is broad:
 - Use `agent-browser` for task-style browser workflows such as auth, guest flows, route walkthroughs, and persistent session checks.
 - Use `npm run ui:inspect:quick` or `npm run ui:inspect` after UI changes when route/theme/device screenshot coverage is useful.
 - See `docs/BROWSER_AUTOMATION.md` for the tool decision guide.
-- The user usually runs their own Expo and Convex servers. Do not start or restart local app/backend servers unless explicitly asked, or unless it is mandatory to validate a required fix.
+- Local Expo/Convex servers are useful for fast iteration, but final verification should use the live app when the change is intended for production.
 
 ## Skill Management
 
@@ -65,23 +74,12 @@ This includes changes to:
 
 Each ADR must include context, current behavior, decision, reasoning, provider/data assumptions, edge cases, verification, and rollback notes. If unsure whether a change affects these paths, treat it as affecting them.
 
-## Documentation Rule
+## Docs
 
-If implementation work reveals a doc/rule is outdated, pause and propose the exact update before changing docs. This does not apply when the user's task is explicitly documentation cleanup or documentation editing.
+Keep docs durable. Update them when the task is documentation work or when implementation exposes a clear durable mismatch; avoid phase logs, handoff notes, and one-off plans.
 
-Keep docs durable. Prefer goal, architecture, and decision context over phase logs, handoff notes, or one-off implementation plans.
+## Project Guardrails
 
-## Git Workflow
-
-- Never commit unless the user explicitly asks.
-- Never push directly to `main`.
-- Use a feature branch for PR work: `feat/short-description`, `fix/short-description`, or `docs/short-description`.
-- All changes go through PR review.
-- After user feedback on an open PR, update that same PR branch unless the user asks otherwise.
-
-## Boundaries
-
-- Never commit API keys, tokens, credentials, or local machine connection details.
 - Never store images in Convex; store external CDN URLs.
 - Never weaken release-state correctness just to reduce Convex I/O. If correct release intelligence is too expensive in Convex, move the work to the schedule-confidence reconciliation layer and apply compact deltas.
 - Never reintroduce broad aggregate repair/backfill from routine app navigation.

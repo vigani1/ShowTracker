@@ -6,7 +6,7 @@
 npm install
 ```
 
-Create local env files from `.env.example` as needed. Do not commit secrets.
+Create local env files from `.env.example` as needed.
 
 Common env values:
 
@@ -22,7 +22,7 @@ EXPO_PUBLIC_CONVEX_SITE_URL
 
 ## Running Locally
 
-The usual commands are:
+Useful local commands:
 
 ```bash
 npm run start:web
@@ -30,7 +30,7 @@ npm start
 npx convex dev
 ```
 
-For agent work, follow `AGENTS.md`: the user usually runs their own frontend/backend servers. Do not start or restart Expo/Convex unless the user asks or the fix cannot be validated otherwise.
+For delivery workflow, follow `AGENTS.md`. This doc is mostly command reference.
 
 ## Validation
 
@@ -47,6 +47,12 @@ Convex checks:
 ```bash
 npx convex dev --once --typecheck enable --tail-logs disable
 npx convex deploy --dry-run --yes
+```
+
+Production Convex deploy, when backend/schema/function behavior needs to ship:
+
+```bash
+npx convex deploy --yes
 ```
 
 Schedule-confidence checks:
@@ -92,10 +98,26 @@ Local evidence is written under `.schedule-confidence/`, which is ignored.
 
 Use `ssh showtracker-vps` for the private ShowTracker VPS. The schedule-confidence checkout lives at `/opt/showtracker`, and the production timer is `showtracker-schedule-confidence.timer`.
 
-When explicitly asked to update the VPS checkout, use the existing repo deployment shape:
+When the merged change needs the VPS checkout updated, use the existing repo deployment shape:
 
 ```bash
 ssh showtracker-vps "cd /opt/showtracker && git fetch origin main && git reset --hard origin/main"
+```
+
+Useful VPS verification commands:
+
+```bash
+ssh showtracker-vps "cd /opt/showtracker && git rev-parse --short HEAD"
+ssh showtracker-vps "systemctl list-timers showtracker-schedule-confidence.timer --no-pager"
+ssh showtracker-vps "systemctl status showtracker-schedule-confidence.timer --no-pager"
+ssh showtracker-vps "journalctl -u showtracker-schedule-confidence.service -n 120 --no-pager"
+```
+
+When a schedule/release fix needs to affect production immediately, run the service after syncing `main` if the session has permission:
+
+```bash
+ssh showtracker-vps "sudo systemctl start showtracker-schedule-confidence.service"
+ssh showtracker-vps "journalctl -u showtracker-schedule-confidence.service -n 160 --no-pager"
 ```
 
 The timer's service script also hard-resets `/opt/showtracker` to `origin/main` before each scheduled schedule-confidence run.

@@ -81,6 +81,18 @@ Its repo checkout is `/opt/showtracker`. The systemd timer is
 checkout to `origin/main` before importing, reconciling, auditing, and applying
 provider deltas.
 
+## Production Commands
+
+```bash
+ssh showtracker-vps "cd /opt/showtracker && git fetch origin main && git reset --hard origin/main"
+ssh showtracker-vps "systemctl list-timers showtracker-schedule-confidence.timer --no-pager"
+ssh showtracker-vps "journalctl -u showtracker-schedule-confidence.service -n 120 --no-pager"
+ssh showtracker-vps "sudo systemctl start showtracker-schedule-confidence.service"
+ssh showtracker-vps "journalctl -u showtracker-schedule-confidence.service -n 160 --no-pager"
+```
+
+Run the service after syncing `main` when a schedule/release fix needs to affect production immediately.
+
 ## Audits Should Surface
 
 - Missing provider links.

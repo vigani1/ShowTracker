@@ -40,14 +40,8 @@ npm run schedule-confidence:validate
 
 ## Documentation
 
-Start with [docs/README.md](docs/README.md). The short version:
-
-- [docs/GOALS.md](docs/GOALS.md) explains the product goal, non-goals, and durable guardrails.
-- [CONTEXT.md](CONTEXT.md) defines product language agents should keep consistent.
-- [docs/DECISIONS.md](docs/DECISIONS.md) indexes ADRs and the reasoning behind risky behavior.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps the current app, Convex backend, and reconciliation flow.
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) lists setup, env, validation, and workflow commands.
+Agents start with [AGENTS.md](AGENTS.md). The docs map is [docs/README.md](docs/README.md).
 
 ## Contributing
 
-Create a feature branch, keep changes focused, and open a PR for review. Do not commit secrets, do not bypass Convex for user-owned synced data, and add an ADR for any change that can affect watchlist, schedule, release availability, provider matching, or projection behavior.
+Create a focused branch, open or update a PR, merge to `main` once checks pass, and verify the live Netlify deployment. Keep user-owned synced data in Convex, and add an ADR for any change that can affect watchlist, schedule, release availability, provider matching, or projection behavior.

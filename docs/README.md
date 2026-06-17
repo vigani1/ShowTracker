@@ -4,6 +4,8 @@ This directory is the durable project memory for agents and maintainers. It favo
 
 ## Start Here
 
+Agents should use this directory as routing, not as a pile of background reading. Start with `../AGENTS.md`, then pick the smallest doc set that matches the task.
+
 | Doc | Purpose |
 | --- | --- |
 | [GOALS.md](GOALS.md) | Product direction, non-goals, and high-risk guardrails |
@@ -14,6 +16,14 @@ This directory is the durable project memory for agents and maintainers. It favo
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Setup, commands, env, validation, and workflow notes |
 | [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md) | Browser tool choice and UI verification guidance |
 | [SCHEDULE_CONFIDENCE.md](SCHEDULE_CONFIDENCE.md) | Release-state reconciliation goals and commands |
+
+## Agent Reading Paths
+
+- Production bug with a live URL or screenshot: `../AGENTS.md`, `BROWSER_AUTOMATION.md`, then any domain doc named by the symptom.
+- Home, Watchlist, Schedule, release availability, provider matching, duplicates, route IDs, or projections: `DECISIONS.md`, the latest relevant ADRs, `ARCHITECTURE.md`, and `SCHEDULE_CONFIDENCE.md` when the VPS reconciler is involved.
+- Frontend/UI work: `../AGENTS.md`, `../CONTEXT.md`, `ARCHITECTURE.md`, and `BROWSER_AUTOMATION.md`.
+- Provider/API work: `API.md`, `DECISIONS.md`, and any ADR linked to the affected provider or release behavior.
+- Deployment or production verification: `DEVELOPMENT.md`, `BROWSER_AUTOMATION.md`, and `SCHEDULE_CONFIDENCE.md` for VPS-backed schedule/release fixes.
 
 ## Decisions
 

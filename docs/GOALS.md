@@ -65,4 +65,4 @@ Do not re-enable broad tracking aggregate rebuilds from normal app navigation. R
 
 ## Working Rule
 
-Agents should inspect the codebase, then use these docs to avoid reopening settled decisions. If behavior in code and docs disagree, treat the code as current behavior, propose the doc correction, and ask before changing docs unless the user explicitly requested documentation work.
+Use these docs to avoid reopening settled decisions. If behavior in code and docs disagree, treat the code as current behavior and fix the docs when the task calls for it.

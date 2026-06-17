@@ -8,6 +8,14 @@ For Home, Watchlist, Schedule, release availability, provider matching, duplicat
 
 For Home, Watchlist, Schedule, release availability, provider matching, duplicate collapse, route IDs, schedule cache, user projections, or the SQLite reconciliation boundary, read the most recent relevant ADRs before editing code and add a new ADR for behavior changes.
 
+When the user says a production issue happened before, search this map and the ADRs by symptom and title before designing a fix:
+
+```bash
+rg -n "same-day|duplicate|stale|future-only|remainingEpisodes|newEpisodeSignalAt|projection|provider|scheduleCache|watchlist|Home" docs/ADR-*.md
+```
+
+Use ADRs to recover the behavior contract and edge cases. Use current code and production data to confirm the present failure mode.
+
 Most frequently relevant:
 
 - [ADR-0010](ADR-0010-user-schedule-projections.md): user-specific schedule projections.

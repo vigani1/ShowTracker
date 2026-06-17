@@ -13,6 +13,18 @@ Expo app (native + web)
 
 Convex remains the source of truth for user-owned synced state. Provider APIs are sources of catalog, identity, schedule, and release facts. The schedule-confidence reconciler handles heavyweight provider/release reconciliation outside reactive app reads, then writes compact facts back to Convex.
 
+## Production Runtime
+
+```text
+main branch
+  -> Netlify auto-deploys the web app
+  -> Convex production serves auth, user data, functions, projections, and crons
+  -> private VPS at /opt/showtracker runs schedule-confidence from origin/main
+  -> Browser verification checks the live Netlify app against production data
+```
+
+Agents should treat production bugs as cross-system until proven otherwise. A detail page can be correct because it reads provider/detail facts while Home or Schedule is wrong because projection, schedule cache, or VPS reconciliation state is stale.
+
 ## Frontend
 
 The app uses Expo Router 6 with authenticated shell routes and direct-linkable detail/list routes.
@@ -115,6 +127,15 @@ scripts/schedule-confidence.mjs
 ```
 
 The reconciler should make missing provider links, title-only matches, conflicting provider IDs, and stale release facts inspectable instead of silently absent.
+
+When diagnosing mismatches between detail, Home, Watchlist, and Schedule, identify which layer produced each fact before changing behavior:
+
+- provider client/detail payload
+- Convex cached show metadata
+- `feedProjections`
+- `scheduleCache`
+- user schedule projections
+- schedule-confidence SQLite/VPS output
 
 ## Routing And Identity
 

@@ -2,6 +2,8 @@
 
 ShowTracker uses external providers for catalog, schedule, identity, and release facts. Provider clients live in `lib/api/` and return normalized types from `lib/api/types.ts`.
 
+Agents should read this doc before changing provider calls, route IDs, normalized media fields, release counts, or schedule facts. Provider behavior often affects Home and Schedule indirectly through Convex projections and the VPS schedule-confidence reconciler.
+
 ## Provider Roles
 
 | Provider | Role |
@@ -27,8 +29,6 @@ EXPO_PUBLIC_CONVEX_SITE_URL
 ```
 
 TMDB needs either an API key or read access token. TVMaze, AniList, and Jikan are currently used for read operations without project-specific secrets.
-
-Never hardcode provider credentials. Do not log tokens.
 
 ## Normalized Types
 

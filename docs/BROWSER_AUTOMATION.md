@@ -1,6 +1,6 @@
 # Browser Automation Guide
 
-How agents should use browser tooling in this repo during development.
+How agents should use browser tooling in this repo during development and production verification.
 
 ## Default Tool Choice
 
@@ -154,7 +154,9 @@ Do not use it as the first tool when the agent needs to discover why a bug exist
 ## ShowTracker Notes
 
 - The default local web URL is usually `http://localhost:8081`.
+- The live app is `https://showtrackerapp.netlify.app`.
 - If the task touches Convex-backed behavior, make sure the backend is running too.
-- The user normally runs local servers themselves, so do not start or restart them unless required by the task or explicitly requested.
-- Browser automation for this repo is for development verification and iteration, not formal end-to-end test authoring unless the user asks for that separately.
+- For production-intended fixes, verify against production Convex after deploying relevant backend changes.
+- When the report compares two live surfaces, such as detail vs schedule or Home vs watchlist, verify both surfaces before and after the fix when possible.
+- Browser automation for this repo is for development iteration and live verification, not formal end-to-end test authoring unless the user asks for that separately.
 - The project includes both `agent-browser` and `chrome-devtools` skills; pick based on the decision rules above instead of defaulting to one tool for every browser task.
