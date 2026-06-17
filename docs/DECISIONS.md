@@ -28,6 +28,7 @@ Most frequently relevant:
 - [ADR-0031](ADR-0031-watched-anchor-schedule-counts.md): watched anchors suppress stale schedule counts.
 - [ADR-0032](ADR-0032-terminal-total-release-denominator-guard.md): terminal totals do not override positive released counts.
 - [ADR-0033](ADR-0033-tmdb-upcoming-date-conflicts.md): TMDB upcoming date conflicts prune stale schedule rows.
+- [ADR-0034](ADR-0034-same-day-multi-episode-schedule.md): same-day multi-episode drops preserve adjacent episodes and display top-down.
 
 ## Navigation
 
@@ -76,6 +77,7 @@ Most frequently relevant:
 | [ADR-0031](ADR-0031-watched-anchor-schedule-counts.md) | Watched episode anchors suppress stale Home schedule counts and widened totals repair affected aggregates. |
 | [ADR-0032](ADR-0032-terminal-total-release-denominator-guard.md) | Terminal raw totals rescue missing release counts but do not override positive released/watchable denominators. |
 | [ADR-0033](ADR-0033-tmdb-upcoming-date-conflicts.md) | TMDB-tracked future date conflicts prefer TMDB's same-number next date so stale schedule rows can be pruned. |
+| [ADR-0034](ADR-0034-same-day-multi-episode-schedule.md) | Same-day multi-episode drops preserve adjacent provider episodes and display grouped top-down. |
 
 ## Rule For New ADRs
 

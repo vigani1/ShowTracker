@@ -315,6 +315,20 @@ const fixtureLibrary = [
     tvmazeId: 9016,
   },
   {
+    id: "fixture-same-day-multi-drop",
+    userId: "fixture-user",
+    showId: "show-same-day-multi-drop",
+    title: "Same Day Multi Drop",
+    mediaType: "tv",
+    status: "watching",
+    watchedEpisodesCount: 10,
+    totalEpisodes: 13,
+    releasedEpisodes: 10,
+    remainingEpisodes: 0,
+    tmdbId: 1034,
+    tvmazeId: 9034,
+  },
+  {
     id: "fixture-watched-anchor-drift",
     userId: "fixture-user",
     showId: "show-watched-anchor-drift",
@@ -597,6 +611,54 @@ const fixtureProviderEvents = [
     name: "Episode 1165",
     airDate: "2026-05-28T10:00:00.000Z",
     providers: { tmdbId: 1016, tvmazeId: 9016 },
+  },
+  {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:tv:1034",
+    title: "Same Day Multi Drop",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 2,
+    episodeNumber: 1,
+    name: "Episode 1",
+    airDate: "2026-05-20",
+    providers: { tmdbId: 1034 },
+  },
+  {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:tv:1034",
+    title: "Same Day Multi Drop",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 2,
+    episodeNumber: 2,
+    name: "Episode 2",
+    airDate: "2026-05-20",
+    providers: { tmdbId: 1034 },
+  },
+  {
+    sourceProvider: "tmdb",
+    providerShowId: "tmdb:tv:1034",
+    title: "Same Day Multi Drop",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 2,
+    episodeNumber: 3,
+    name: "Episode 3",
+    airDate: "2026-05-20",
+    providers: { tmdbId: 1034 },
+  },
+  {
+    sourceProvider: "tvmaze",
+    providerShowId: "tvmaze:9034",
+    title: "Same Day Multi Drop",
+    mediaType: "tv",
+    region: "US",
+    seasonNumber: 2,
+    episodeNumber: 1,
+    name: "Episode 1",
+    airDate: "2026-05-20T12:00:00.000Z",
+    providers: { tmdbId: 1034, tvmazeId: 9034 },
   },
   {
     sourceProvider: "tmdb",
@@ -1612,6 +1674,17 @@ function isCrossProviderSameDayDuplicate(next, current) {
     return false;
   }
 
+  const episodeDelta = Math.abs(
+    Number(next.episode_number) - Number(current.episode_number)
+  );
+  if (
+    next.season_number === current.season_number &&
+    episodeDelta > 0 &&
+    episodeDelta < sameSourceEpisodeAliasMinDelta
+  ) {
+    return false;
+  }
+
   return (
     isGenericEpisodeName(next.name) ||
     isGenericEpisodeName(current.name) ||
@@ -1832,7 +1905,33 @@ function dedupeSingleShowEventsForSchedule(rows) {
     }
   }
 
-  return deduped.sort((a, b) => a.air_timestamp - b.air_timestamp);
+  return deduped.sort(compareSingleShowScheduleEvents);
+}
+
+function compareSingleShowScheduleEvents(a, b) {
+  const dateDelta = String(dateKeyFromValue(a.air_date) ?? "").localeCompare(
+    String(dateKeyFromValue(b.air_date) ?? "")
+  );
+  if (dateDelta !== 0) {
+    return dateDelta;
+  }
+
+  const seasonDelta = Number(a.season_number) - Number(b.season_number);
+  if (seasonDelta !== 0) {
+    return seasonDelta;
+  }
+
+  const episodeDelta = Number(a.episode_number) - Number(b.episode_number);
+  if (episodeDelta !== 0) {
+    return episodeDelta;
+  }
+
+  const timestampDelta = Number(a.air_timestamp) - Number(b.air_timestamp);
+  if (timestampDelta !== 0) {
+    return timestampDelta;
+  }
+
+  return eventSourcePriority(b) - eventSourcePriority(a);
 }
 
 function findProviderReleaseDateConflicts(rows, nowMs) {
@@ -3254,6 +3353,17 @@ function shouldCollapseProjectedSameTrackedShowDay(next, current) {
 
   const differentSource = next.payload.sourceProvider !== current.payload.sourceProvider;
   if (!differentSource) {
+    return false;
+  }
+
+  const episodeDelta = Math.abs(
+    Number(next.payload.episodeNumber) - Number(current.payload.episodeNumber)
+  );
+  if (
+    next.payload.seasonNumber === current.payload.seasonNumber &&
+    episodeDelta > 0 &&
+    episodeDelta < sameSourceEpisodeAliasMinDelta
+  ) {
     return false;
   }
 
@@ -5802,6 +5912,31 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
     "Schedule projection count should suppress watched provider-year episodes.",
     providerYearCount
   );
+  const sameDayMultiDropDelta = byShowId.get("show-same-day-multi-drop");
+  const sameDayMultiDropNumbers =
+    sameDayMultiDropDelta?.upcomingEpisodes?.map((episode) => episode.episodeNumber) ??
+    [];
+  const sameDayMultiDropEvents =
+    fixtureUserProjection?.events
+      .filter((event) => event.showId === "show-same-day-multi-drop")
+      .map((event) => event.episodeNumber)
+      .sort((a, b) => a - b) ?? [];
+  const sameDayMultiDropCount = fixtureUserProjection?.counts.find(
+    (row) => row.mediaFilter === "tv" && row.routeId === "tmdb:tv:1034"
+  );
+  assertValidation(
+    sameDayMultiDropDelta?.nextScheduled?.episodeNumber === 1 &&
+      sameDayMultiDropNumbers.join(",") === "1,2,3",
+    "Same-day multi-episode drops should keep adjacent TMDB episodes when TVMaze only has a timed first episode.",
+    sameDayMultiDropDelta
+  );
+  assertValidation(
+    sameDayMultiDropEvents.join(",") === "1,2,3" &&
+      sameDayMultiDropCount?.futureCount === 3 &&
+      sameDayMultiDropCount?.unavailableCount === 3,
+    "Schedule projections should materialize every episode in a same-day multi-drop.",
+    { sameDayMultiDropEvents, sameDayMultiDropCount }
+  );
   const watchedAnchorDriftCount = fixtureUserProjection?.counts.filter(
     (row) => row.routeId === "tmdb:tv:1018"
   );
@@ -5845,7 +5980,7 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
   );
 
   return {
-    checks: 22,
+    checks: 24,
     facts: facts.size,
     issues: issues.length,
     deltas: deltas.length,

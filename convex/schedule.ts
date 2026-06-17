@@ -505,6 +505,17 @@ function shouldCollapseSameTrackedShowDay(
     return false;
   }
 
+  const episodeDelta = Math.abs(
+    next.episode.episodeNumber - current.episode.episodeNumber
+  );
+  if (
+    next.episode.seasonNumber === current.episode.seasonNumber &&
+    episodeDelta > 0 &&
+    episodeDelta < 10
+  ) {
+    return false;
+  }
+
   return (
     isGenericScheduleEpisodeName(next.episode.name) ||
     isGenericScheduleEpisodeName(current.episode.name) ||
@@ -580,6 +591,100 @@ function shouldCollapseSameTrackedShowNearbyDate(
     getScheduleEntrySourceProvider(next) !== getScheduleEntrySourceProvider(current);
 
   return sameDedupeKey || differentSource;
+}
+
+function getUpcomingEpisodeGroupKey(episode: UpcomingScheduleEpisode) {
+  return [
+    episode.routeId ?? "",
+    episode.mediaType,
+    normalizeTitle(episode.showTitle),
+  ].join(":");
+}
+
+function sortUpcomingScheduleEpisodes(
+  episodes: UpcomingScheduleEpisode[]
+): UpcomingScheduleEpisode[] {
+  const groupStats = new Map<
+    string,
+    {
+      firstAirtime: number | null;
+      firstTitle: string;
+      firstSeason: number;
+      firstEpisode: number;
+    }
+  >();
+
+  for (const episode of episodes) {
+    const key = getUpcomingEpisodeGroupKey(episode);
+    const current = groupStats.get(key) ?? {
+      firstAirtime: null,
+      firstTitle: episode.showTitle,
+      firstSeason: episode.episode.seasonNumber,
+      firstEpisode: episode.episode.episodeNumber,
+    };
+    const airtime = getEpisodeAirtimeTimestamp(episode.episode.airDate);
+
+    current.firstTitle =
+      current.firstTitle.localeCompare(episode.showTitle) <= 0
+        ? current.firstTitle
+        : episode.showTitle;
+    current.firstSeason = Math.min(current.firstSeason, episode.episode.seasonNumber);
+    current.firstEpisode = Math.min(current.firstEpisode, episode.episode.episodeNumber);
+    if (
+      airtime !== null &&
+      (current.firstAirtime === null || airtime < current.firstAirtime)
+    ) {
+      current.firstAirtime = airtime;
+    }
+
+    groupStats.set(key, current);
+  }
+
+  return [...episodes].sort((a, b) => {
+    const aKey = getUpcomingEpisodeGroupKey(a);
+    const bKey = getUpcomingEpisodeGroupKey(b);
+    const aGroup = groupStats.get(aKey);
+    const bGroup = groupStats.get(bKey);
+
+    if (aKey !== bKey) {
+      const aAirtime = aGroup?.firstAirtime ?? null;
+      const bAirtime = bGroup?.firstAirtime ?? null;
+
+      if (aAirtime !== null && bAirtime !== null && aAirtime !== bAirtime) {
+        return aAirtime - bAirtime;
+      }
+
+      if (aAirtime !== null || bAirtime !== null) {
+        return aAirtime === null ? 1 : -1;
+      }
+
+      return (aGroup?.firstTitle ?? a.showTitle).localeCompare(
+        bGroup?.firstTitle ?? b.showTitle
+      );
+    }
+
+    const seasonDelta = a.episode.seasonNumber - b.episode.seasonNumber;
+    if (seasonDelta !== 0) {
+      return seasonDelta;
+    }
+
+    const episodeDelta = a.episode.episodeNumber - b.episode.episodeNumber;
+    if (episodeDelta !== 0) {
+      return episodeDelta;
+    }
+
+    const aAirtime = getEpisodeAirtimeTimestamp(a.episode.airDate);
+    const bAirtime = getEpisodeAirtimeTimestamp(b.episode.airDate);
+    if (aAirtime !== null && bAirtime !== null && aAirtime !== bAirtime) {
+      return aAirtime - bAirtime;
+    }
+
+    if (aAirtime !== null || bAirtime !== null) {
+      return aAirtime === null ? 1 : -1;
+    }
+
+    return a.showTitle.localeCompare(b.showTitle);
+  });
 }
 
 function shouldPreferSameTrackedShowDayEpisode(
@@ -1771,20 +1876,7 @@ function serializeProjectedUpcomingSchedule(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, episodes]) => ({
       date,
-      episodes: episodes.sort((a, b) => {
-        const aAirtime = getEpisodeAirtimeTimestamp(a.episode.airDate);
-        const bAirtime = getEpisodeAirtimeTimestamp(b.episode.airDate);
-
-        if (aAirtime !== null && bAirtime !== null && aAirtime !== bAirtime) {
-          return aAirtime - bAirtime;
-        }
-
-        if (aAirtime !== null || bAirtime !== null) {
-          return aAirtime === null ? 1 : -1;
-        }
-
-        return a.showTitle.localeCompare(b.showTitle);
-      }),
+      episodes: sortUpcomingScheduleEpisodes(episodes),
     }));
 }
 
@@ -4078,20 +4170,7 @@ export const getUpcomingSchedule = query({
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, episodes]) => ({
         date,
-        episodes: episodes.sort((a, b) => {
-          const aAirtime = getEpisodeAirtimeTimestamp(a.episode.airDate);
-          const bAirtime = getEpisodeAirtimeTimestamp(b.episode.airDate);
-
-          if (aAirtime !== null && bAirtime !== null && aAirtime !== bAirtime) {
-            return aAirtime - bAirtime;
-          }
-
-          if (aAirtime !== null || bAirtime !== null) {
-            return aAirtime === null ? 1 : -1;
-          }
-
-          return a.showTitle.localeCompare(b.showTitle);
-        }),
+        episodes: sortUpcomingScheduleEpisodes(episodes),
       }));
   },
 });
