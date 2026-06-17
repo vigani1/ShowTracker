@@ -27,6 +27,7 @@ Most frequently relevant:
 - [ADR-0030](ADR-0030-terminal-total-watchlist-backlog.md): terminal totals preserve watchlist backlog.
 - [ADR-0031](ADR-0031-watched-anchor-schedule-counts.md): watched anchors suppress stale schedule counts.
 - [ADR-0032](ADR-0032-terminal-total-release-denominator-guard.md): terminal totals do not override positive released counts.
+- [ADR-0033](ADR-0033-tmdb-upcoming-date-conflicts.md): TMDB upcoming date conflicts prune stale schedule rows.
 
 ## Navigation
 
@@ -74,6 +75,7 @@ Most frequently relevant:
 | [ADR-0030](ADR-0030-terminal-total-watchlist-backlog.md) | Terminal TV/anime totals preserve Home backlog when stale released counts collapse to zero. |
 | [ADR-0031](ADR-0031-watched-anchor-schedule-counts.md) | Watched episode anchors suppress stale Home schedule counts and widened totals repair affected aggregates. |
 | [ADR-0032](ADR-0032-terminal-total-release-denominator-guard.md) | Terminal raw totals rescue missing release counts but do not override positive released/watchable denominators. |
+| [ADR-0033](ADR-0033-tmdb-upcoming-date-conflicts.md) | TMDB-tracked future date conflicts prefer TMDB's same-number next date so stale schedule rows can be pruned. |
 
 ## Rule For New ADRs
 

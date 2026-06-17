@@ -1651,19 +1651,59 @@ function preferEventCandidate(next, current, matchKind = "name") {
   return next.air_timestamp < current.air_timestamp;
 }
 
-function preferReleaseFactEventCandidate(next, current, nowMs, matchKind = "name") {
+function isDirectTmdbEventForItem(row, item) {
+  if (
+    item.media_type !== "tv" ||
+    typeof item.tmdb_id !== "number" ||
+    row.source_provider !== "tmdb"
+  ) {
+    return false;
+  }
+
+  return (
+    row.tmdb_id === item.tmdb_id ||
+    row.provider_show_id === `tmdb:${item.media_type}:${item.tmdb_id}` ||
+    row.provider_show_id === `tmdb:${item.tmdb_id}`
+  );
+}
+
+function shouldPreferTrackedTmdbFutureDate(next, current, item, nowMs, matchKind) {
+  if (matchKind !== "number") {
+    return false;
+  }
+  if (next.air_timestamp <= nowMs || current.air_timestamp <= nowMs) {
+    return false;
+  }
+  const nextDate = dateKeyFromValue(next.air_date);
+  const currentDate = dateKeyFromValue(current.air_date);
+  if (!nextDate || !currentDate || nextDate === currentDate) {
+    return false;
+  }
+
+  const nextIsDirectTmdb = isDirectTmdbEventForItem(next, item);
+  const currentIsDirectTmdb = isDirectTmdbEventForItem(current, item);
+  return nextIsDirectTmdb !== currentIsDirectTmdb && nextIsDirectTmdb;
+}
+
+function preferReleaseFactEventCandidate(next, current, nowMs, matchKind = "name", item = {}) {
   if (matchKind === "number") {
     const nextReleased = next.air_timestamp <= nowMs;
     const currentReleased = current.air_timestamp <= nowMs;
     if (nextReleased !== currentReleased) {
       return nextReleased;
     }
+    if (shouldPreferTrackedTmdbFutureDate(next, current, item, nowMs, matchKind)) {
+      return true;
+    }
+    if (shouldPreferTrackedTmdbFutureDate(current, next, item, nowMs, matchKind)) {
+      return false;
+    }
   }
 
   return preferEventCandidate(next, current, matchKind);
 }
 
-function dedupeProviderEventsForReleaseFact(rows, nowMs) {
+function dedupeProviderEventsForReleaseFact(rows, nowMs, item = {}) {
   const deduped = [];
   for (const row of rows) {
     const numberKey = eventNumberDedupeKey(row);
@@ -1690,7 +1730,7 @@ function dedupeProviderEventsForReleaseFact(rows, nowMs) {
         : isSameSourceSameDayEpisodeAlias(row, existing)
           ? "alias"
           : "date";
-    if (preferReleaseFactEventCandidate(row, existing, nowMs, matchKind)) {
+    if (preferReleaseFactEventCandidate(row, existing, nowMs, matchKind, item)) {
       deduped[existingIndex] = row;
     }
   }
@@ -1914,7 +1954,7 @@ function needsMissingProviderAudit(item) {
 }
 
 function buildReleaseFact(item, match, nowMs, reconciledAt) {
-  const releaseRows = dedupeProviderEventsForReleaseFact(match.rows, nowMs);
+  const releaseRows = dedupeProviderEventsForReleaseFact(match.rows, nowMs, item);
   const releasedEvents = releaseRows.filter((row) => row.air_timestamp <= nowMs);
   const allFutureEvents = dedupeSingleShowEventsForSchedule(
     releaseRows.filter((row) => row.air_timestamp > nowMs)
@@ -5468,6 +5508,84 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
       futureOnlyTotalDriftFact.totalEpisodes === 456,
     "Provider conflict should surface released backlog without letting future-only rows inflate totals.",
     { hotOnesShapedConflictFact, futureOnlyTotalDriftFact }
+  );
+  const upcomingTmdbDateConflictFact = buildReleaseFact(
+    {
+      show_id: "show-upcoming-tmdb-date-conflict",
+      title: "Upcoming TMDB Date Conflict",
+      media_type: "tv",
+      status: "watching",
+      watched_episodes_count: 23,
+      total_episodes: 24,
+      released_episodes: 23,
+      remaining_episodes: 0,
+      tmdb_id: 274671,
+      tvmaze_id: 80303,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tmdb",
+          provider_show_id: "tmdb:tv:274671",
+          air_timestamp: Date.UTC(2026, 5, 10, 0, 0, 0),
+          air_date: "2026-06-10",
+          normalized_title: "upcomingtmdbdateconflict",
+          media_type: "tv",
+          season_number: 2,
+          episode_number: 11,
+          name: "Latest TMDB Episode",
+          tmdb_id: 274671,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+        {
+          source_provider: "tvmaze",
+          provider_show_id: "tvmaze:80303",
+          air_timestamp: Date.UTC(2026, 5, 17, 14, 30, 0),
+          air_date: "2026-06-17T14:30:00.000Z",
+          normalized_title: "upcomingtmdbdateconflict",
+          media_type: "tv",
+          season_number: 2,
+          episode_number: 12,
+          name: "Episode 12",
+          tmdb_id: null,
+          tvmaze_id: 80303,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+        {
+          source_provider: "tmdb",
+          provider_show_id: "tmdb:tv:274671",
+          air_timestamp: Date.UTC(2026, 5, 24, 0, 0, 0),
+          air_date: "2026-06-24",
+          normalized_title: "upcomingtmdbdateconflict",
+          media_type: "tv",
+          season_number: 2,
+          episode_number: 12,
+          name: "Episode 12",
+          tmdb_id: 274671,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+      ],
+    },
+    Date.UTC(2026, 5, 17, 0, 20, 0),
+    fixtureNowMs
+  );
+  assertValidation(
+    upcomingTmdbDateConflictFact.releaseState === "upcoming" &&
+      upcomingTmdbDateConflictFact.releasedEpisodes === 23 &&
+      upcomingTmdbDateConflictFact.totalEpisodes === 24 &&
+      upcomingTmdbDateConflictFact.nextScheduled?.airDate === "2026-06-24" &&
+      upcomingTmdbDateConflictFact.upcomingEpisodes.length === 1,
+    "TMDB-tracked future date conflicts should keep the TMDB next date instead of stale TVMaze rows.",
+    { upcomingTmdbDateConflictFact }
   );
   const sameSourceAliasDedupe = dedupeSingleShowEventsForSchedule([
     {
