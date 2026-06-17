@@ -81,6 +81,10 @@ trusted title matches, using the same variant shape as the schedule projection
 matcher. That allows a trusted direct moved-date fact to prune stale global
 AniList season rows that would otherwise keep the old date visible.
 
+The schedule-cache maintenance version is bumped to `4` so unchanged upcoming
+facts that already had version `3` applied are resent once and can run the
+variant-aware prune.
+
 This rule only changes the release fact used by the server-owned reconciler. It
 does not change client matching, provider ID matching, title fallback, status
 mutation semantics, or schedule duplicate collapse.
@@ -164,6 +168,9 @@ Production verification must confirm that neither the direct TV row nor the
 AniList season-variant row keeps `/home` Schedule showing `The Beginning After
 the End` on June 17, 2026.
 
+Production rollout must run the VPS schedule-confidence job after the version
+bump so already-applied schedule-maintenance facts are re-emitted.
+
 Production verification should run the VPS schedule-confidence job after deploy,
 then confirm `/show/tmdb:tv:274671`, Home, and Schedule no longer show S02E12 as
 available on June 17 while preserving the June 24 upcoming row.
@@ -175,6 +182,9 @@ provider-event replacement, and direct-vs-title-fallback moved-date projection
 collapse in `scripts/schedule-confidence.mjs`; and by restoring exact-title-only
 schedule-cache pruning in `convex/scheduleConfidence.ts`; then re-running
 schedule-confidence projections.
+
+If only the version bump is rolled back, reset `scheduleCacheMaintenanceVersion`
+to `3` after confirming no production rows still need the variant-aware prune.
 
 If rollback is considered because a real TVMaze-only future schedule row
 disappears, first inspect whether a direct same-number TMDB row exists with a
