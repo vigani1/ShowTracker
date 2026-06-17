@@ -25,6 +25,9 @@ Production data showed:
   `2026-06-17`, because provider event IDs included `airDate` and fresh fetches
   inserted the new moved row without deleting the old same-provider same-episode
   row.
+- After the direct TV row moved to June 24, an AniList title-fallback season
+  variant for the same generic episode could still project onto the TMDB route on
+  June 17.
 
 ## Current Behavior
 
@@ -44,6 +47,11 @@ a different date-keyed event ID, `upsertProviderEvent` did not replace it. The
 release fact could then treat the stale TMDB row as released and leave the stale
 schedule projection alive.
 
+The schedule projection builder also allowed a lower-confidence anime
+title-variant row to coexist with the direct TV row when the dates differed by a
+week. Nearby duplicate collapse only covered one-day disagreements, so Schedule
+could still show the old date even after Home counts were future-only.
+
 ## Decision
 
 For TMDB-tracked TV rows, release fact dedupe now prefers a direct TMDB row when
@@ -55,6 +63,11 @@ Fresh provider-event upserts now replace older rows for the same provider,
 provider show, media type, season number, and episode number when the event ID
 differs. This removes stale moved-date rows from the local SQLite cache before
 release facts and schedule projections are rebuilt.
+
+User schedule projection dedupe now collapses direct tracked-provider rows
+against lower-confidence title-fallback moved-date rows for the same tracked
+route and same generic episode within the existing moved-date window. The direct
+tracked row wins regardless of provider-row insertion order.
 
 This rule only changes the release fact used by the server-owned reconciler. It
 does not change client matching, provider ID matching, title fallback, status
@@ -72,6 +85,11 @@ Provider date moves should replace the previous provider fact, not accumulate as
 multiple possible realities for the same provider episode. Keeping one current
 row per provider/show/season/episode lets old move dates disappear without a
 broad SQLite reset.
+
+Once direct provider evidence exists for the tracked route, a title-fallback
+season variant should not keep an older date alive on Schedule. This keeps
+Schedule aligned with the direct route while preserving title fallback for rows
+that have no direct counterpart.
 
 Keeping the rule limited to future same-number date disagreements avoids
 reversing ADR-0016. If a provider says an episode is already released while
@@ -121,15 +139,20 @@ Fixture validation also writes a stale TMDB S02E12 row on June 17 followed by a
 fresh TMDB S02E12 row on June 24 into an in-memory provider-event cache. Only the
 June 24 row may remain.
 
+Projection validation inserts the lower-confidence AniList-shaped moved-date row
+before and after the direct TMDB-shaped row. Both orders must produce exactly one
+projected event on June 24.
+
 Production verification should run the VPS schedule-confidence job after deploy,
 then confirm `/show/tmdb:tv:274671`, Home, and Schedule no longer show S02E12 as
 available on June 17 while preserving the June 24 upcoming row.
 
 ## Rollback Notes
 
-Rollback by removing the TMDB future-date preference and same-provider
-same-episode provider-event replacement in `scripts/schedule-confidence.mjs`,
-then re-running schedule-confidence projections.
+Rollback by removing the TMDB future-date preference, same-provider same-episode
+provider-event replacement, and direct-vs-title-fallback moved-date projection
+collapse in `scripts/schedule-confidence.mjs`, then re-running
+schedule-confidence projections.
 
 If rollback is considered because a real TVMaze-only future schedule row
 disappears, first inspect whether a direct same-number TMDB row exists with a

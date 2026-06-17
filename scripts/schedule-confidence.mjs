@@ -30,6 +30,7 @@ const maxProjectionRepairEpisodeDelta = 3;
 const absoluteScheduleEpisodeMin = 100;
 const sameSourceEpisodeAliasMinDelta = 10;
 const nearDateDuplicateWindowDays = 1;
+const movedDateDuplicateWindowDays = 45;
 const terminalShowLifecycleStatuses = new Set([
   "ended",
   "finished",
@@ -3322,6 +3323,31 @@ function shouldCollapseProjectedSameTrackedShowNearbyDate(next, current) {
   return sameDedupeKey || differentSource;
 }
 
+function shouldCollapseProjectedDirectMovedDate(next, current) {
+  if (next.payload.routeId !== current.payload.routeId) {
+    return false;
+  }
+  if (next.payload.date === current.payload.date) {
+    return false;
+  }
+  if (projectedDateDistanceDays(next, current) > movedDateDuplicateWindowDays) {
+    return false;
+  }
+  if (!hasSameProjectedEpisodeIdentity(next, current)) {
+    return false;
+  }
+
+  const nextIsDirectTracked =
+    next.payload.sourceMatchesTracked && next.payload.matchConfidence === "direct_id";
+  const currentIsDirectTracked =
+    current.payload.sourceMatchesTracked && current.payload.matchConfidence === "direct_id";
+  if (nextIsDirectTracked === currentIsDirectTracked) {
+    return false;
+  }
+
+  return true;
+}
+
 function preferProjectedScheduleCandidate(next, current) {
   if (next.payload.sourceMatchesTracked !== current.payload.sourceMatchesTracked) {
     return next.payload.sourceMatchesTracked;
@@ -3497,6 +3523,22 @@ function addProjectedScheduleCandidate(state, candidate) {
       replaceProjectedScheduleCandidate(
         state,
         existingNearbyIndex,
+        uniqueKey,
+        sameDayKey,
+        candidate
+      );
+    }
+    return;
+  }
+
+  const existingMovedDateIndex = state.events.findIndex((event) =>
+    shouldCollapseProjectedDirectMovedDate(candidate, event)
+  );
+  if (existingMovedDateIndex !== -1) {
+    if (preferProjectedScheduleCandidate(candidate, state.events[existingMovedDateIndex])) {
+      replaceProjectedScheduleCandidate(
+        state,
+        existingMovedDateIndex,
         uniqueKey,
         sameDayKey,
         candidate
@@ -5640,6 +5682,69 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
       providerDateMoveRows[0]?.air_date === "2026-06-24",
     "Fresh provider fetches should replace stale same-provider same-episode dates.",
     { providerDateMoveRows }
+  );
+  const makeMovedDateProjectionCandidate = (overrides) => ({
+    payload: {
+      showId: "show-upcoming-tmdb-date-conflict",
+      userShowId: "user-show-upcoming-tmdb-date-conflict",
+      feedProjectionId: "projection-upcoming-tmdb-date-conflict",
+      routeId: "tmdb:tv:274671",
+      mediaType: "tv",
+      showTitle: "Upcoming TMDB Date Conflict",
+      seasonNumber: 2,
+      episodeNumber: 12,
+      episodeName: "Episode 12",
+      airDate: "2026-06-24",
+      date: "2026-06-24",
+      airtimeMs: Date.UTC(2026, 5, 24),
+      seriesDedupeKey: "upcomingtmdbdateconflict",
+      episodeDedupeKey: "number:2:12",
+      sameTrackedShowDayKey: "tmdb:tv:274671:2026-06-24",
+      sourceProvider: "tmdb",
+      sourceMatchesTracked: true,
+      matchConfidence: "direct_id",
+      projectionUpdatedAt: fixtureNowMs,
+      reconciledAt: fixtureNowMs,
+      updatedAt: fixtureNowMs,
+      ...overrides,
+    },
+    status: "watching",
+    lastWatchedAt: 0,
+    watchedEpisodesCount: 23,
+    watchedEpisodeAnchors: [],
+  });
+  const directMovedDateCandidate = makeMovedDateProjectionCandidate({});
+  const titleFallbackMovedDateCandidate = makeMovedDateProjectionCandidate({
+    mediaType: "tv",
+    sourceMediaType: "anime",
+    sourceProvider: "anilist",
+    sourceMatchesTracked: false,
+    matchConfidence: "title_fallback",
+    seasonNumber: 1,
+    episodeDedupeKey: "number:1:12",
+    airDate: "2026-06-17T14:30:00.000Z",
+    date: "2026-06-17",
+    airtimeMs: Date.UTC(2026, 5, 17, 14, 30),
+    sameTrackedShowDayKey: "tmdb:tv:274671:2026-06-17",
+  });
+  const fallbackFirstState = { events: [], unique: new Map(), sameDay: new Map() };
+  addProjectedScheduleCandidate(fallbackFirstState, titleFallbackMovedDateCandidate);
+  addProjectedScheduleCandidate(fallbackFirstState, directMovedDateCandidate);
+  const directFirstState = { events: [], unique: new Map(), sameDay: new Map() };
+  addProjectedScheduleCandidate(directFirstState, directMovedDateCandidate);
+  addProjectedScheduleCandidate(directFirstState, titleFallbackMovedDateCandidate);
+  assertValidation(
+    fallbackFirstState.events.length === 1 &&
+      fallbackFirstState.events[0]?.payload.date === "2026-06-24" &&
+      fallbackFirstState.events[0]?.payload.matchConfidence === "direct_id" &&
+      directFirstState.events.length === 1 &&
+      directFirstState.events[0]?.payload.date === "2026-06-24" &&
+      directFirstState.events[0]?.payload.matchConfidence === "direct_id",
+    "Direct moved-date projection rows should suppress title-fallback season variants.",
+    {
+      fallbackFirstEvents: fallbackFirstState.events.map((event) => event.payload),
+      directFirstEvents: directFirstState.events.map((event) => event.payload),
+    }
   );
   const sameSourceAliasDedupe = dedupeSingleShowEventsForSchedule([
     {
