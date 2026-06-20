@@ -2116,6 +2116,27 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const terminalKnownTotalEpisodes =
     isTerminalLifecycleStatus(item.show_status) &&
     positiveIntegerOrNull(item.total_episodes);
+  const providerMetadataReleasedEpisodes = positiveIntegerOrNull(
+    item.provider_released_episodes
+  );
+  const providerMetadataTotalEpisodes = positiveIntegerOrNull(
+    item.provider_total_episodes
+  );
+  const terminalProviderMetadataReleasedEpisodes =
+    typeof terminalKnownTotalEpisodes === "number" &&
+    !hasKnownFutureEvents &&
+    typeof providerMetadataReleasedEpisodes === "number"
+      ? typeof providerMetadataTotalEpisodes === "number"
+        ? Math.min(providerMetadataReleasedEpisodes, providerMetadataTotalEpisodes)
+        : providerMetadataReleasedEpisodes
+      : null;
+  const metadataBackedImportedWatchableEpisodes =
+    typeof importedWatchableEpisodes === "number" &&
+    importedWatchableEpisodes > watchedEpisodesCount &&
+    typeof terminalProviderMetadataReleasedEpisodes === "number" &&
+    terminalProviderMetadataReleasedEpisodes >= importedWatchableEpisodes
+      ? importedWatchableEpisodes
+      : null;
   const hasTerminalKnownTotal =
     typeof terminalKnownTotalEpisodes === "number" &&
     !hasKnownFutureEvents &&
@@ -2125,27 +2146,31 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     !hasKnownFutureEvents &&
     releasedEvents.length <= 1 &&
     latestReleaseIsAlreadyWatched;
-  const rawReleasedEpisodes = hasTerminalKnownTotal
-    ? Math.max(
-        terminalKnownTotalEpisodes,
-        item.released_episodes ?? 0,
-        watchedEpisodesCount,
-        releasedEvents.length,
-        ...releasedEvents.map((row) => row.episode_number)
-      )
-    : hasKnownFutureEvents
-    ? Math.max(watchedEpisodesCount, releasedEvents.length)
-    : hasSparseOldReleaseHistory
-      ? Math.max(watchedEpisodesCount, releasedEvents.length)
-      : Math.max(
-          item.released_episodes ?? 0,
-          watchedEpisodesCount,
-          item.total_episodes ?? 0,
-          releasedEvents.length,
-          ...releasedEvents.map((row) => row.episode_number)
-        );
+  const rawReleasedEpisodes =
+    typeof metadataBackedImportedWatchableEpisodes === "number"
+      ? metadataBackedImportedWatchableEpisodes
+      : hasTerminalKnownTotal
+        ? Math.max(
+            terminalKnownTotalEpisodes,
+            item.released_episodes ?? 0,
+            watchedEpisodesCount,
+            releasedEvents.length,
+            ...releasedEvents.map((row) => row.episode_number)
+          )
+        : hasKnownFutureEvents
+          ? Math.max(watchedEpisodesCount, releasedEvents.length)
+          : hasSparseOldReleaseHistory
+            ? Math.max(watchedEpisodesCount, releasedEvents.length)
+            : Math.max(
+                item.released_episodes ?? 0,
+                watchedEpisodesCount,
+                item.total_episodes ?? 0,
+                releasedEvents.length,
+                ...releasedEvents.map((row) => row.episode_number)
+              );
   const timestampCappedReleasedEpisodes =
     !hasTerminalKnownTotal &&
+    typeof metadataBackedImportedWatchableEpisodes !== "number" &&
     latestReleaseIsAlreadyWatched &&
     (releasedEvents.length <= watchedEpisodesCount ||
       rawReleasedEpisodes - watchedEpisodesCount <= 1)
@@ -2161,9 +2186,6 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     providerReleasedCeilingForImportedRemaining >= importedWatchableEpisodes
       ? Math.max(timestampCappedReleasedEpisodes, importedWatchableEpisodes)
       : timestampCappedReleasedEpisodes;
-  const providerMetadataReleasedEpisodes = positiveIntegerOrNull(
-    item.provider_released_episodes
-  );
   const providerDateConflictReleasedRow =
     latestReleased && isReleasedProviderDateConflictRow(latestReleased, match.rows, nowMs);
   const metadataReleaseFloor =
@@ -5664,6 +5686,86 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
       timestampCappedFact.releasedEpisodes === 456,
     "Imported remaining episodes should prevent timestamp-only release capping.",
     { remainingPreservedFact, timestampCappedFact }
+  );
+  const terminalMetadataBackedBacklogFact = buildReleaseFact(
+    {
+      show_id: "show-terminal-metadata-backed-backlog",
+      title: "Terminal Metadata Backed Backlog",
+      media_type: "tv",
+      status: "watching",
+      show_status: "ended",
+      watched_episodes_count: 6,
+      total_episodes: 44,
+      remaining_episodes: 38,
+      provider_released_episodes: 44,
+      provider_total_episodes: 44,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 69740,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2022, 3, 29, 0, 0, 0),
+          air_date: "2022-04-29",
+          season_number: 4,
+          episode_number: 14,
+          name: "A Hard Way to Go",
+          tmdb_id: 69740,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+      ],
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
+  const terminalMismatchedImportedBacklogFact = buildReleaseFact(
+    {
+      show_id: "show-terminal-mismatched-imported-backlog",
+      title: "Terminal Mismatched Imported Backlog",
+      media_type: "tv",
+      status: "watching",
+      show_status: "ended",
+      watched_episodes_count: 161,
+      total_episodes: 184,
+      remaining_episodes: 23,
+      provider_released_episodes: 161,
+      provider_total_episodes: 184,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 897,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2007, 10, 9, 0, 0, 0),
+          air_date: "2007-11-09",
+          season_number: 7,
+          episode_number: 161,
+          name: "Old Series Finale",
+          tmdb_id: 897,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+      ],
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
+  assertValidation(
+    terminalMetadataBackedBacklogFact.releasedEpisodes === 44 &&
+      terminalMetadataBackedBacklogFact.releaseState === "available_now" &&
+      terminalMismatchedImportedBacklogFact.releasedEpisodes === 161 &&
+      terminalMismatchedImportedBacklogFact.releaseState === "caught_up",
+    "Terminal imported backlog should survive sparse old-event capping only when provider metadata backs it.",
+    { terminalMetadataBackedBacklogFact, terminalMismatchedImportedBacklogFact }
   );
   const hotOnesShapedConflictFact = buildReleaseFact(
     {
