@@ -13,8 +13,17 @@ cd "$APP_DIR"
     exit 75
   }
 
-  git fetch origin "$BRANCH"
-  git reset --hard "origin/$BRANCH"
+  if git fetch origin "$BRANCH" && git reset --hard "origin/$BRANCH"; then
+    echo "Updated checkout to origin/$BRANCH"
+  else
+    git_status=$?
+    echo "Warning: git update failed with status $git_status; continuing with the current checkout." >&2
+    if [ "${SHOWTRACKER_RECONCILER_REQUIRE_GIT_UPDATE:-0}" = "1" ]; then
+      exit "$git_status"
+    fi
+    git rev-parse --verify HEAD >/dev/null
+    echo "Current checkout: $(git rev-parse --short HEAD)"
+  fi
 
   npm run schedule-confidence:import
   npm run schedule-confidence:reconcile:providers

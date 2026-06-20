@@ -31,6 +31,14 @@ const absoluteScheduleEpisodeMin = 100;
 const sameSourceEpisodeAliasMinDelta = 10;
 const nearDateDuplicateWindowDays = 1;
 const movedDateDuplicateWindowDays = 45;
+const configuredProviderFetchTimeoutMs = Number(
+  process.env.SHOWTRACKER_PROVIDER_FETCH_TIMEOUT_MS
+);
+const defaultProviderFetchTimeoutMs =
+  Number.isFinite(configuredProviderFetchTimeoutMs) &&
+  configuredProviderFetchTimeoutMs > 0
+    ? Math.max(1000, configuredProviderFetchTimeoutMs)
+    : 15000;
 const terminalShowLifecycleStatuses = new Set([
   "ended",
   "finished",
@@ -2479,8 +2487,69 @@ async function readJsonResponseText(response) {
   return bytes.toString("utf8");
 }
 
+function safeProviderUrlForLog(url) {
+  try {
+    const parsed = new URL(String(url));
+    parsed.searchParams.delete("api_key");
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return String(url).replace(/api_key=[^&\s]+/gi, "api_key=redacted");
+  }
+}
+
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const {
+    timeoutMs = defaultProviderFetchTimeoutMs,
+    fetchImpl = fetch,
+    ...requestOptions
+  } = options;
+  const normalizedTimeoutMs = Math.max(0, Number(timeoutMs) || 0);
+  const upstreamSignal = requestOptions.signal;
+  let timeoutId = null;
+  let timeoutFired = false;
+  let abortController = null;
+  let removeUpstreamAbortListener = null;
+
+  if (normalizedTimeoutMs > 0) {
+    abortController = new AbortController();
+    const abortFromUpstream = () => {
+      abortController.abort(upstreamSignal?.reason);
+    };
+    if (upstreamSignal?.aborted) {
+      abortFromUpstream();
+    } else if (upstreamSignal?.addEventListener) {
+      upstreamSignal.addEventListener("abort", abortFromUpstream, { once: true });
+      removeUpstreamAbortListener = () => {
+        upstreamSignal.removeEventListener("abort", abortFromUpstream);
+      };
+    }
+    timeoutId = setTimeout(() => {
+      timeoutFired = true;
+      abortController.abort(
+        new Error(`Provider request timed out after ${normalizedTimeoutMs}ms`)
+      );
+    }, normalizedTimeoutMs);
+    timeoutId.unref?.();
+    requestOptions.signal = abortController.signal;
+  }
+
+  let response;
+  try {
+    response = await fetchImpl(url, requestOptions);
+  } catch (error) {
+    if (timeoutFired) {
+      throw new Error(
+        `Provider request timed out after ${normalizedTimeoutMs}ms: ${safeProviderUrlForLog(url)}`
+      );
+    }
+    throw error;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    removeUpstreamAbortListener?.();
+  }
+
   const bodyText = await readJsonResponseText(response);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}: ${bodyText.slice(0, 300)}`);
@@ -5234,6 +5303,38 @@ async function validateTmdbAuthFallback() {
   return { bearerAttempts, apiKeyAttempts };
 }
 
+async function validateProviderFetchTimeout() {
+  let abortSeen = false;
+  try {
+    await fetchJson("https://provider.invalid/hangs?api_key=secret", {
+      timeoutMs: 5,
+      fetchImpl: (_url, options = {}) =>
+        new Promise((_resolve, reject) => {
+          options.signal?.addEventListener(
+            "abort",
+            () => {
+              abortSeen = true;
+              reject(options.signal.reason ?? new Error("aborted"));
+            },
+            { once: true }
+          );
+        }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    assertValidation(
+      abortSeen &&
+        message.includes("Provider request timed out after 5ms") &&
+        !message.includes("secret"),
+      "Provider fetch timeout should abort hung requests and redact API keys.",
+      { abortSeen, message }
+    );
+    return { abortSeen };
+  }
+
+  throw new Error("Provider fetch timeout validation did not throw.");
+}
+
 async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath) {
   const facts = new Map(
     db
@@ -5262,6 +5363,7 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
   );
   const fixtureUserProjection = projectionPayload.users.find((user) => user.userId === "fixture-user");
   const tmdbAuthFallback = await validateTmdbAuthFallback();
+  const providerFetchTimeout = await validateProviderFetchTimeout();
   const staleAniListCacheDeltas =
     buildScheduleCacheProviderMaintenanceDeltasFromMedia(
       [
@@ -5987,6 +6089,7 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
     projectedEvents: projectionPayload.metrics.eventCount,
     projectedCountRows: projectionPayload.metrics.countRowCount,
     tmdbAuthFallback,
+    providerFetchTimeout,
   };
 }
 

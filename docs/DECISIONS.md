@@ -37,6 +37,7 @@ Most frequently relevant:
 - [ADR-0032](ADR-0032-terminal-total-release-denominator-guard.md): terminal totals do not override positive released counts.
 - [ADR-0033](ADR-0033-tmdb-upcoming-date-conflicts.md): TMDB upcoming date conflicts prune stale schedule rows.
 - [ADR-0034](ADR-0034-same-day-multi-episode-schedule.md): same-day multi-episode drops preserve adjacent episodes and display top-down.
+- [ADR-0035](ADR-0035-schedule-confidence-run-resilience.md): schedule-confidence run resilience keeps daily refreshes moving through git/provider stalls.
 
 ## Navigation
 
@@ -86,6 +87,7 @@ Most frequently relevant:
 | [ADR-0032](ADR-0032-terminal-total-release-denominator-guard.md) | Terminal raw totals rescue missing release counts but do not override positive released/watchable denominators. |
 | [ADR-0033](ADR-0033-tmdb-upcoming-date-conflicts.md) | TMDB-tracked future date conflicts prefer TMDB's same-number next date so stale schedule rows can be pruned. |
 | [ADR-0034](ADR-0034-same-day-multi-episode-schedule.md) | Same-day multi-episode drops preserve adjacent provider episodes and display grouped top-down. |
+| [ADR-0035](ADR-0035-schedule-confidence-run-resilience.md) | Schedule-confidence runs continue on a valid checkout when git update fails and provider requests time out instead of hanging the full run. |
 
 ## Rule For New ADRs
 
