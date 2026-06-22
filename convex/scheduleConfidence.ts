@@ -21,6 +21,8 @@ const SYNTHETIC_SCHEDULE_CACHE_DATES = [
   "2026-05-30",
 ];
 const SCHEDULE_MOVE_PRUNE_WINDOW_DAYS = 45;
+const STALE_PROVIDER_PRUNE_PAST_DAYS = 45;
+const STALE_PROVIDER_PRUNE_FUTURE_DAYS = 120;
 const TERMINAL_SHOW_LIFECYCLE_STATUSES = new Set([
   "ended",
   "finished",
@@ -79,6 +81,12 @@ const projectionRepairValidator = v.object({
   providerTotalEpisodes: v.optional(v.number()),
 });
 
+const scheduleCacheProviderPruneValidator = v.object({
+  sourceProvider: v.string(),
+  providerShowId: v.string(),
+  episodes: v.array(episodeFactValidator),
+});
+
 const releaseDeltaValidator = v.object({
   canonicalKey: v.string(),
   title: v.string(),
@@ -92,6 +100,7 @@ const releaseDeltaValidator = v.object({
   nextScheduled: v.optional(episodeFactValidator),
   upcomingEpisodes: v.optional(v.array(episodeFactValidator)),
   clearStaleEpisodeSignal: v.optional(v.boolean()),
+  scheduleCacheProviderPrunes: v.optional(v.array(scheduleCacheProviderPruneValidator)),
   scheduleCacheMaintenance: v.optional(v.boolean()),
   scheduleCacheMaintenanceVersion: v.optional(v.number()),
   projectionRepair: v.optional(projectionRepairValidator),
@@ -771,6 +780,26 @@ function getDurableRouteProviderShowIds(delta: {
   return ids;
 }
 
+function getScheduleCacheProviderPruneShowIds(delta: {
+  mediaType: "tv" | "anime" | "movie";
+  providerIds: {
+    tvmazeId?: number;
+    anilistId?: number;
+    malId?: number;
+    tmdbId?: number;
+    imdbId?: string;
+  };
+}) {
+  const ids = getDurableRouteProviderShowIds(delta);
+  if (
+    (delta.mediaType === "tv" || delta.mediaType === "movie") &&
+    typeof delta.providerIds.tmdbId === "number"
+  ) {
+    ids.add(`tmdb:${delta.providerIds.tmdbId}`);
+  }
+  return ids;
+}
+
 async function findShowByProviderIds(
   ctx: QueryCtx | MutationCtx,
   delta: {
@@ -1226,6 +1255,92 @@ async function pruneMovedScheduleCacheEntries(
       }
 
       return true;
+    });
+
+    if (entries.length === existingEntries.length) {
+      continue;
+    }
+
+    await ctx.db.patch(row._id, {
+      episodes: serializeCompactScheduleEntries(entries),
+      lastUpdated: Date.now(),
+    });
+    rowsUpdated += 1;
+  }
+
+  return rowsUpdated;
+}
+
+async function pruneStaleScheduleCacheProviderEntries(
+  ctx: MutationCtx,
+  delta: {
+    mediaType: "tv" | "anime" | "movie";
+    providerIds: {
+      tvmazeId?: number;
+      anilistId?: number;
+      malId?: number;
+      tmdbId?: number;
+      imdbId?: string;
+    };
+  },
+  prunes: Array<{
+    sourceProvider: string;
+    providerShowId: string;
+    episodes: Array<{
+      seasonNumber: number;
+      episodeNumber: number;
+    }>;
+  }>,
+  generatedAt: number
+) {
+  const mediaType = delta.mediaType;
+  if (mediaType === "movie" || prunes.length === 0) {
+    return 0;
+  }
+
+  const staleEpisodeKeys = new Set<string>();
+  for (const prune of prunes) {
+    for (const episode of prune.episodes) {
+      if (
+        Number.isFinite(episode.seasonNumber) &&
+        Number.isFinite(episode.episodeNumber)
+      ) {
+        staleEpisodeKeys.add(`${episode.seasonNumber}:${episode.episodeNumber}`);
+      }
+    }
+  }
+  if (staleEpisodeKeys.size === 0) {
+    return 0;
+  }
+
+  const routeProviderShowIds = getScheduleCacheProviderPruneShowIds(delta);
+  if (routeProviderShowIds.size === 0) {
+    return 0;
+  }
+
+  const generatedDate = new Date(generatedAt);
+  if (!Number.isFinite(generatedDate.getTime())) {
+    return 0;
+  }
+  const todayKey = generatedDate.toISOString().slice(0, 10);
+  const startDate = addDaysToDateKey(todayKey, -STALE_PROVIDER_PRUNE_PAST_DAYS);
+  const endDate = addDaysToDateKey(todayKey, STALE_PROVIDER_PRUNE_FUTURE_DAYS);
+  const rows = await ctx.db
+    .query("scheduleCache")
+    .withIndex("by_type_date", (q) =>
+      q.eq("mediaType", mediaType).gte("date", startDate).lte("date", endDate)
+    )
+    .collect();
+
+  let rowsUpdated = 0;
+  for (const row of rows) {
+    const existingEntries = parseCompactScheduleEntries(row.episodes);
+    const entries = existingEntries.filter((entry) => {
+      if (!routeProviderShowIds.has(entry.showId)) {
+        return true;
+      }
+      const episodeKey = `${entry.episode.seasonNumber}:${entry.episode.episodeNumber}`;
+      return !staleEpisodeKeys.has(episodeKey);
     });
 
     if (entries.length === existingEntries.length) {
@@ -1952,6 +2067,19 @@ export const applyReleaseDeltas = mutation({
       }
 
       let scheduleCacheAlreadyMaintained = false;
+      if (
+        delta.scheduleCacheProviderPrunes &&
+        delta.scheduleCacheProviderPrunes.length > 0
+      ) {
+        const prunedRows = await pruneStaleScheduleCacheProviderEntries(
+          ctx,
+          delta,
+          delta.scheduleCacheProviderPrunes,
+          args.generatedAt
+        );
+        result.scheduleCacheRowsUpdated += prunedRows;
+        scheduleCacheAlreadyMaintained = prunedRows > 0;
+      }
       if (delta.scheduleCacheMaintenance === true) {
         const scheduleCacheResult = await upsertScheduleCacheEntry(ctx, delta);
         result.scheduleCacheRowsUpdated += scheduleCacheResult.updated;

@@ -39,6 +39,7 @@ Most frequently relevant:
 - [ADR-0034](ADR-0034-same-day-multi-episode-schedule.md): same-day multi-episode drops preserve adjacent episodes and display top-down.
 - [ADR-0035](ADR-0035-schedule-confidence-run-resilience.md): schedule-confidence run resilience keeps daily refreshes moving through git/provider stalls.
 - [ADR-0036](ADR-0036-terminal-imported-backlog-metadata.md): terminal imported backlog needs provider metadata confirmation before defeating sparse-old capping.
+- [ADR-0037](ADR-0037-provider-disappeared-episode-pruning.md): provider rows that disappear upstream are pruned from SQLite and schedule cache.
 
 ## Navigation
 
@@ -90,6 +91,7 @@ Most frequently relevant:
 | [ADR-0034](ADR-0034-same-day-multi-episode-schedule.md) | Same-day multi-episode drops preserve adjacent provider episodes and display grouped top-down. |
 | [ADR-0035](ADR-0035-schedule-confidence-run-resilience.md) | Schedule-confidence runs continue on a valid checkout when git update fails and provider requests time out instead of hanging the full run. |
 | [ADR-0036](ADR-0036-terminal-imported-backlog-metadata.md) | Terminal imported backlog needs provider metadata confirmation before sparse-old capping can collapse it. |
+| [ADR-0037](ADR-0037-provider-disappeared-episode-pruning.md) | Provider rows that disappear upstream are pruned from SQLite and schedule cache. |
 
 ## Rule For New ADRs
 
