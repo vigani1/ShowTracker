@@ -2269,10 +2269,8 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     importedEpisodeCeiling > providerMetadataTotalEpisodes
       ? providerMetadataTotalEpisodes
       : null;
-  const terminalProviderMetadataReleasedEpisodes =
-    typeof terminalKnownTotalEpisodes === "number" &&
-    !hasKnownFutureEvents &&
-    typeof providerMetadataReleasedEpisodes === "number"
+  const currentProviderMetadataReleasedEpisodes =
+    !hasKnownFutureEvents && typeof providerMetadataReleasedEpisodes === "number"
       ? typeof providerMetadataTotalEpisodes === "number"
         ? Math.min(providerMetadataReleasedEpisodes, providerMetadataTotalEpisodes)
         : providerMetadataReleasedEpisodes
@@ -2280,9 +2278,14 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const metadataBackedImportedWatchableEpisodes =
     typeof importedWatchableEpisodes === "number" &&
     importedWatchableEpisodes > watchedEpisodesCount &&
-    typeof terminalProviderMetadataReleasedEpisodes === "number" &&
-    terminalProviderMetadataReleasedEpisodes >= importedWatchableEpisodes
+    typeof currentProviderMetadataReleasedEpisodes === "number" &&
+    currentProviderMetadataReleasedEpisodes >= importedWatchableEpisodes
       ? importedWatchableEpisodes
+      : null;
+  const providerMetadataBacklogEpisodes =
+    typeof currentProviderMetadataReleasedEpisodes === "number" &&
+    currentProviderMetadataReleasedEpisodes > Math.max(watchedEpisodesCount, importedEpisodeCeiling)
+      ? currentProviderMetadataReleasedEpisodes
       : null;
   const hasTerminalKnownTotal =
     typeof terminalKnownTotalEpisodes === "number" &&
@@ -2298,6 +2301,8 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
       ? providerConfirmedCurrentTotalEpisodes
       : typeof metadataBackedImportedWatchableEpisodes === "number"
       ? metadataBackedImportedWatchableEpisodes
+      : typeof providerMetadataBacklogEpisodes === "number"
+      ? providerMetadataBacklogEpisodes
       : hasTerminalKnownTotal
         ? Math.max(
             terminalKnownTotalEpisodes,
@@ -2320,6 +2325,7 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const timestampCappedReleasedEpisodes =
     !hasTerminalKnownTotal &&
     typeof metadataBackedImportedWatchableEpisodes !== "number" &&
+    typeof providerMetadataBacklogEpisodes !== "number" &&
     latestReleaseIsAlreadyWatched &&
     (releasedEvents.length <= watchedEpisodesCount ||
       rawReleasedEpisodes - watchedEpisodesCount <= 1)
@@ -5972,6 +5978,81 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
       terminalMismatchedImportedBacklogFact.releaseState === "caught_up",
     "Terminal imported backlog should survive sparse old-event capping only when provider metadata backs it.",
     { terminalMetadataBackedBacklogFact, terminalMismatchedImportedBacklogFact }
+  );
+  const returningSeasonDropRow = {
+    source_provider: "tmdb",
+    provider_show_id: "tmdb:tv:154385",
+    air_timestamp: Date.UTC(2026, 3, 16, 0, 0, 0),
+    air_date: "2026-04-16",
+    season_number: 2,
+    episode_number: 8,
+    name: "It Will Stay This Way and You Will Obey",
+    tmdb_id: 154385,
+    tvmaze_id: null,
+    anilist_id: null,
+    mal_id: null,
+    imdb_id: "tt14403178",
+  };
+  const returningSeasonDropBeforeDetailFact = buildReleaseFact(
+    {
+      show_id: "show-returning-season-drop-before-detail",
+      title: "Returning Season Drop Before Detail",
+      media_type: "tv",
+      status: "watching",
+      show_status: "returning",
+      watched_episodes_count: 10,
+      total_episodes: 10,
+      released_episodes: 10,
+      remaining_episodes: 0,
+      provider_released_episodes: 18,
+      provider_total_episodes: 18,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 154385,
+      imdb_id: "tt14403178",
+    },
+    {
+      confidence: "direct_id",
+      rows: [returningSeasonDropRow],
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
+  const returningSeasonDropAfterDetailFact = buildReleaseFact(
+    {
+      show_id: "show-returning-season-drop-after-detail",
+      title: "Returning Season Drop After Detail",
+      media_type: "tv",
+      status: "watching",
+      show_status: "returning",
+      watched_episodes_count: 10,
+      total_episodes: 18,
+      released_episodes: null,
+      remaining_episodes: 8,
+      provider_released_episodes: 18,
+      provider_total_episodes: 18,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 154385,
+      imdb_id: "tt14403178",
+    },
+    {
+      confidence: "direct_id",
+      rows: [returningSeasonDropRow],
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
+  assertValidation(
+    returningSeasonDropBeforeDetailFact.releasedEpisodes === 18 &&
+      returningSeasonDropBeforeDetailFact.totalEpisodes === 18 &&
+      returningSeasonDropBeforeDetailFact.releaseState === "available_now" &&
+      returningSeasonDropAfterDetailFact.releasedEpisodes === 18 &&
+      returningSeasonDropAfterDetailFact.totalEpisodes === 18 &&
+      returningSeasonDropAfterDetailFact.releaseState === "available_now",
+    "Provider-backed returning season drops should remain visible despite sparse old release rows.",
+    {
+      returningSeasonDropBeforeDetailFact,
+      returningSeasonDropAfterDetailFact,
+    }
   );
   const hotOnesShapedConflictFact = buildReleaseFact(
     {

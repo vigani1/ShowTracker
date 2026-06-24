@@ -40,6 +40,7 @@ Most frequently relevant:
 - [ADR-0035](ADR-0035-schedule-confidence-run-resilience.md): schedule-confidence run resilience keeps daily refreshes moving through git/provider stalls.
 - [ADR-0036](ADR-0036-terminal-imported-backlog-metadata.md): terminal imported backlog needs provider metadata confirmation before defeating sparse-old capping.
 - [ADR-0037](ADR-0037-provider-disappeared-episode-pruning.md): provider rows that disappear upstream are pruned from SQLite and schedule cache.
+- [ADR-0038](ADR-0038-provider-backed-returning-season-drops.md): provider-backed returning season drops defeat sparse-old release capping.
 
 ## Navigation
 
@@ -92,6 +93,7 @@ Most frequently relevant:
 | [ADR-0035](ADR-0035-schedule-confidence-run-resilience.md) | Schedule-confidence runs continue on a valid checkout when git update fails and provider requests time out instead of hanging the full run. |
 | [ADR-0036](ADR-0036-terminal-imported-backlog-metadata.md) | Terminal imported backlog needs provider metadata confirmation before sparse-old capping can collapse it. |
 | [ADR-0037](ADR-0037-provider-disappeared-episode-pruning.md) | Provider rows that disappear upstream are pruned from SQLite and schedule cache. |
+| [ADR-0038](ADR-0038-provider-backed-returning-season-drops.md) | Provider-backed returning season drops defeat sparse-old release capping. |
 
 ## Rule For New ADRs
 
