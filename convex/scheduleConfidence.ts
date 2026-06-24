@@ -576,6 +576,28 @@ function maybeClearCaughtUpSignalFromAggregate(
   return true;
 }
 
+function shouldCompleteCaughtUpTerminalUserShow(
+  userShow: Doc<"userShows">,
+  show: Pick<Doc<"shows">, "mediaType" | "status">,
+  watchedCount: number,
+  releasedEpisodes: number | undefined,
+  releaseState: string
+) {
+  if (userShow.status !== "watching") {
+    return false;
+  }
+  if (show.mediaType === "movie" || !isTerminalLifecycleStatus(show.status)) {
+    return false;
+  }
+  if (releaseState !== "caught_up") {
+    return false;
+  }
+  if (typeof releasedEpisodes !== "number" || releasedEpisodes <= 0) {
+    return false;
+  }
+  return watchedCount >= releasedEpisodes;
+}
+
 function parseDateKey(value: string | undefined) {
   if (!value) {
     return null;
@@ -2049,6 +2071,7 @@ export const applyReleaseDeltas = mutation({
       patchedFeedProjections: 0,
       resumedCompletedShows: 0,
       resumedAutoPausedShows: 0,
+      completedCaughtUpTerminalShows: 0,
       clearedStaleEpisodeSignals: 0,
       repairedStaleProjections: 0,
       repairedTrackingAggregates: 0,
@@ -2146,7 +2169,10 @@ export const applyReleaseDeltas = mutation({
         Object.keys(showPatch).length > 0 ||
         delta.clearStaleEpisodeSignal === true ||
         Boolean(delta.projectionRepair) ||
-        delta.releaseState === "available_now";
+        delta.releaseState === "available_now" ||
+        (delta.releaseState === "caught_up" &&
+          isTerminalLifecycleStatus(patchedShow.status) &&
+          typeof releasedEpisodes === "number");
 
       if (!shouldVisitUserShows) {
         continue;
@@ -2211,6 +2237,23 @@ export const applyReleaseDeltas = mutation({
         ) {
           setChangedField(userPatch, userShow, "newEpisodeSignalAt", undefined);
           result.clearedStaleEpisodeSignals += 1;
+        }
+
+        if (
+          shouldCompleteCaughtUpTerminalUserShow(
+            userShow,
+            patchedShow,
+            watchedCount,
+            releasedEpisodes,
+            delta.releaseState
+          )
+        ) {
+          userPatch.status = "completed";
+          userPatch.completedAt = lastWatchedAt ?? args.generatedAt;
+          userPatch.autoPausedAt = undefined;
+          userPatch.droppedAt = undefined;
+          userPatch.statusChangedAt = args.generatedAt;
+          result.completedCaughtUpTerminalShows += 1;
         }
 
         if (trackingAggregate) {

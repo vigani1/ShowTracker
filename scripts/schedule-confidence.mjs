@@ -2245,9 +2245,9 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     latestReleased &&
     typeof item.last_watched_at === "number" &&
     latestReleased.air_timestamp <= item.last_watched_at;
+  const hasTerminalLifecycle = isTerminalLifecycleStatus(item.show_status);
   const terminalKnownTotalEpisodes =
-    isTerminalLifecycleStatus(item.show_status) &&
-    positiveIntegerOrNull(item.total_episodes);
+    hasTerminalLifecycle && positiveIntegerOrNull(item.total_episodes);
   const providerMetadataReleasedEpisodes = positiveIntegerOrNull(
     item.provider_released_episodes
   );
@@ -2269,6 +2269,15 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     importedEpisodeCeiling > providerMetadataTotalEpisodes
       ? providerMetadataTotalEpisodes
       : null;
+  const terminalWatchedCountReleaseCap =
+    hasTerminalLifecycle &&
+    !hasKnownFutureEvents &&
+    latestReleaseIsAlreadyWatched &&
+    typeof latestReleased?.episode_number === "number" &&
+    latestReleased.episode_number === watchedEpisodesCount &&
+    watchedEpisodesCount > 0
+      ? watchedEpisodesCount
+      : null;
   const currentProviderMetadataReleasedEpisodes =
     !hasKnownFutureEvents && typeof providerMetadataReleasedEpisodes === "number"
       ? typeof providerMetadataTotalEpisodes === "number"
@@ -2278,11 +2287,13 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const metadataBackedImportedWatchableEpisodes =
     typeof importedWatchableEpisodes === "number" &&
     importedWatchableEpisodes > watchedEpisodesCount &&
+    typeof terminalWatchedCountReleaseCap !== "number" &&
     typeof currentProviderMetadataReleasedEpisodes === "number" &&
     currentProviderMetadataReleasedEpisodes >= importedWatchableEpisodes
       ? importedWatchableEpisodes
       : null;
   const providerMetadataBacklogEpisodes =
+    !hasTerminalLifecycle &&
     typeof currentProviderMetadataReleasedEpisodes === "number" &&
     currentProviderMetadataReleasedEpisodes > Math.max(watchedEpisodesCount, importedEpisodeCeiling)
       ? currentProviderMetadataReleasedEpisodes
@@ -2299,6 +2310,8 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const rawReleasedEpisodes =
     typeof providerConfirmedCurrentTotalEpisodes === "number"
       ? providerConfirmedCurrentTotalEpisodes
+      : typeof terminalWatchedCountReleaseCap === "number"
+      ? terminalWatchedCountReleaseCap
       : typeof metadataBackedImportedWatchableEpisodes === "number"
       ? metadataBackedImportedWatchableEpisodes
       : typeof providerMetadataBacklogEpisodes === "number"
@@ -2376,6 +2389,8 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const totalEpisodes =
     typeof providerConfirmedCurrentTotalEpisodes === "number"
       ? Math.min(rawTotalEpisodes, providerConfirmedCurrentTotalEpisodes)
+      : typeof terminalWatchedCountReleaseCap === "number"
+      ? Math.min(rawTotalEpisodes, terminalWatchedCountReleaseCap)
       : rawTotalEpisodes;
 
   return {
@@ -6052,6 +6067,81 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
     {
       returningSeasonDropBeforeDetailFact,
       returningSeasonDropAfterDetailFact,
+    }
+  );
+  const terminalInflatedProviderMetadataRow = {
+    source_provider: "tmdb",
+    provider_show_id: "tmdb:tv:46298",
+    air_timestamp: Date.UTC(2014, 8, 23, 0, 0, 0),
+    air_date: "2014-09-23",
+    season_number: 3,
+    episode_number: 148,
+    name: "Past x And x Future",
+    tmdb_id: 46298,
+    tvmaze_id: null,
+    anilist_id: null,
+    mal_id: null,
+    imdb_id: "tt2098220",
+  };
+  const terminalInflatedBeforeRunFact = buildReleaseFact(
+    {
+      show_id: "show-terminal-inflated-provider-before-run",
+      title: "Terminal Inflated Provider Before Run",
+      media_type: "tv",
+      status: "completed",
+      show_status: "ended",
+      watched_episodes_count: 148,
+      total_episodes: 148,
+      released_episodes: null,
+      remaining_episodes: 0,
+      provider_released_episodes: 284,
+      provider_total_episodes: 284,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 46298,
+      imdb_id: "tt2098220",
+    },
+    {
+      confidence: "direct_id",
+      rows: [terminalInflatedProviderMetadataRow],
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
+  const terminalInflatedAfterRunFact = buildReleaseFact(
+    {
+      show_id: "show-terminal-inflated-provider-after-run",
+      title: "Terminal Inflated Provider After Run",
+      media_type: "tv",
+      status: "watching",
+      show_status: "ended",
+      watched_episodes_count: 148,
+      total_episodes: 284,
+      released_episodes: 284,
+      remaining_episodes: 136,
+      provider_released_episodes: 284,
+      provider_total_episodes: 284,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 46298,
+      imdb_id: "tt2098220",
+    },
+    {
+      confidence: "direct_id",
+      rows: [terminalInflatedProviderMetadataRow],
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
+  assertValidation(
+    terminalInflatedBeforeRunFact.releasedEpisodes === 148 &&
+      terminalInflatedBeforeRunFact.totalEpisodes === 148 &&
+      terminalInflatedBeforeRunFact.releaseState === "caught_up" &&
+      terminalInflatedAfterRunFact.releasedEpisodes === 148 &&
+      terminalInflatedAfterRunFact.totalEpisodes === 148 &&
+      terminalInflatedAfterRunFact.releaseState === "caught_up",
+    "Terminal shows whose latest provider event already matches watched progress should not be inflated by provider metadata.",
+    {
+      terminalInflatedBeforeRunFact,
+      terminalInflatedAfterRunFact,
     }
   );
   const hotOnesShapedConflictFact = buildReleaseFact(

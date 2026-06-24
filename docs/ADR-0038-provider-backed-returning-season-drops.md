@@ -50,12 +50,13 @@ ADR-0014.
 
 ## Decision
 
-Fresh provider metadata can now defeat sparse-old release capping for returning
-shows when there are no known future rows.
+Fresh provider metadata can now defeat sparse-old release capping for
+non-terminal returning shows when there are no known future rows.
 
 The reconciler computes a current provider metadata released count from
 `provider_released_episodes`, capped by `provider_total_episodes` when a total
-is present. That count is trusted only for the current no-future shape.
+is present. That count is trusted only for the current no-future, non-terminal
+shape.
 
 Two provider-backed cases are accepted:
 
@@ -64,7 +65,15 @@ Two provider-backed cases are accepted:
   count.
 - If the imported projection is still stale and provider metadata's released
   count is above both the watched count and imported episode ceiling, use the
-  provider metadata released count as the release floor.
+  provider metadata released count as the release floor. This floor is not
+  available for terminal shows.
+
+Terminal shows get an additional guard: when there are no future rows, the
+latest released provider event is already watched, and that event's episode
+number equals the user's watched count, the release fact is capped to the
+watched count. This prevents TMDB metadata that includes alternate/special
+counts from reactivating finished regular-series anime such as `Hunter x
+Hunter`, `Naruto`, and `Naruto Shippūden`.
 
 The existing provider-confirmed lower-total guard keeps precedence. A fresh
 complete provider total can still cap stale inflated imports when
@@ -76,6 +85,12 @@ expressed as ordinary `available_now` release deltas, letting Convex patch show
 counts and rebuild the affected user's projection through the existing
 `applyReleaseDeltas` path.
 
+When a corrected terminal release fact is `caught_up`, Convex may restore a
+`watching` user row to `completed` if the user has watched at least the released
+count. This repairs rows that were incorrectly resumed by an earlier inflated
+provider-backed delta and matches the normal progress-derived completion
+behavior.
+
 ## Reasoning
 
 The user's `last_watched_at` is a user action timestamp, not proof that every
@@ -83,10 +98,15 @@ episode aired before that timestamp was watched. For a returning show where a
 full season dropped before the user caught up on an older season, the timestamp
 cap can be wrong.
 
-Provider metadata is the right authority for this case because it comes from the
-same refreshed TMDB show details that made the detail page correct. Requiring
-fresh provider metadata avoids reviving stale imported remaining counts from
-SQLite alone.
+Provider metadata is the right authority for returning-show season drops because
+it comes from the same refreshed TMDB show details that made the detail page
+correct. Requiring fresh provider metadata avoids reviving stale imported
+remaining counts from SQLite alone.
+
+Terminal shows need the extra cap because some TMDB TV metadata can expose
+higher aggregate counts than the regular episode count shown on the detail page.
+If the latest regular event already lines up with the user's watched count, the
+provider metadata count is not enough evidence of new regular backlog.
 
 Keeping projection repair narrow preserves ADR-0014. The broad show-count patch
 and projection rebuild path already runs for `available_now` release deltas and
@@ -97,9 +117,10 @@ for show total increases, so no new Convex repair surface is needed.
 TMDB regular TV metadata includes current positive-season totals and a released
 episode count derived from hydrated regular seasons and current air dates.
 
-When there are no known future rows, `provider_released_episodes` represents the
-current released/watchable count for the provider's regular episodes. If
-`provider_total_episodes` is present, released metadata is capped by that total.
+For non-terminal rows with no known future events, `provider_released_episodes`
+represents the current released/watchable count for the provider's regular
+episodes. If `provider_total_episodes` is present, released metadata is capped
+by that total.
 
 Sparse provider-event rows can be incomplete for historical seasons. A single
 latest episode row does not prove there is no unwatched backlog.
@@ -120,8 +141,10 @@ Home/status rules already allow them to respond to an `available_now` release
 delta.
 
 Terminal shows continue to work under ADR-0036; this ADR generalizes the
-provider-backed imported backlog rule to non-terminal no-future rows and adds a
-provider metadata floor for stale imported `caught_up` rows.
+provider-backed imported backlog rule to non-terminal no-future rows, adds a
+provider metadata floor for stale imported `caught_up` rows, and prevents that
+floor from applying to terminal rows whose latest regular event already matches
+watched progress.
 
 ## Verification
 
@@ -146,16 +169,25 @@ Both rows have only one old provider event, `S02E08`, and a later
 `last_watched_at`. Both must emit `available_now` with
 `releasedEpisodes = 18` and `totalEpisodes = 18`.
 
+Fixture validation also covers terminal anime-shaped rows before and after a bad
+inflated provider delta. `Hunter x Hunter`-shaped data with `148 watched`, a
+latest `S03E148` event, and provider metadata `284 released / 284 total` must
+emit `caught_up` with `releasedEpisodes = 148` and `totalEpisodes = 148`.
+
 Production verification should run the VPS schedule-confidence job after merge,
 then confirm `tmdb:tv:154385` produces an `available_now` release fact and the
-live Home Watchlist still includes `BEEF` with 8 remaining.
+live Home Watchlist still includes `BEEF` with the correct remaining count.
+Also confirm the terminal shows incorrectly reactivated by the prior run no
+longer appear in Home Watchlist.
 
 ## Rollback Notes
 
-Rollback by removing `currentProviderMetadataReleasedEpisodes` and
-`providerMetadataBacklogEpisodes` from `scripts/schedule-confidence.mjs`, and by
-restoring the ADR-0036 metadata-backed imported backlog check to terminal shows
-only.
+Rollback by removing `currentProviderMetadataReleasedEpisodes`,
+`providerMetadataBacklogEpisodes`, and `terminalWatchedCountReleaseCap` from
+`scripts/schedule-confidence.mjs`, and by restoring the ADR-0036
+metadata-backed imported backlog check to terminal shows only. Remove the
+Convex caught-up terminal completion repair if it marks intentionally active
+fully watched terminal shows as completed.
 
 If rollback is needed because a returning show falsely appears with released
 backlog, inspect whether the provider metadata released count is inflated or
