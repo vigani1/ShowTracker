@@ -87,6 +87,7 @@ type UpcomingGroup = {
 const DAY_IN_MS = 1000 * 60 * 60 * 24;
 const GRID_GAP = 12;
 const WATCHLIST_FUTURE_LOOKAHEAD_DAYS = 90;
+const WATCHLIST_SCHEDULE_SIGNAL_LOOKBACK_DAYS = 7;
 const HOME_SCHEDULE_SIGNAL_SYNC_INTERVAL_MS = 1000 * 60 * 30;
 const homeModeOptions = [
   { value: "watchlist" as const, label: "Watchlist" },
@@ -1428,12 +1429,16 @@ export function HomeScreen() {
   });
   const [calendarAnchorDate, setCalendarAnchorDate] = useState(() => todayDate);
   const [selectedDateKey, setSelectedDateKey] = useState(todayKey);
-  const watchlistFutureStartDate = todayKey;
-  const watchlistFutureEndDate = useMemo(
+  const watchlistScheduleCountStartDate = useMemo(
+    () =>
+      addDaysToDateString(todayKey, -WATCHLIST_SCHEDULE_SIGNAL_LOOKBACK_DAYS),
+    [todayKey]
+  );
+  const watchlistScheduleCountEndDate = useMemo(
     () => addDaysToDateString(todayKey, WATCHLIST_FUTURE_LOOKAHEAD_DAYS),
     [todayKey]
   );
-  const watchlistFutureCountsQueryKey = `${watchlistFutureStartDate}:${watchlistFutureEndDate}:${mediaFilter}`;
+  const watchlistFutureCountsQueryKey = `${watchlistScheduleCountStartDate}:${watchlistScheduleCountEndDate}:${mediaFilter}`;
   const effectiveWidth = gridWidth || Math.max(width - 40, 0);
   const usesMonthCalendarLayout = isWeb && effectiveWidth >= 980;
   const columns = getColumnCount(effectiveWidth, isWeb);
@@ -1566,8 +1571,8 @@ export function HomeScreen() {
     api.schedule.getFutureUpcomingCountsForWatchlist,
     activeTab === "watchlist"
       ? {
-          startDate: watchlistFutureStartDate,
-          endDate: watchlistFutureEndDate,
+          startDate: watchlistScheduleCountStartDate,
+          endDate: watchlistScheduleCountEndDate,
           mediaFilter: mediaFilter === "all" ? undefined : mediaFilter,
         }
       : "skip"
