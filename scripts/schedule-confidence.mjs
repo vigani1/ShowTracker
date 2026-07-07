@@ -2349,6 +2349,14 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     importedEpisodeCeiling > providerMetadataTotalEpisodes
       ? providerMetadataTotalEpisodes
       : null;
+  const providerMetadataImportedTotalCap =
+    !hasKnownFutureEvents &&
+    typeof providerMetadataTotalEpisodes === "number" &&
+    providerMetadataTotalEpisodes > 0 &&
+    providerMetadataTotalEpisodes >= watchedEpisodesCount &&
+    importedEpisodeCeiling > providerMetadataTotalEpisodes
+      ? providerMetadataTotalEpisodes
+      : null;
   const terminalWatchedCountReleaseCap =
     hasTerminalLifecycle &&
     !hasKnownFutureEvents &&
@@ -2389,6 +2397,11 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     !hasKnownFutureEvents &&
     releasedEvents.length <= 1 &&
     latestReleaseIsAlreadyWatched;
+  const importedTotalReleaseCandidate =
+    !hasTerminalLifecycle &&
+    typeof currentProviderMetadataReleasedEpisodes === "number"
+      ? currentProviderMetadataReleasedEpisodes
+      : item.total_episodes ?? 0;
   const rawReleasedEpisodes =
     typeof providerConfirmedCurrentTotalEpisodes === "number"
       ? providerConfirmedCurrentTotalEpisodes
@@ -2415,7 +2428,7 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
             : Math.max(
                 item.released_episodes ?? 0,
                 watchedEpisodesCount,
-                item.total_episodes ?? 0,
+                importedTotalReleaseCandidate,
                 releasedEvents.length,
                 ...releasedEvents.map((row) => row.episode_number)
               );
@@ -2474,6 +2487,8 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const totalEpisodes =
     typeof providerConfirmedCurrentTotalEpisodes === "number"
       ? Math.min(rawTotalEpisodes, providerConfirmedCurrentTotalEpisodes)
+      : typeof providerMetadataImportedTotalCap === "number"
+      ? Math.min(rawTotalEpisodes, providerMetadataImportedTotalCap)
       : typeof terminalWatchedCountReleaseCap === "number"
       ? Math.min(rawTotalEpisodes, terminalWatchedCountReleaseCap)
       : rawTotalEpisodes;
@@ -6314,19 +6329,6 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
           mal_id: null,
           imdb_id: "tt26743760",
         },
-        {
-          source_provider: "tmdb",
-          air_timestamp: Date.UTC(2026, 9, 1, 0, 0, 0),
-          air_date: "2026-10-01",
-          season_number: 1,
-          episode_number: 49,
-          name: "Undated Placeholder",
-          tmdb_id: 220542,
-          tvmaze_id: null,
-          anilist_id: null,
-          mal_id: null,
-          imdb_id: "tt26743760",
-        },
       ],
     },
     Date.UTC(2026, 6, 7, 12, 0, 0),
@@ -6336,7 +6338,9 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
     staleDemonSlayerFact.releasedEpisodes === 63 &&
       staleDemonSlayerFact.totalEpisodes === 63 &&
       staleDemonSlayerFact.releaseState === "caught_up" &&
-      oldCrossProviderAliasFact.releasedEpisodes === 48,
+      oldCrossProviderAliasFact.releasedEpisodes === 48 &&
+      oldCrossProviderAliasFact.totalEpisodes === 49 &&
+      oldCrossProviderAliasFact.releaseState === "caught_up",
     "Old cached provider aliases should not inflate watched-anchor released counts after the user's latest watch day.",
     { staleDemonSlayerFact, oldCrossProviderAliasFact }
   );

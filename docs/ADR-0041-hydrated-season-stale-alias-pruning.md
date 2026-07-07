@@ -57,6 +57,12 @@ date is before the user's latest watch day. Rows on the same UTC day as the
 latest watch still count, preserving same-day multi-episode drops where the
 user watched one released episode and another released episode remains.
 
+When there are no known future rows, fresh provider metadata can also cap a
+larger stale imported total even if the provider has an undated placeholder and
+`releasedEpisodes < totalEpisodes`. The released/watchable count remains the
+released metadata value; the catalog total is capped to the fresh provider
+total instead of the stale Convex/imported total.
+
 ## Reasoning
 
 Fresh TMDB season detail is stronger than cached dated provider rows for the
@@ -72,6 +78,11 @@ Home just because providers disagree about season numbering.
 This keeps ADR-0040's Mushoku behavior: July 4, 2026 S03 rows remain counted
 after a prior-season April 2026 last watch, and a same-day partial watch still
 counts the other same-day released row.
+
+The metadata total cap is needed after a bad delta has already poisoned Convex:
+once the stale dated future row is pruned, the imported row can still say
+`72 total / 24 remaining`. Fresh provider metadata saying `48 released / 49
+total` is the stronger source for release projection.
 
 ## Provider/Data Assumptions
 
@@ -120,7 +131,8 @@ Fixture validation covers:
 - stale TMDB `S01E49` inside a freshly hydrated Apothecary season 1 being
   pruned;
 - old TVMaze `S02E01`/`S02E24` Apothecary aliases not inflating watched-anchor
-  released counts after the user's latest watch day;
+  released counts after the user's latest watch day, while fresh `48/49`
+  provider metadata caps the stale imported `72` total;
 - ADR-0040's same-day returning-season partial-watch case still producing a
   positive released backlog.
 
