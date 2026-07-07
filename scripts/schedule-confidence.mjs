@@ -2211,6 +2211,51 @@ function needsMissingProviderAudit(item) {
   return true;
 }
 
+function getWatchedAnchorBackedReleasedEpisodeFloor(item, releasedEvents) {
+  const watchedCount = Math.max(
+    0,
+    Math.floor(numberOrNull(item.watched_episodes_count) ?? 0)
+  );
+  if (watchedCount <= 0 || releasedEvents.length === 0) {
+    return null;
+  }
+
+  const watchedAnchors = parseWatchedEpisodeAnchors(
+    item.watched_episode_anchors_json
+  );
+  if (watchedAnchors.length < watchedCount) {
+    return null;
+  }
+
+  const watchedKeys = new Set(
+    watchedAnchors.map((anchor) => `${anchor.season}:${anchor.episode}`)
+  );
+  const seenProviderKeys = new Set();
+  let unwatchedReleasedRows = 0;
+
+  for (const row of releasedEvents) {
+    const seasonNumber = Math.floor(numberOrNull(row.season_number) ?? 0);
+    const episodeNumber = Math.floor(numberOrNull(row.episode_number) ?? 0);
+    if (seasonNumber < 1 || episodeNumber < 1) {
+      continue;
+    }
+
+    const key = `${seasonNumber}:${episodeNumber}`;
+    if (seenProviderKeys.has(key)) {
+      continue;
+    }
+    seenProviderKeys.add(key);
+
+    if (!watchedKeys.has(key)) {
+      unwatchedReleasedRows += 1;
+    }
+  }
+
+  return unwatchedReleasedRows > 0
+    ? watchedCount + unwatchedReleasedRows
+    : null;
+}
+
 function buildReleaseFact(item, match, nowMs, reconciledAt) {
   const releaseRows = dedupeProviderEventsForReleaseFact(match.rows, nowMs, item);
   const releasedEvents = releaseRows.filter((row) => row.air_timestamp <= nowMs);
@@ -2298,6 +2343,8 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     currentProviderMetadataReleasedEpisodes > Math.max(watchedEpisodesCount, importedEpisodeCeiling)
       ? currentProviderMetadataReleasedEpisodes
       : null;
+  const watchedAnchorBackedReleasedEpisodes =
+    getWatchedAnchorBackedReleasedEpisodeFloor(item, releasedEvents);
   const hasTerminalKnownTotal =
     typeof terminalKnownTotalEpisodes === "number" &&
     !hasKnownFutureEvents &&
@@ -2316,6 +2363,8 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
       ? metadataBackedImportedWatchableEpisodes
       : typeof providerMetadataBacklogEpisodes === "number"
       ? providerMetadataBacklogEpisodes
+      : typeof watchedAnchorBackedReleasedEpisodes === "number"
+      ? watchedAnchorBackedReleasedEpisodes
       : hasTerminalKnownTotal
         ? Math.max(
             terminalKnownTotalEpisodes,
@@ -2339,6 +2388,7 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     !hasTerminalKnownTotal &&
     typeof metadataBackedImportedWatchableEpisodes !== "number" &&
     typeof providerMetadataBacklogEpisodes !== "number" &&
+    typeof watchedAnchorBackedReleasedEpisodes !== "number" &&
     latestReleaseIsAlreadyWatched &&
     (releasedEvents.length <= watchedEpisodesCount ||
       rawReleasedEpisodes - watchedEpisodesCount <= 1)
@@ -5913,6 +5963,126 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
       timestampCappedFact.releasedEpisodes === 456,
     "Imported remaining episodes should prevent timestamp-only release capping.",
     { remainingPreservedFact, timestampCappedFact }
+  );
+  const returningSeasonLocalAnchors = [
+    ...Array.from({ length: 23 }, (_, index) => ({
+      season: 1,
+      episode: index + 1,
+    })),
+    ...Array.from({ length: 24 }, (_, index) => ({
+      season: 2,
+      episode: index + 1,
+    })),
+  ];
+  const returningSeasonLocalRows = [
+    {
+      source_provider: "tmdb",
+      air_timestamp: Date.UTC(2024, 6, 1, 0, 0, 0),
+      air_date: "2024-07-01",
+      season_number: 2,
+      episode_number: 24,
+      name: "Succession",
+      tmdb_id: 94664,
+      tvmaze_id: null,
+      anilist_id: null,
+      mal_id: null,
+      imdb_id: "tt13293588",
+    },
+    {
+      source_provider: "tmdb",
+      air_timestamp: Date.UTC(2026, 6, 4, 0, 0, 0),
+      air_date: "2026-07-04",
+      season_number: 3,
+      episode_number: 1,
+      name: "Burn Bright, Mad Dog",
+      tmdb_id: 94664,
+      tvmaze_id: null,
+      anilist_id: null,
+      mal_id: null,
+      imdb_id: "tt13293588",
+    },
+    {
+      source_provider: "tmdb",
+      air_timestamp: Date.UTC(2026, 6, 4, 0, 0, 0),
+      air_date: "2026-07-04",
+      season_number: 3,
+      episode_number: 2,
+      name: "Howl, Mad Dog",
+      tmdb_id: 94664,
+      tvmaze_id: null,
+      anilist_id: null,
+      mal_id: null,
+      imdb_id: "tt13293588",
+    },
+    {
+      source_provider: "tmdb",
+      air_timestamp: Date.UTC(2026, 6, 11, 0, 0, 0),
+      air_date: "2026-07-11",
+      season_number: 3,
+      episode_number: 3,
+      name: "Life Back at Home",
+      tmdb_id: 94664,
+      tvmaze_id: null,
+      anilist_id: null,
+      mal_id: null,
+      imdb_id: "tt13293588",
+    },
+  ];
+  const returningSeasonLocalFact = buildReleaseFact(
+    {
+      show_id: "show-returning-season-local",
+      title: "Returning Season Local Numbering",
+      media_type: "tv",
+      status: "watching",
+      show_status: "returning",
+      watched_episodes_count: 47,
+      watched_episode_anchors_json: JSON.stringify(returningSeasonLocalAnchors),
+      total_episodes: 50,
+      remaining_episodes: 0,
+      last_watched_at: Date.UTC(2026, 3, 19, 12, 0, 0),
+      tmdb_id: 94664,
+      imdb_id: "tt13293588",
+    },
+    {
+      confidence: "direct_id",
+      rows: returningSeasonLocalRows,
+    },
+    Date.UTC(2026, 6, 7, 12, 0, 0),
+    fixtureNowMs
+  );
+  const returningSeasonLocalPartialFact = buildReleaseFact(
+    {
+      show_id: "show-returning-season-local-partial",
+      title: "Returning Season Local Numbering Partial",
+      media_type: "tv",
+      status: "watching",
+      show_status: "returning",
+      watched_episodes_count: 48,
+      watched_episode_anchors_json: JSON.stringify([
+        ...returningSeasonLocalAnchors,
+        { season: 3, episode: 1 },
+      ]),
+      total_episodes: 50,
+      remaining_episodes: 0,
+      last_watched_at: Date.UTC(2026, 6, 4, 12, 0, 0),
+      tmdb_id: 94664,
+      imdb_id: "tt13293588",
+    },
+    {
+      confidence: "direct_id",
+      rows: returningSeasonLocalRows,
+    },
+    Date.UTC(2026, 6, 7, 12, 0, 0),
+    fixtureNowMs
+  );
+  assertValidation(
+    returningSeasonLocalFact.releasedEpisodes === 49 &&
+      returningSeasonLocalFact.totalEpisodes === 50 &&
+      returningSeasonLocalFact.releaseState === "available_now" &&
+      returningSeasonLocalPartialFact.releasedEpisodes === 49 &&
+      returningSeasonLocalPartialFact.releaseState === "available_now",
+    "Returning season-local provider rows should add unwatched released episodes beyond exact watched anchors.",
+    { returningSeasonLocalFact, returningSeasonLocalPartialFact }
   );
   const terminalMetadataBackedBacklogFact = buildReleaseFact(
     {
