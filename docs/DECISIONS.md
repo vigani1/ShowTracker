@@ -44,6 +44,7 @@ Most frequently relevant:
 - [ADR-0039](ADR-0039-recent-home-schedule-count-evidence.md): recent Home schedule-count evidence backs cached schedule signals after day rollover.
 - [ADR-0040](ADR-0040-returning-season-local-release-counts.md): exact watched anchors let returning season-local provider rows repair released counts.
 - [ADR-0041](ADR-0041-hydrated-season-stale-alias-pruning.md): hydrated TMDB season details prune stale cache aliases before they inflate Home.
+- [ADR-0042](ADR-0042-terminal-hydrated-season-watchable-counts.md): terminal hydrated seasons prevent raw catalog totals from reactivating caught-up rows.
 
 ## Navigation
 
@@ -100,6 +101,7 @@ Most frequently relevant:
 | [ADR-0039](ADR-0039-recent-home-schedule-count-evidence.md) | Home's schedule-count guard includes recent schedule evidence matching cached signal lookback. |
 | [ADR-0040](ADR-0040-returning-season-local-release-counts.md) | Exact watched anchors let returning season-local provider rows repair released counts. |
 | [ADR-0041](ADR-0041-hydrated-season-stale-alias-pruning.md) | Hydrated TMDB season details prune stale cache aliases before they inflate Home. |
+| [ADR-0042](ADR-0042-terminal-hydrated-season-watchable-counts.md) | Terminal hydrated seasons prevent raw catalog totals from reactivating caught-up rows. |
 
 ## Rule For New ADRs
 

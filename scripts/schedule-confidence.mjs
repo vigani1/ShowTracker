@@ -2398,8 +2398,9 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     releasedEvents.length <= 1 &&
     latestReleaseIsAlreadyWatched;
   const importedTotalReleaseCandidate =
-    !hasTerminalLifecycle &&
-    typeof currentProviderMetadataReleasedEpisodes === "number"
+    hasTerminalLifecycle
+      ? 0
+      : typeof currentProviderMetadataReleasedEpisodes === "number"
       ? currentProviderMetadataReleasedEpisodes
       : item.total_episodes ?? 0;
   const rawReleasedEpisodes =
@@ -2914,21 +2915,74 @@ function getTmdbReleasedTvEpisodeCount(details) {
   return previousSeasonEpisodes + lastEpisodeNumber;
 }
 
-function getTmdbSeasonNumbersToHydrate(details) {
+function getTmdbSeasonNumbersToHydrate(details, item = null) {
   const lastSeasonNumber = positiveIntegerOrNull(details?.last_episode_to_air?.season_number);
   const nextSeasonNumber = positiveIntegerOrNull(details?.next_episode_to_air?.season_number);
+  const terminalBacklogRisk =
+    (isTerminalLifecycleStatus(details?.status) || isTerminalLifecycleStatus(item?.show_status)) &&
+    (positiveIntegerOrNull(item?.remaining_episodes) !== null ||
+      (positiveIntegerOrNull(item?.total_episodes) ?? 0) >
+        Math.max(0, positiveIntegerOrNull(item?.watched_episodes_count) ?? 0));
+  const regularSeasonNumbers =
+    terminalBacklogRisk && Array.isArray(details?.seasons)
+      ? details.seasons
+          .map((season) => positiveIntegerOrNull(season?.season_number))
+          .filter((seasonNumber) => typeof seasonNumber === "number" && seasonNumber > 0)
+      : [];
   return Array.from(
     new Set(
-      [lastSeasonNumber, nextSeasonNumber].filter(
+      [lastSeasonNumber, nextSeasonNumber, ...regularSeasonNumbers].filter(
         (seasonNumber) => typeof seasonNumber === "number" && seasonNumber > 0
       )
     )
   );
 }
 
+function hasCompleteTmdbRegularSeasonHydration(details, hydratedSeasons) {
+  const expectedSeasonNumbers = new Set(
+    (Array.isArray(details?.seasons) ? details.seasons : [])
+      .map((season) => positiveIntegerOrNull(season?.season_number))
+      .filter((seasonNumber) => typeof seasonNumber === "number" && seasonNumber > 0)
+  );
+  if (expectedSeasonNumbers.size === 0) {
+    return false;
+  }
+
+  const hydratedSeasonNumbers = new Set(
+    hydratedSeasons
+      .map((season) => positiveIntegerOrNull(season?.season_number))
+      .filter((seasonNumber) => typeof seasonNumber === "number" && seasonNumber > 0)
+  );
+  return [...expectedSeasonNumbers].every((seasonNumber) =>
+    hydratedSeasonNumbers.has(seasonNumber)
+  );
+}
+
 function getTmdbReleasedEpisodeCountFromHydratedSeasons(details, hydratedSeasons, nowMs) {
   let releasedEpisodes = getTmdbReleasedTvEpisodeCount(details);
   const seasonSummaries = Array.isArray(details?.seasons) ? details.seasons : [];
+  if (hasCompleteTmdbRegularSeasonHydration(details, hydratedSeasons)) {
+    let hydratedReleasedEpisodes = 0;
+    for (const season of hydratedSeasons) {
+      const seasonNumber = positiveIntegerOrNull(season?.season_number);
+      if (typeof seasonNumber !== "number" || seasonNumber <= 0 || !Array.isArray(season?.episodes)) {
+        continue;
+      }
+      for (const episode of season.episodes) {
+        const episodeNumber = positiveIntegerOrNull(episode?.episode_number);
+        if (typeof episodeNumber !== "number" || !episode?.air_date) {
+          continue;
+        }
+        const airTimestamp = parseAirTimestamp(episode.air_date);
+        if (airTimestamp <= nowMs) {
+          hydratedReleasedEpisodes += 1;
+        }
+      }
+    }
+    if (hydratedReleasedEpisodes > 0) {
+      releasedEpisodes = hydratedReleasedEpisodes;
+    }
+  }
 
   for (const season of hydratedSeasons) {
     const seasonNumber = positiveIntegerOrNull(season?.season_number);
@@ -3011,7 +3065,7 @@ async function fetchTmdbDetailsWithAuth(item, auth, nowMs, options = {}) {
   const hydratedSeasons = [];
 
   if (item.media_type === "tv") {
-    for (const seasonNumber of getTmdbSeasonNumbersToHydrate(details)) {
+    for (const seasonNumber of getTmdbSeasonNumbersToHydrate(details, item)) {
       const seasonUrl = new URL(`${base}/tv/${item.tmdb_id}/season/${seasonNumber}`);
       if (auth.apiKey) {
         seasonUrl.searchParams.set("api_key", auth.apiKey);
@@ -6416,13 +6470,84 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
     postAirWatchedAt,
     fixtureNowMs
   );
+  const terminalHydratedSeasonSummaryReleased = getTmdbReleasedEpisodeCountFromHydratedSeasons(
+    {
+      last_episode_to_air: { season_number: 2, episode_number: 10 },
+      seasons: [
+        { season_number: 1, episode_count: 10 },
+        { season_number: 2, episode_count: 10 },
+      ],
+    },
+    [
+      {
+        season_number: 1,
+        episodes: Array.from({ length: 8 }, (_, index) => ({
+          episode_number: index + 1,
+          air_date: "2007-11-09",
+        })),
+      },
+      {
+        season_number: 2,
+        episodes: Array.from({ length: 8 }, (_, index) => ({
+          episode_number: index + 1,
+          air_date: "2007-11-09",
+        })),
+      },
+    ],
+    fixtureNowMs
+  );
+  const terminalMultiOldRowsFact = buildReleaseFact(
+    {
+      show_id: "show-terminal-multi-old-rows",
+      title: "Terminal Multi Old Rows",
+      media_type: "tv",
+      status: "watching",
+      show_status: "ended",
+      watched_episodes_count: 161,
+      total_episodes: 184,
+      remaining_episodes: 23,
+      provider_released_episodes: 161,
+      provider_total_episodes: 184,
+      watched_episode_anchors_json: JSON.stringify(
+        Array.from({ length: 21 }, (_, index) => ({ season: 7, episode: index + 1 }))
+      ),
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 897,
+    },
+    {
+      confidence: "direct_id",
+      rows: Array.from({ length: 21 }, (_, index) => ({
+        source_provider: "tmdb",
+        air_timestamp: Date.UTC(2007, 10, 9, 0, 0, 0),
+        air_date: "2007-11-09",
+        season_number: 7,
+        episode_number: index + 1,
+        name: `Old Final Season ${index + 1}`,
+        tmdb_id: 897,
+        tvmaze_id: null,
+        anilist_id: null,
+        mal_id: null,
+        imdb_id: null,
+      })),
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
   assertValidation(
     terminalMetadataBackedBacklogFact.releasedEpisodes === 44 &&
       terminalMetadataBackedBacklogFact.releaseState === "available_now" &&
       terminalMismatchedImportedBacklogFact.releasedEpisodes === 161 &&
-      terminalMismatchedImportedBacklogFact.releaseState === "caught_up",
+      terminalMismatchedImportedBacklogFact.releaseState === "caught_up" &&
+      terminalHydratedSeasonSummaryReleased === 16 &&
+      terminalMultiOldRowsFact.releasedEpisodes === 161 &&
+      terminalMultiOldRowsFact.releaseState === "caught_up",
     "Terminal imported backlog should survive sparse old-event capping only when provider metadata backs it.",
-    { terminalMetadataBackedBacklogFact, terminalMismatchedImportedBacklogFact }
+    {
+      terminalMetadataBackedBacklogFact,
+      terminalMismatchedImportedBacklogFact,
+      terminalHydratedSeasonSummaryReleased,
+      terminalMultiOldRowsFact,
+    }
   );
   const returningSeasonDropRow = {
     source_provider: "tmdb",
