@@ -1570,6 +1570,15 @@ function isProviderEventCurrentForFreshFetch(row, prune) {
     return true;
   }
 
+  const exactSeasonNumbers = new Set(
+    (prune.exactSeasonNumbers ?? [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  if (exactSeasonNumbers.has(seasonNumber)) {
+    return false;
+  }
+
   if (prune.mode === "exact_episode_set") {
     return false;
   }
@@ -1603,6 +1612,13 @@ function pruneProviderEventsForFreshFetch(db, prune, nowMs = Date.now()) {
 
   const windowStart = nowMs - staleProviderEventPrunePastMs;
   const windowEnd = nowMs + scheduleLookaheadMs;
+  const exactSeasonNumbers = (prune.exactSeasonNumbers ?? [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const exactSeasonClause =
+    exactSeasonNumbers.length > 0
+      ? ` OR season_number IN (${exactSeasonNumbers.map(() => "?").join(", ")})`
+      : "";
   const rows = db
     .prepare(
       `SELECT id, source_provider, provider_show_id, media_type, season_number, episode_number, name, air_date, air_timestamp
@@ -1610,10 +1626,19 @@ function pruneProviderEventsForFreshFetch(db, prune, nowMs = Date.now()) {
        WHERE source_provider = ?
          AND provider_show_id = ?
          AND media_type = ?
-         AND air_timestamp >= ?
-         AND air_timestamp <= ?`
+         AND (
+           (air_timestamp >= ? AND air_timestamp <= ?)
+           ${exactSeasonClause}
+         )`
     )
-    .all(prune.sourceProvider, prune.providerShowId, prune.mediaType, windowStart, windowEnd);
+    .all(
+      prune.sourceProvider,
+      prune.providerShowId,
+      prune.mediaType,
+      windowStart,
+      windowEnd,
+      ...exactSeasonNumbers
+    );
 
   const staleRows = rows.filter((row) => !isProviderEventCurrentForFreshFetch(row, prune));
   if (staleRows.length === 0) {
@@ -2230,6 +2255,9 @@ function getWatchedAnchorBackedReleasedEpisodeFloor(item, releasedEvents) {
   const watchedKeys = new Set(
     watchedAnchors.map((anchor) => `${anchor.season}:${anchor.episode}`)
   );
+  const lastWatchedAt = numberOrNull(item.last_watched_at);
+  const lastWatchedDateKey =
+    typeof lastWatchedAt === "number" ? dateKeyFromValue(lastWatchedAt) : null;
   const seenProviderKeys = new Set();
   let unwatchedReleasedRows = 0;
 
@@ -2238,6 +2266,13 @@ function getWatchedAnchorBackedReleasedEpisodeFloor(item, releasedEvents) {
     const episodeNumber = Math.floor(numberOrNull(row.episode_number) ?? 0);
     if (seasonNumber < 1 || episodeNumber < 1) {
       continue;
+    }
+
+    if (lastWatchedDateKey) {
+      const airDateKey = dateKeyFromValue(row.air_date ?? row.air_timestamp);
+      if (!airDateKey || airDateKey < lastWatchedDateKey) {
+        continue;
+      }
     }
 
     const key = `${seasonNumber}:${episodeNumber}`;
@@ -2865,8 +2900,15 @@ function getTmdbReleasedTvEpisodeCount(details) {
 }
 
 function getTmdbSeasonNumbersToHydrate(details) {
+  const lastSeasonNumber = positiveIntegerOrNull(details?.last_episode_to_air?.season_number);
   const nextSeasonNumber = positiveIntegerOrNull(details?.next_episode_to_air?.season_number);
-  return typeof nextSeasonNumber === "number" ? [nextSeasonNumber] : [];
+  return Array.from(
+    new Set(
+      [lastSeasonNumber, nextSeasonNumber].filter(
+        (seasonNumber) => typeof seasonNumber === "number" && seasonNumber > 0
+      )
+    )
+  );
 }
 
 function getTmdbReleasedEpisodeCountFromHydratedSeasons(details, hydratedSeasons, nowMs) {
@@ -3015,6 +3057,9 @@ async function fetchTmdbDetailsWithAuth(item, auth, nowMs, options = {}) {
             seasonNumber: event.seasonNumber,
             episodeNumber: event.episodeNumber,
           })),
+          exactSeasonNumbers: hydratedSeasons
+            .map((season) => positiveIntegerOrNull(season?.season_number))
+            .filter((seasonNumber) => typeof seasonNumber === "number"),
           seasonEpisodeCounts: buildTmdbRegularSeasonEpisodeCounts(details),
         }
       : null;
@@ -6083,6 +6128,217 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
       returningSeasonLocalPartialFact.releaseState === "available_now",
     "Returning season-local provider rows should add unwatched released episodes beyond exact watched anchors.",
     { returningSeasonLocalFact, returningSeasonLocalPartialFact }
+  );
+  const staleTmdbHydratedSeasonEvents = [
+    {
+      sourceProvider: "tmdb",
+      providerShowId: "tmdb:tv:85937",
+      title: "Hydrated Season Stale Cache",
+      mediaType: "tv",
+      region: "global",
+      seasonNumber: 5,
+      episodeNumber: 18,
+      name: "Stale Cached Episode",
+      airDate: "2024-09-08",
+      providers: { tmdbId: 85937 },
+    },
+    {
+      sourceProvider: "tmdb",
+      providerShowId: "tmdb:tv:220542",
+      title: "Hydrated Season Future Placeholder",
+      mediaType: "tv",
+      region: "global",
+      seasonNumber: 1,
+      episodeNumber: 49,
+      name: "Undated Placeholder",
+      airDate: "2026-10-01",
+      providers: { tmdbId: 220542 },
+    },
+  ];
+  for (const event of staleTmdbHydratedSeasonEvents) {
+    upsertProviderEvent(db, event, fixtureNowMs);
+  }
+  const prunedStaleDemonSlayerRows = pruneProviderEventsForFreshFetch(
+    db,
+    {
+      sourceProvider: "tmdb",
+      providerShowId: "tmdb:tv:85937",
+      mediaType: "tv",
+      mode: "season_bounds",
+      validEpisodes: [{ seasonNumber: 5, episodeNumber: 8 }],
+      exactSeasonNumbers: [5],
+      seasonEpisodeCounts: [{ seasonNumber: 5, episodeCount: 18 }],
+    },
+    fixtureNowMs
+  );
+  const prunedStaleApothecaryRows = pruneProviderEventsForFreshFetch(
+    db,
+    {
+      sourceProvider: "tmdb",
+      providerShowId: "tmdb:tv:220542",
+      mediaType: "tv",
+      mode: "season_bounds",
+      validEpisodes: [{ seasonNumber: 1, episodeNumber: 48 }],
+      exactSeasonNumbers: [1],
+      seasonEpisodeCounts: [{ seasonNumber: 1, episodeCount: 49 }],
+    },
+    fixtureNowMs
+  );
+  assertValidation(
+    prunedStaleDemonSlayerRows.some(
+      (row) => row.seasonNumber === 5 && row.episodeNumber === 18
+    ) &&
+      prunedStaleApothecaryRows.some(
+        (row) => row.seasonNumber === 1 && row.episodeNumber === 49
+      ),
+    "Fresh TMDB hydrated seasons should prune stale cached rows even when summary bounds include them.",
+    { prunedStaleDemonSlayerRows, prunedStaleApothecaryRows }
+  );
+  const demonSlayerAnchors = [
+    ...Array.from({ length: 26 }, (_, index) => ({ season: 1, episode: index + 1 })),
+    ...Array.from({ length: 7 }, (_, index) => ({ season: 2, episode: index + 1 })),
+    ...Array.from({ length: 11 }, (_, index) => ({ season: 3, episode: index + 1 })),
+    ...Array.from({ length: 11 }, (_, index) => ({ season: 4, episode: index + 1 })),
+    ...Array.from({ length: 8 }, (_, index) => ({ season: 5, episode: index + 1 })),
+  ];
+  const staleDemonSlayerFact = buildReleaseFact(
+    {
+      show_id: "show-stale-hydrated-season-cache",
+      title: "Stale Hydrated Season Cache",
+      media_type: "tv",
+      status: "watching",
+      show_status: "ended",
+      watched_episodes_count: 63,
+      watched_episode_anchors_json: JSON.stringify(demonSlayerAnchors),
+      total_episodes: 64,
+      remaining_episodes: 1,
+      provider_released_episodes: 63,
+      provider_total_episodes: 63,
+      last_watched_at: Date.UTC(2026, 3, 19, 12, 0, 0),
+      tmdb_id: 85937,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2024, 5, 30, 0, 0, 0),
+          air_date: "2024-06-30",
+          season_number: 5,
+          episode_number: 8,
+          name: "The Hashira Unite",
+          tmdb_id: 85937,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+        {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2024, 8, 8, 0, 0, 0),
+          air_date: "2024-09-08",
+          season_number: 5,
+          episode_number: 18,
+          name: "Stale Cached Episode",
+          tmdb_id: 85937,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        },
+      ],
+    },
+    Date.UTC(2026, 6, 7, 12, 0, 0),
+    fixtureNowMs
+  );
+  const apothecaryAnchors = Array.from({ length: 48 }, (_, index) => ({
+    season: 1,
+    episode: index + 1,
+  }));
+  const oldCrossProviderAliasFact = buildReleaseFact(
+    {
+      show_id: "show-old-cross-provider-season-alias",
+      title: "Old Cross Provider Season Alias",
+      media_type: "tv",
+      status: "watching",
+      show_status: "returning",
+      watched_episodes_count: 48,
+      watched_episode_anchors_json: JSON.stringify(apothecaryAnchors),
+      total_episodes: 72,
+      remaining_episodes: 24,
+      provider_released_episodes: 48,
+      provider_total_episodes: 49,
+      last_watched_at: Date.UTC(2026, 2, 11, 12, 0, 0),
+      tmdb_id: 220542,
+      tvmaze_id: 67017,
+    },
+    {
+      confidence: "direct_id",
+      rows: [
+        {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2025, 6, 4, 0, 0, 0),
+          air_date: "2025-07-04",
+          season_number: 1,
+          episode_number: 48,
+          name: "The Beginning",
+          tmdb_id: 220542,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: "tt26743760",
+        },
+        {
+          source_provider: "tvmaze",
+          air_timestamp: Date.UTC(2025, 0, 10, 18, 45, 0),
+          air_date: "2025-01-10T18:45:00+00:00",
+          season_number: 2,
+          episode_number: 1,
+          name: "Maomao and Maomao",
+          tmdb_id: 220542,
+          tvmaze_id: 67017,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: "tt26743760",
+        },
+        {
+          source_provider: "tvmaze",
+          air_timestamp: Date.UTC(2025, 6, 4, 18, 45, 0),
+          air_date: "2025-07-04T18:45:00+00:00",
+          season_number: 2,
+          episode_number: 24,
+          name: "The Beginning",
+          tmdb_id: 220542,
+          tvmaze_id: 67017,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: "tt26743760",
+        },
+        {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2026, 9, 1, 0, 0, 0),
+          air_date: "2026-10-01",
+          season_number: 1,
+          episode_number: 49,
+          name: "Undated Placeholder",
+          tmdb_id: 220542,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: "tt26743760",
+        },
+      ],
+    },
+    Date.UTC(2026, 6, 7, 12, 0, 0),
+    fixtureNowMs
+  );
+  assertValidation(
+    staleDemonSlayerFact.releasedEpisodes === 63 &&
+      staleDemonSlayerFact.totalEpisodes === 63 &&
+      staleDemonSlayerFact.releaseState === "caught_up" &&
+      oldCrossProviderAliasFact.releasedEpisodes === 48,
+    "Old cached provider aliases should not inflate watched-anchor released counts after the user's latest watch day.",
+    { staleDemonSlayerFact, oldCrossProviderAliasFact }
   );
   const terminalMetadataBackedBacklogFact = buildReleaseFact(
     {
