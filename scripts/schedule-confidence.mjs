@@ -2397,6 +2397,10 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
     !hasKnownFutureEvents &&
     releasedEvents.length <= 1 &&
     latestReleaseIsAlreadyWatched;
+  const terminalTotalRescueReleasedEpisodes =
+    hasTerminalKnownTotal && releasedEvents.length <= 1
+      ? terminalKnownTotalEpisodes
+      : null;
   const importedTotalReleaseCandidate =
     hasTerminalLifecycle
       ? 0
@@ -2416,9 +2420,10 @@ function buildReleaseFact(item, match, nowMs, reconciledAt) {
       ? watchedAnchorBackedReleasedEpisodes
       : hasTerminalKnownTotal
         ? Math.max(
-            terminalKnownTotalEpisodes,
+            terminalTotalRescueReleasedEpisodes ?? 0,
             item.released_episodes ?? 0,
             watchedEpisodesCount,
+            currentProviderMetadataReleasedEpisodes ?? 0,
             releasedEvents.length,
             ...releasedEvents.map((row) => row.episode_number)
           )
@@ -2961,7 +2966,11 @@ function hasCompleteTmdbRegularSeasonHydration(details, hydratedSeasons) {
 function getTmdbReleasedEpisodeCountFromHydratedSeasons(details, hydratedSeasons, nowMs) {
   let releasedEpisodes = getTmdbReleasedTvEpisodeCount(details);
   const seasonSummaries = Array.isArray(details?.seasons) ? details.seasons : [];
-  if (hasCompleteTmdbRegularSeasonHydration(details, hydratedSeasons)) {
+  const hasCompleteRegularSeasonHydration = hasCompleteTmdbRegularSeasonHydration(
+    details,
+    hydratedSeasons
+  );
+  if (hasCompleteRegularSeasonHydration) {
     let hydratedReleasedEpisodes = 0;
     for (const season of hydratedSeasons) {
       const seasonNumber = positiveIntegerOrNull(season?.season_number);
@@ -2980,7 +2989,7 @@ function getTmdbReleasedEpisodeCountFromHydratedSeasons(details, hydratedSeasons
       }
     }
     if (hydratedReleasedEpisodes > 0) {
-      releasedEpisodes = hydratedReleasedEpisodes;
+      return hydratedReleasedEpisodes;
     }
   }
 
@@ -6472,28 +6481,24 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
   );
   const terminalHydratedSeasonSummaryReleased = getTmdbReleasedEpisodeCountFromHydratedSeasons(
     {
-      last_episode_to_air: { season_number: 2, episode_number: 10 },
+      last_episode_to_air: { season_number: 7, episode_number: 21 },
       seasons: [
-        { season_number: 1, episode_count: 10 },
-        { season_number: 2, episode_count: 10 },
+        { season_number: 1, episode_count: 36 },
+        { season_number: 2, episode_count: 34 },
+        { season_number: 3, episode_count: 27 },
+        { season_number: 4, episode_count: 13 },
+        { season_number: 5, episode_count: 13 },
+        { season_number: 6, episode_count: 40 },
+        { season_number: 7, episode_count: 21 },
       ],
     },
-    [
-      {
-        season_number: 1,
-        episodes: Array.from({ length: 8 }, (_, index) => ({
-          episode_number: index + 1,
-          air_date: "2007-11-09",
-        })),
-      },
-      {
-        season_number: 2,
-        episodes: Array.from({ length: 8 }, (_, index) => ({
-          episode_number: index + 1,
-          air_date: "2007-11-09",
-        })),
-      },
-    ],
+    [20, 32, 22, 13, 13, 40, 21].map((episodeCount, index) => ({
+      season_number: index + 1,
+      episodes: Array.from({ length: episodeCount }, (_, episodeIndex) => ({
+        episode_number: episodeIndex + 1,
+        air_date: "2007-11-09",
+      })),
+    })),
     fixtureNowMs
   );
   const terminalMultiOldRowsFact = buildReleaseFact(
@@ -6533,20 +6538,69 @@ async function validateFixtureResults(db, summary, deltaPath = defaultDeltaPath)
     postAirWatchedAt,
     fixtureNowMs
   );
+  const terminalDenseProviderCounts = [36, 34, 27, 13, 13, 18, 20];
+  const terminalDenseProviderRows = terminalDenseProviderCounts.flatMap(
+    (episodeCount, seasonIndex) =>
+      Array.from({ length: episodeCount }, (_, episodeIndex) => {
+        const absoluteEpisodeIndex =
+          terminalDenseProviderCounts
+            .slice(0, seasonIndex)
+            .reduce((sum, count) => sum + count, 0) + episodeIndex;
+        return {
+          source_provider: "tmdb",
+          air_timestamp: Date.UTC(2007, 0, absoluteEpisodeIndex + 1, 0, 0, 0),
+          air_date: new Date(Date.UTC(2007, 0, absoluteEpisodeIndex + 1, 0, 0, 0))
+            .toISOString()
+            .slice(0, 10),
+          season_number: seasonIndex + 1,
+          episode_number: episodeIndex + 1,
+          name: `Dense Terminal ${absoluteEpisodeIndex + 1}`,
+          tmdb_id: 898,
+          tvmaze_id: null,
+          anilist_id: null,
+          mal_id: null,
+          imdb_id: null,
+        };
+      })
+  );
+  const terminalDenseProviderRowsFact = buildReleaseFact(
+    {
+      show_id: "show-terminal-dense-provider-rows",
+      title: "Terminal Dense Provider Rows",
+      media_type: "tv",
+      status: "watching",
+      show_status: "ended",
+      watched_episodes_count: 161,
+      total_episodes: 184,
+      released_episodes: null,
+      remaining_episodes: 0,
+      last_watched_at: postAirWatchedAt,
+      tmdb_id: 898,
+    },
+    {
+      confidence: "direct_id",
+      rows: terminalDenseProviderRows,
+    },
+    postAirWatchedAt,
+    fixtureNowMs
+  );
   assertValidation(
     terminalMetadataBackedBacklogFact.releasedEpisodes === 44 &&
       terminalMetadataBackedBacklogFact.releaseState === "available_now" &&
       terminalMismatchedImportedBacklogFact.releasedEpisodes === 161 &&
       terminalMismatchedImportedBacklogFact.releaseState === "caught_up" &&
-      terminalHydratedSeasonSummaryReleased === 16 &&
+      terminalHydratedSeasonSummaryReleased === 161 &&
       terminalMultiOldRowsFact.releasedEpisodes === 161 &&
-      terminalMultiOldRowsFact.releaseState === "caught_up",
+      terminalMultiOldRowsFact.releaseState === "caught_up" &&
+      terminalDenseProviderRowsFact.releasedEpisodes === 161 &&
+      terminalDenseProviderRowsFact.releaseState === "caught_up",
     "Terminal imported backlog should survive sparse old-event capping only when provider metadata backs it.",
     {
       terminalMetadataBackedBacklogFact,
       terminalMismatchedImportedBacklogFact,
       terminalHydratedSeasonSummaryReleased,
       terminalMultiOldRowsFact,
+      terminalDenseProviderRowsFact,
     }
   );
   const returningSeasonDropRow = {
