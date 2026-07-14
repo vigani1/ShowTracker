@@ -2327,7 +2327,13 @@ type ShowProgressMeta = Pick<
 
 type TrackedWatchedEpisodeLike = Pick<
   Doc<"watchedEpisodes">,
-  "season" | "episode" | "watchedAt" | "runtime" | "watchCount" | "watchHistory"
+  | "season"
+  | "episode"
+  | "watchedAt"
+  | "runtime"
+  | "watchCount"
+  | "watchHistory"
+  | "historicalOnly"
 >;
 
 function getEpisodeLastWatchedAt(entry: TrackedWatchedEpisodeLike) {
@@ -2340,8 +2346,11 @@ function getEpisodeLastWatchedAt(entry: TrackedWatchedEpisodeLike) {
 
 function isWatchedEpisodeWithinKnownShowBounds(
   show: ShowProgressMeta,
-  entry: Pick<TrackedWatchedEpisodeLike, "season" | "episode">
+  entry: Pick<TrackedWatchedEpisodeLike, "season" | "episode" | "historicalOnly">
 ) {
+  if (entry.historicalOnly === true) {
+    return false;
+  }
   if (show.mediaType === "movie" && entry.season === 0 && entry.episode === 0) {
     return true;
   }
@@ -4920,7 +4929,9 @@ export const getWatchedEpisodesForSeason = query({
       )
       .collect();
 
-    return watchedEpisodes.map((entry) => `${entry.season}:${entry.episode}`);
+    return watchedEpisodes
+      .filter((entry) => entry.historicalOnly !== true)
+      .map((entry) => `${entry.season}:${entry.episode}`);
   },
 });
 
@@ -5856,6 +5867,18 @@ export const importTrackedShows = mutation({
             watchedAt: v.optional(v.number()),
             watchCount: v.optional(v.number()),
             watchHistory: v.optional(v.array(v.number())),
+            sourceSeason: v.optional(v.number()),
+            sourceEpisode: v.optional(v.number()),
+            sourceEpisodeId: v.optional(v.string()),
+            providerEpisodeId: v.optional(v.string()),
+            importMatchMethod: v.optional(
+              v.union(
+                v.literal("exact"),
+                v.literal("ordinal"),
+                v.literal("historical_only")
+              )
+            ),
+            historicalOnly: v.optional(v.boolean()),
           })
         ),
       })
@@ -5877,6 +5900,8 @@ export const importTrackedShows = mutation({
     let updatedEpisodes = 0;
     let skippedEpisodes = 0;
     let favoritesAdded = 0;
+    let canonicalEpisodes = 0;
+    let historicalOnlyEpisodes = 0;
 
     for (const item of args.items) {
       const showId = await ensureShowRecordId(ctx, item.show);
@@ -5961,10 +5986,6 @@ export const importTrackedShows = mutation({
         .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
         .collect();
 
-      const existingEpisodesByKey = new Map(
-        existingEpisodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])
-      );
-
       const mergedIncomingEpisodes = new Map<
         string,
         {
@@ -5974,6 +5995,12 @@ export const importTrackedShows = mutation({
           watchedAt?: number;
           watchCount?: number;
           watchHistory?: number[];
+          sourceSeason?: number;
+          sourceEpisode?: number;
+          sourceEpisodeId?: string;
+          providerEpisodeId?: string;
+          importMatchMethod?: "exact" | "ordinal" | "historical_only";
+          historicalOnly?: boolean;
         }
       >();
 
@@ -6006,6 +6033,12 @@ export const importTrackedShows = mutation({
             watchedAt: episode.watchedAt,
             watchCount: incomingCount,
             watchHistory: incomingHistory,
+            sourceSeason: episode.sourceSeason,
+            sourceEpisode: episode.sourceEpisode,
+            sourceEpisodeId: episode.sourceEpisodeId,
+            providerEpisodeId: episode.providerEpisodeId,
+            importMatchMethod: episode.importMatchMethod,
+            historicalOnly: episode.historicalOnly,
           });
           continue;
         }
@@ -6041,14 +6074,50 @@ export const importTrackedShows = mutation({
           watchedAt: mergedWatchedAt,
           watchCount: mergedCount,
           watchHistory: mergedHistory,
+          sourceSeason: episode.sourceSeason ?? existing.sourceSeason,
+          sourceEpisode: episode.sourceEpisode ?? existing.sourceEpisode,
+          sourceEpisodeId: episode.sourceEpisodeId ?? existing.sourceEpisodeId,
+          providerEpisodeId: episode.providerEpisodeId ?? existing.providerEpisodeId,
+          importMatchMethod: episode.importMatchMethod ?? existing.importMatchMethod,
+          historicalOnly: episode.historicalOnly ?? existing.historicalOnly,
         });
       }
 
       const uniqueIncomingEpisodes = Array.from(mergedIncomingEpisodes.values());
 
       for (const episode of uniqueIncomingEpisodes) {
-        const key = `${episode.season}:${episode.episode}`;
-        const existingEpisode = existingEpisodesByKey.get(key);
+        const sourceSeason = episode.sourceSeason ?? episode.season;
+        const sourceEpisodeNumber = episode.sourceEpisode ?? episode.episode;
+        const provenanceEpisode = existingEpisodes.find(
+          (entry) =>
+            (episode.sourceEpisodeId && entry.sourceEpisodeId === episode.sourceEpisodeId) ||
+            (entry.sourceSeason === sourceSeason && entry.sourceEpisode === sourceEpisodeNumber)
+        );
+        const providerEpisode = episode.providerEpisodeId
+          ? existingEpisodes.find(
+              (entry) => entry.providerEpisodeId === episode.providerEpisodeId
+            )
+          : undefined;
+        const legacySourceEpisode = existingEpisodes.find(
+          (entry) =>
+            entry.sourceSeason === undefined &&
+            entry.sourceEpisode === undefined &&
+            entry.sourceEpisodeId === undefined &&
+            entry.season === sourceSeason &&
+            entry.episode === sourceEpisodeNumber
+        );
+        const existingEpisode = provenanceEpisode ?? providerEpisode ?? legacySourceEpisode;
+        const obsoleteSourceEpisode =
+          existingEpisode &&
+          legacySourceEpisode &&
+          existingEpisode._id !== legacySourceEpisode._id
+            ? legacySourceEpisode
+            : null;
+        if (episode.historicalOnly === true) {
+          historicalOnlyEpisodes += 1;
+        } else {
+          canonicalEpisodes += 1;
+        }
         const hasImportedTimestamp =
           (episode.watchHistory?.length ?? 0) > 0 ||
           (typeof episode.watchedAt === "number" && Number.isFinite(episode.watchedAt));
@@ -6078,15 +6147,18 @@ export const importTrackedShows = mutation({
             : watchedAt;
 
         if (existingEpisode) {
-          const existingHistory = sortFiniteTimestamps(
-            existingEpisode.watchHistory ?? [existingEpisode.watchedAt]
-          );
+          const existingHistory = sortFiniteTimestamps([
+            ...(existingEpisode.watchHistory ?? [existingEpisode.watchedAt]),
+            ...(obsoleteSourceEpisode?.watchHistory ??
+              (obsoleteSourceEpisode ? [obsoleteSourceEpisode.watchedAt] : [])),
+          ]);
           const mergedHistory = sortFiniteTimestamps([
             ...existingHistory,
             ...(hasImportedTimestamp ? normalizedWatchHistory : []),
           ]);
           const mergedWatchCount = Math.max(
             existingEpisode.watchCount ?? 1,
+            obsoleteSourceEpisode?.watchCount ?? 1,
             watchCount,
             mergedHistory.length
           );
@@ -6103,9 +6175,43 @@ export const importTrackedShows = mutation({
             mergedWatchCount !== (existingEpisode.watchCount ?? 1) ||
             runtime !== existingEpisode.runtime ||
             mergedHistory.length !== existingHistory.length;
+          const provenanceChanged =
+            existingEpisode.season !== episode.season ||
+            existingEpisode.episode !== episode.episode ||
+            existingEpisode.sourceSeason !== episode.sourceSeason ||
+            existingEpisode.sourceEpisode !== episode.sourceEpisode ||
+            existingEpisode.sourceEpisodeId !== episode.sourceEpisodeId ||
+            existingEpisode.providerEpisodeId !== episode.providerEpisodeId ||
+            existingEpisode.importMatchMethod !== episode.importMatchMethod ||
+            existingEpisode.historicalOnly !== episode.historicalOnly;
 
-          if (changed) {
+          if (changed || provenanceChanged || obsoleteSourceEpisode) {
             await ctx.db.patch(existingEpisode._id, {
+              season: episode.season,
+              episode: episode.episode,
+              watchedAt: mergedWatchedAt,
+              runtime,
+              watchCount: mergedWatchCount,
+              watchHistory: mergedHistory,
+              sourceSeason: episode.sourceSeason,
+              sourceEpisode: episode.sourceEpisode,
+              sourceEpisodeId: episode.sourceEpisodeId,
+              providerEpisodeId: episode.providerEpisodeId,
+              importMatchMethod: episode.importMatchMethod,
+              historicalOnly: episode.historicalOnly,
+            });
+            if (obsoleteSourceEpisode) {
+              await ctx.db.delete(obsoleteSourceEpisode._id);
+            }
+            Object.assign(existingEpisode, {
+              season: episode.season,
+              episode: episode.episode,
+              sourceSeason: episode.sourceSeason,
+              sourceEpisode: episode.sourceEpisode,
+              sourceEpisodeId: episode.sourceEpisodeId,
+              providerEpisodeId: episode.providerEpisodeId,
+              importMatchMethod: episode.importMatchMethod,
+              historicalOnly: episode.historicalOnly,
               watchedAt: mergedWatchedAt,
               runtime,
               watchCount: mergedWatchCount,
@@ -6123,6 +6229,12 @@ export const importTrackedShows = mutation({
           showId,
           season: episode.season,
           episode: episode.episode,
+          sourceSeason: episode.sourceSeason,
+          sourceEpisode: episode.sourceEpisode,
+          sourceEpisodeId: episode.sourceEpisodeId,
+          providerEpisodeId: episode.providerEpisodeId,
+          importMatchMethod: episode.importMatchMethod,
+          historicalOnly: episode.historicalOnly,
           watchedAt: normalizedWatchedAt,
           runtime: episode.runtime ?? item.show.episodeRuntime,
           watchCount,
@@ -6196,6 +6308,8 @@ export const importTrackedShows = mutation({
       updatedEpisodes,
       skippedEpisodes,
       favoritesAdded,
+      canonicalEpisodes,
+      historicalOnlyEpisodes,
     };
   },
 });
@@ -6238,7 +6352,10 @@ export const toggleEpisodeWatched = mutation({
       .collect();
 
     const existingEpisode = watchedEpisodes.find(
-      (entry) => entry.season === args.season && entry.episode === args.episode
+      (entry) =>
+        entry.historicalOnly !== true &&
+        entry.season === args.season &&
+        entry.episode === args.episode
     );
 
     const now = Date.now();
@@ -6402,9 +6519,12 @@ export const batchRewatchEpisodes = mutation({
       .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
       .collect();
 
-    const existingByKey = new Map(
-      watchedEpisodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])
-    );
+    const existingByKey = new Map<string, Doc<"watchedEpisodes">>();
+    for (const entry of watchedEpisodes) {
+      if (entry.historicalOnly !== true) {
+        existingByKey.set(`${entry.season}:${entry.episode}`, entry);
+      }
+    }
 
     const uniqueEpisodes = Array.from(
       new Map(args.episodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])).values()
@@ -6542,7 +6662,9 @@ export const batchMarkEpisodesWatched = mutation({
       .collect();
 
     const existingByKey = new Map(
-      watchedEpisodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])
+      watchedEpisodes
+        .filter((entry) => entry.historicalOnly !== true)
+        .map((entry) => [`${entry.season}:${entry.episode}`, entry])
     );
 
     const uniqueEpisodes = Array.from(
@@ -6702,11 +6824,12 @@ export const markSeasonWatched = mutation({
       .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
       .collect();
 
-    const existingSeasonEpisodes = new Map(
-      watchedEpisodes
-        .filter((entry) => entry.season === args.season)
-        .map((entry) => [entry.episode, entry])
-    );
+    const existingSeasonEpisodes = new Map<number, Doc<"watchedEpisodes">>();
+    for (const entry of watchedEpisodes) {
+      if (entry.historicalOnly !== true && entry.season === args.season) {
+        existingSeasonEpisodes.set(entry.episode, entry);
+      }
+    }
 
     const uniqueEpisodes = Array.from(
       new Map(args.episodes.map((entry) => [entry.episode, entry])).values()
@@ -6818,7 +6941,7 @@ export const unmarkSeasonWatched = mutation({
       .collect();
 
     const seasonEpisodes = watchedEpisodes.filter(
-      (entry) => entry.season === args.season
+      (entry) => entry.historicalOnly !== true && entry.season === args.season
     );
 
     let removedCount = 0;
@@ -8007,9 +8130,12 @@ export const batchMarkWatched = mutation({
       .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
       .collect();
 
-    const existingKeys = new Set(
-      watchedEpisodes.map((entry) => `${entry.season}:${entry.episode}`)
-    );
+    const existingKeys = new Set<string>();
+    for (const entry of watchedEpisodes) {
+      if (entry.historicalOnly !== true) {
+        existingKeys.add(`${entry.season}:${entry.episode}`);
+      }
+    }
 
     const now = Date.now();
     let addedCount = 0;
@@ -8134,7 +8260,7 @@ export const getEpisodeWatchHistory = query({
       return null;
     }
 
-    const watchedEntry = await ctx.db
+    const watchedEntries = await ctx.db
       .query("watchedEpisodes")
       .withIndex("by_user_show_season_episode", (q) =>
         q.eq("userId", userId)
@@ -8142,7 +8268,8 @@ export const getEpisodeWatchHistory = query({
           .eq("season", args.season)
           .eq("episode", args.episode)
       )
-      .unique();
+      .collect();
+    const watchedEntry = watchedEntries.find((entry) => entry.historicalOnly !== true);
 
     if (!watchedEntry) {
       return null;
@@ -8335,13 +8462,15 @@ export const getEpisodeWatchCounts = query({
       .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", show._id))
       .take(5000);
 
-    return watchedEpisodes
-      .filter((entry) => (entry.watchCount ?? 1) > 1)
-      .map((entry) => ({
+    return watchedEpisodes.flatMap((entry) =>
+      entry.historicalOnly !== true && (entry.watchCount ?? 1) > 1
+        ? [{
         season: entry.season,
         episode: entry.episode,
         count: entry.watchCount ?? 1,
-      }));
+          }]
+        : []
+    );
   },
 });
 

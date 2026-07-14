@@ -121,6 +121,8 @@ type ImportResult = {
   updatedEpisodes: number;
   skippedEpisodes: number;
   favoritesAdded: number;
+  canonicalEpisodes: number;
+  historicalOnlyEpisodes: number;
   unresolvedTitles: string[];
   failedTitles: string[];
   fallbackImportedTitles: string[];
@@ -325,6 +327,8 @@ function mergeWatchedEpisodeEntries(
       : undefined;
 
   return {
+    ...existing,
+    ...incoming,
     season: existing.season,
     episode: existing.episode,
     watchedAt,
@@ -1068,8 +1072,12 @@ export function ImportScreen() {
               ? {
                   ...item,
                   watchedEpisodes: await enrichImportedEpisodeRuntimes(
-                    item.watchedEpisodes,
-                    show
+                  item.watchedEpisodes,
+                    show,
+                    {
+                      sourceTvdbId: item.tvdbId,
+                      canonicalize: item.source === "tv_time_gdpr",
+                    }
                   ),
                 }
               : item;
@@ -1155,6 +1163,8 @@ export function ImportScreen() {
       let updatedEpisodes = 0;
       let skippedEpisodes = 0;
       let favoritesAdded = 0;
+      let canonicalEpisodes = 0;
+      let historicalOnlyEpisodes = 0;
 
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
         const batch = batches[batchIndex];
@@ -1164,6 +1174,8 @@ export function ImportScreen() {
         updatedEpisodes += result.updatedEpisodes;
         skippedEpisodes += result.skippedEpisodes;
         favoritesAdded += result.favoritesAdded;
+        canonicalEpisodes += result.canonicalEpisodes;
+        historicalOnlyEpisodes += result.historicalOnlyEpisodes;
 
         setProgress({
           phase: "importing",
@@ -1180,6 +1192,8 @@ export function ImportScreen() {
         updatedEpisodes,
         skippedEpisodes,
         favoritesAdded,
+        canonicalEpisodes,
+        historicalOnlyEpisodes,
         unresolvedTitles,
         failedTitles,
         fallbackImportedTitles,
@@ -1462,6 +1476,10 @@ export function ImportScreen() {
               {importResult.importedShows} shows imported, {importResult.insertedEpisodes} episodes added, {" "}
               {importResult.updatedEpisodes} episodes enriched, {importResult.favoritesAdded} favorites added, and {" "}
               {importResult.skippedEpisodes} unchanged episodes skipped.
+            </Text>
+            <Text className="mt-2 text-xs text-text-secondary">
+              Canonical provider episodes: {importResult.canonicalEpisodes}. Historical-only
+              records preserved: {importResult.historicalOnlyEpisodes}.
             </Text>
             {importResult.unresolvedTitles.length > 0 ? (
               <Text className="mt-2 text-xs text-warning">
