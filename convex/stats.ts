@@ -31,6 +31,37 @@ async function getCurrentUserId(ctx: QueryCtx | MutationCtx) {
   return userId as Id<"users">;
 }
 
+function getUserShowHistoryTotals(userShow: Doc<"userShows">) {
+  const progressEpisodes = Math.max(
+    0,
+    Math.floor(userShow.watchedEpisodesCount ?? 0),
+  );
+  const uniqueEpisodes = Math.max(
+    progressEpisodes,
+    Math.floor(userShow.watchedHistoryEpisodesCount ?? progressEpisodes),
+  );
+  const progressTotal = Math.max(
+    progressEpisodes,
+    Math.floor(userShow.watchedTotalCount ?? progressEpisodes),
+  );
+  const totalWatches = Math.max(
+    uniqueEpisodes,
+    progressTotal,
+    Math.floor(userShow.watchedHistoryTotalCount ?? progressTotal),
+  );
+
+  return {
+    uniqueEpisodes,
+    totalWatches,
+    runtimeMinutes:
+      typeof userShow.watchedHistoryRuntimeMinutes === "number"
+        ? Math.max(0, Math.floor(userShow.watchedHistoryRuntimeMinutes))
+        : typeof userShow.watchedRuntimeMinutes === "number"
+          ? Math.max(0, Math.floor(userShow.watchedRuntimeMinutes))
+          : null,
+  };
+}
+
 function formatDuration(minutes: number): string {
   if (minutes <= 0) return "0min";
 
@@ -343,14 +374,9 @@ export const getUserStats = query({
         continue;
       }
 
-      const watchedEpisodesCount = Math.max(
-        0,
-        Math.floor(userShow.watchedEpisodesCount ?? 0),
-      );
-      const watchedTotalCount = Math.max(
-        watchedEpisodesCount,
-        Math.floor(userShow.watchedTotalCount ?? watchedEpisodesCount),
-      );
+      const history = getUserShowHistoryTotals(userShow);
+      const watchedEpisodesCount = history.uniqueEpisodes;
+      const watchedTotalCount = history.totalWatches;
       const rewatchCount = Math.max(
         watchedTotalCount - watchedEpisodesCount,
         0,
@@ -360,8 +386,8 @@ export const getUserStats = query({
       const watchedRuntimeMinutes = Math.max(
         0,
         Math.floor(
-          typeof userShow.watchedRuntimeMinutes === "number"
-            ? userShow.watchedRuntimeMinutes
+          history.runtimeMinutes !== null
+            ? history.runtimeMinutes
             : fallbackRuntimeMinutes,
         ),
       );
@@ -549,22 +575,17 @@ export const rebuildUserStats = mutation({
         continue;
       }
 
-      const watchedEpisodesCount = Math.max(
-        0,
-        Math.floor(userShow.watchedEpisodesCount ?? 0),
-      );
-      const watchedTotalCount = Math.max(
-        watchedEpisodesCount,
-        Math.floor(userShow.watchedTotalCount ?? watchedEpisodesCount),
-      );
+      const history = getUserShowHistoryTotals(userShow);
+      const watchedEpisodesCount = history.uniqueEpisodes;
+      const watchedTotalCount = history.totalWatches;
       const rewatchCount = Math.max(watchedTotalCount - watchedEpisodesCount, 0);
       const fallbackRuntimeMinutes =
         Math.max(0, show.episodeRuntime ?? 0) * watchedTotalCount;
       const watchedRuntimeMinutes = Math.max(
         0,
         Math.floor(
-          typeof userShow.watchedRuntimeMinutes === "number"
-            ? userShow.watchedRuntimeMinutes
+          history.runtimeMinutes !== null
+            ? history.runtimeMinutes
             : fallbackRuntimeMinutes,
         ),
       );
@@ -673,14 +694,8 @@ export const getUserProfileSummary = query({
     let completedShows = 0;
 
     for (const userShow of userShows) {
-      const watchedEpisodesCount = Math.max(
-        0,
-        Math.floor(userShow.watchedEpisodesCount ?? 0),
-      );
-      const watchedTotalCount = Math.max(
-        watchedEpisodesCount,
-        Math.floor(userShow.watchedTotalCount ?? watchedEpisodesCount),
-      );
+      const history = getUserShowHistoryTotals(userShow);
+      const watchedTotalCount = history.totalWatches;
 
       totalEpisodesWatched += watchedTotalCount;
       if (userShow.status === "completed") {
