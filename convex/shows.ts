@@ -5870,6 +5870,7 @@ export const importTrackedShows = mutation({
             sourceSeason: v.optional(v.number()),
             sourceEpisode: v.optional(v.number()),
             sourceEpisodeId: v.optional(v.string()),
+            isSpecial: v.optional(v.boolean()),
             providerEpisodeId: v.optional(v.string()),
             importMatchMethod: v.optional(
               v.union(
@@ -5998,6 +5999,7 @@ export const importTrackedShows = mutation({
           sourceSeason?: number;
           sourceEpisode?: number;
           sourceEpisodeId?: string;
+          isSpecial?: boolean;
           providerEpisodeId?: string;
           importMatchMethod?: "exact" | "ordinal" | "historical_only";
           historicalOnly?: boolean;
@@ -6036,6 +6038,7 @@ export const importTrackedShows = mutation({
             sourceSeason: episode.sourceSeason,
             sourceEpisode: episode.sourceEpisode,
             sourceEpisodeId: episode.sourceEpisodeId,
+            isSpecial: episode.isSpecial,
             providerEpisodeId: episode.providerEpisodeId,
             importMatchMethod: episode.importMatchMethod,
             historicalOnly: episode.historicalOnly,
@@ -6077,6 +6080,7 @@ export const importTrackedShows = mutation({
           sourceSeason: episode.sourceSeason ?? existing.sourceSeason,
           sourceEpisode: episode.sourceEpisode ?? existing.sourceEpisode,
           sourceEpisodeId: episode.sourceEpisodeId ?? existing.sourceEpisodeId,
+          isSpecial: episode.isSpecial ?? existing.isSpecial,
           providerEpisodeId: episode.providerEpisodeId ?? existing.providerEpisodeId,
           importMatchMethod: episode.importMatchMethod ?? existing.importMatchMethod,
           historicalOnly: episode.historicalOnly ?? existing.historicalOnly,
@@ -6190,6 +6194,7 @@ export const importTrackedShows = mutation({
             existingEpisode.sourceSeason !== episode.sourceSeason ||
             existingEpisode.sourceEpisode !== episode.sourceEpisode ||
             existingEpisode.sourceEpisodeId !== episode.sourceEpisodeId ||
+            existingEpisode.isSpecial !== episode.isSpecial ||
             existingEpisode.providerEpisodeId !== episode.providerEpisodeId ||
             existingEpisode.importMatchMethod !== episode.importMatchMethod ||
             existingEpisode.historicalOnly !== episode.historicalOnly;
@@ -6205,6 +6210,7 @@ export const importTrackedShows = mutation({
               sourceSeason: episode.sourceSeason,
               sourceEpisode: episode.sourceEpisode,
               sourceEpisodeId: episode.sourceEpisodeId,
+              isSpecial: episode.isSpecial,
               providerEpisodeId: episode.providerEpisodeId,
               importMatchMethod: episode.importMatchMethod,
               historicalOnly: episode.historicalOnly,
@@ -6218,6 +6224,7 @@ export const importTrackedShows = mutation({
               sourceSeason: episode.sourceSeason,
               sourceEpisode: episode.sourceEpisode,
               sourceEpisodeId: episode.sourceEpisodeId,
+              isSpecial: episode.isSpecial,
               providerEpisodeId: episode.providerEpisodeId,
               importMatchMethod: episode.importMatchMethod,
               historicalOnly: episode.historicalOnly,
@@ -6241,6 +6248,7 @@ export const importTrackedShows = mutation({
           sourceSeason: episode.sourceSeason,
           sourceEpisode: episode.sourceEpisode,
           sourceEpisodeId: episode.sourceEpisodeId,
+          isSpecial: episode.isSpecial,
           providerEpisodeId: episode.providerEpisodeId,
           importMatchMethod: episode.importMatchMethod,
           historicalOnly: episode.historicalOnly,
