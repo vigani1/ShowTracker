@@ -10,6 +10,7 @@ export type ImportWatchStatus =
 export type ParsedImportEpisode = {
   season: number;
   episode: number;
+  runtime?: number;
   watchedAt?: number;
   watchCount?: number;
   watchHistory?: number[];

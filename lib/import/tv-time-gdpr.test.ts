@@ -13,7 +13,7 @@ const trackingV2 = Papa.unparse([
     gsi: "",
     created_at: "2024-01-02 03:04:05",
     s_id: "81189",
-    runtime: "47",
+    runtime: "1500",
     ep_no: "",
     key: "",
     s_no: "",
@@ -159,6 +159,7 @@ test("converts official tracking rows into ShowTracker history", () => {
   );
   assert.ok(regularEpisode);
   assert.equal(regularEpisode.watchCount, 2);
+  assert.equal(regularEpisode.runtime, 25);
   assert.deepEqual(regularEpisode.watchHistory, [
     Date.parse("2024-01-02T03:04:05Z"),
     Date.parse("2024-02-03T04:05:06Z"),
@@ -169,6 +170,7 @@ test("converts official tracking rows into ShowTracker history", () => {
   assert.ok(movie);
   assert.equal(movie.status, "completed");
   assert.equal(movie.firstAiredYear, 2020);
+  assert.equal(movie.watchedEpisodes[0].runtime, 120);
   assert.equal(movie.watchedEpisodes[0].watchedAt, Date.parse("2023-06-01T12:00:00Z"));
 });
 
