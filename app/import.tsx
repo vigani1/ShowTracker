@@ -746,31 +746,24 @@ async function resolveAnimeBySearch(item: ParsedImportItem): Promise<ScoredResol
   };
 }
 
-async function resolveTvWithAnimeFirst(item: ParsedImportItem) {
-  const animeCandidate = await resolveAnimeBySearch(item);
+async function resolveTvWithAnimeFallback(item: ParsedImportItem) {
   const tmdbByTvdb = await resolveTmdbByTvdbId(item);
+  if (tmdbByTvdb) {
+    return tmdbByTvdb.show;
+  }
+
   const tmdbBySearch = await resolveTmdbBySearch(item);
+  if (tmdbBySearch) {
+    return tmdbBySearch.show;
+  }
+
   const tvMazeByTvdb = await resolveViaTvMazeByTvdbId(item);
-  const tmdbCandidate = tmdbByTvdb ?? tmdbBySearch ?? tvMazeByTvdb;
-
-  if (animeCandidate && !tmdbCandidate) {
-    return animeCandidate.show;
+  if (tvMazeByTvdb) {
+    return tvMazeByTvdb.show;
   }
 
-  if (!animeCandidate && tmdbCandidate) {
-    return tmdbCandidate.show;
-  }
-
-  if (!animeCandidate && !tmdbCandidate) {
-    return null;
-  }
-
-  const animeScore = animeCandidate!.score;
-  const tmdbScore = tmdbCandidate!.score;
-  const shouldPreferAnime =
-    tmdbCandidate!.isAnimation || animeScore >= 0.68 || animeScore >= tmdbScore + 0.01;
-
-  return shouldPreferAnime ? animeCandidate!.show : tmdbCandidate!.show;
+  const animeCandidate = await resolveAnimeBySearch(item);
+  return animeCandidate?.show ?? null;
 }
 
 async function resolveImportedItem(item: ParsedImportItem): Promise<NormalizedShow | null> {
@@ -819,7 +812,7 @@ async function resolveImportedItem(item: ParsedImportItem): Promise<NormalizedSh
   }
 
   if (item.mediaType === "tv") {
-    return resolveTvWithAnimeFirst(item);
+    return resolveTvWithAnimeFallback(item);
   }
 
   if (item.mediaType === "movie") {
@@ -1405,8 +1398,8 @@ export function ImportScreen() {
             </View>
 
             <Text className="mt-2 text-[11px] text-text-muted">
-              Note: TV Time exports may label anime as TV. During Resolve step we now try AniList
-              first, then fall back to TMDB when anime confidence is weak.
+              TV Time show entries use the regular TV catalog first. Anime providers are consulted
+              only when TMDB and TVMaze cannot resolve the title.
             </Text>
 
             <View className="mt-3 gap-2">
