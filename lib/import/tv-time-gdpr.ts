@@ -71,6 +71,7 @@ type EpisodeAccumulator = {
   season: number;
   episode: number;
   sourceEpisodeId?: string;
+  isSpecial?: boolean;
   timestamps: number[];
   watchCount: number;
   runtimeMinutes?: number;
@@ -223,6 +224,7 @@ function addEpisode(
     watchedAt?: number;
     watchCount?: number;
     runtimeMinutes?: number;
+    isSpecial?: boolean;
   }
 ) {
   if (args.season === undefined || !args.episode) {
@@ -235,6 +237,7 @@ function addEpisode(
       season: args.season,
       episode: args.episode,
       sourceEpisodeId: args.sourceEpisodeId,
+      isSpecial: args.isSpecial,
       timestamps: uniqueSortedTimestamps([args.watchedAt]),
       watchCount: Math.max(1, args.watchCount ?? 1),
       runtimeMinutes: args.runtimeMinutes,
@@ -243,6 +246,7 @@ function addEpisode(
   }
 
   existing.sourceEpisodeId ??= args.sourceEpisodeId;
+  existing.isSpecial ??= args.isSpecial;
   existing.timestamps = uniqueSortedTimestamps([
     ...existing.timestamps,
     args.watchedAt,
@@ -310,6 +314,7 @@ function applyTrackingV2(
         watchedAt: parseSqlTimestamp(row.created_at),
         watchCount: rewatchCount + 1,
         runtimeMinutes: parseRuntimeMinutes(row.runtime, "seconds"),
+        isSpecial: parseBoolean(row.is_special),
       });
       const accumulated = target.episodes.get(`${season}:${episode}`);
       if (accumulated) {
@@ -478,6 +483,10 @@ function toParsedItem(
       return {
         season: entry.season,
         episode: entry.episode,
+        sourceSeason: entry.season,
+        sourceEpisode: entry.episode,
+        sourceEpisodeId: entry.sourceEpisodeId,
+        isSpecial: entry.isSpecial,
         runtime: entry.runtimeMinutes,
         watchedAt: history.at(-1),
         watchCount: watchCount > 1 ? watchCount : undefined,

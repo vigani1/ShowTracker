@@ -160,6 +160,9 @@ test("converts official tracking rows into ShowTracker history", () => {
   assert.ok(regularEpisode);
   assert.equal(regularEpisode.watchCount, 2);
   assert.equal(regularEpisode.runtime, 25);
+  assert.equal(regularEpisode.sourceEpisodeId, "1001");
+  assert.equal(regularEpisode.sourceSeason, 1);
+  assert.equal(regularEpisode.sourceEpisode, 1);
   assert.deepEqual(regularEpisode.watchHistory, [
     Date.parse("2024-01-02T03:04:05Z"),
     Date.parse("2024-02-03T04:05:06Z"),

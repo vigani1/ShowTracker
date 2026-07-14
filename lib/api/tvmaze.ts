@@ -180,14 +180,17 @@ export async function getTvMazeShow(id: number) {
   return request<TvMazeShow>(`/shows/${id}`);
 }
 
-export async function getTvMazeShowEpisodes(id: number) {
-  const cacheKey = `tvmaze-show-episodes:${id}`;
+export async function getTvMazeShowEpisodes(id: number, includeSpecials = false) {
+  const cacheKey = `tvmaze-show-episodes:${id}:specials-${includeSpecials ? "yes" : "no"}`;
   const cached = getCached<TvMazeEpisode[]>(cacheKey);
   if (cached) {
     return cached;
   }
 
-  const data = await request<TvMazeEpisode[]>(`/shows/${id}/episodes`);
+  const data = await request<TvMazeEpisode[]>(
+    `/shows/${id}/episodes`,
+    includeSpecials ? { specials: "1" } : undefined
+  );
   setCached(cacheKey, data, cacheTtlMs);
   return data;
 }
