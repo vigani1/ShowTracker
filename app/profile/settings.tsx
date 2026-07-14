@@ -27,6 +27,7 @@ type HomePausedSectionMode = "auto_paused_only" | "all_paused";
 type WatchlistAirtimeMode = "same_day" | "after_airtime";
 
 const TRACKING_REPAIR_MAX_BATCHES = 6;
+const STATS_REBUILD_TRACKING_MAX_BATCHES = 25;
 const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
 
 function SettingRow({
@@ -228,6 +229,21 @@ export default function ProfileSettingsScreen() {
     setNotice(null);
     setError(null);
     try {
+      let cursor: string | null = null;
+      let batches = 0;
+      let isDone = false;
+      while (!isDone && batches < STATS_REBUILD_TRACKING_MAX_BATCHES) {
+        const batch: {
+          continueCursor: string | null;
+          isDone: boolean;
+        } = await repairMyShowsTrackingBatch(cursor ? { continueCursor: cursor } : {});
+        cursor = batch.continueCursor;
+        isDone = batch.isDone;
+        batches += 1;
+      }
+      if (!isDone) {
+        throw new Error("Tracking history repair did not finish before the stats rebuild limit.");
+      }
       const result = await rebuildUserStats();
       setNotice(`Stats refreshed for ${result.totalTrackedShows} tracked ${result.totalTrackedShows === 1 ? "show" : "shows"}.`);
     } catch (statsError) {
@@ -236,7 +252,7 @@ export default function ProfileSettingsScreen() {
     } finally {
       setIsRefreshingStats(false);
     }
-  }, [isAuthenticated, isRefreshingStats, rebuildUserStats]);
+  }, [isAuthenticated, isRefreshingStats, rebuildUserStats, repairMyShowsTrackingBatch]);
 
   const refreshShows = useCallback(async () => {
     if (!isAuthenticated || isRepairingTracking) return;

@@ -10,6 +10,7 @@ import type { ActionCtx, MutationCtx, QueryCtx } from "@/convex/_generated/serve
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
+import { computeWatchedHistoryAggregates } from "@/lib/tracking/history-aggregates";
 import { paginationOptsValidator } from "convex/server";
 import { api, internal } from "@/convex/_generated/api";
 import {
@@ -2313,6 +2314,9 @@ type UserShowTrackingAggregates = {
   watchedEpisodesCount: number;
   watchedTotalCount: number;
   watchedRuntimeMinutes: number;
+  watchedHistoryEpisodesCount: number;
+  watchedHistoryTotalCount: number;
+  watchedHistoryRuntimeMinutes: number;
   lastWatchedAt?: number;
 };
 
@@ -2427,6 +2431,8 @@ function computeWatchedEpisodeAggregates(
     ? filterWatchedEpisodesWithinKnownShowBounds(watchedEpisodes, show)
     : watchedEpisodes;
 
+  const historyAggregates = computeWatchedHistoryAggregates(watchedEpisodes);
+
   for (const entry of relevantEpisodes) {
     uniqueEpisodeKeys.add(`${entry.season}:${entry.episode}`);
 
@@ -2450,6 +2456,9 @@ function computeWatchedEpisodeAggregates(
     watchedEpisodesCount: uniqueEpisodeKeys.size,
     watchedTotalCount,
     watchedRuntimeMinutes,
+    watchedHistoryEpisodesCount: historyAggregates.episodesCount,
+    watchedHistoryTotalCount: historyAggregates.totalCount,
+    watchedHistoryRuntimeMinutes: historyAggregates.runtimeMinutes,
     lastWatchedAt,
   };
 }
@@ -2511,6 +2520,9 @@ async function refreshUserShowTrackingAggregatesForDoc(
     watchedEpisodesCount: aggregates.watchedEpisodesCount,
     watchedTotalCount: aggregates.watchedTotalCount,
     watchedRuntimeMinutes: aggregates.watchedRuntimeMinutes,
+    watchedHistoryEpisodesCount: aggregates.watchedHistoryEpisodesCount,
+    watchedHistoryTotalCount: aggregates.watchedHistoryTotalCount,
+    watchedHistoryRuntimeMinutes: aggregates.watchedHistoryRuntimeMinutes,
     lastWatchedAt: aggregates.lastWatchedAt,
   };
   let nextStatus = userShow.status;
@@ -2647,6 +2659,9 @@ function hasUserShowAggregateChanges(
     (userShow.watchedEpisodesCount ?? 0) !== aggregates.watchedEpisodesCount ||
     (userShow.watchedTotalCount ?? 0) !== aggregates.watchedTotalCount ||
     (userShow.watchedRuntimeMinutes ?? 0) !== aggregates.watchedRuntimeMinutes ||
+    userShow.watchedHistoryEpisodesCount !== aggregates.watchedHistoryEpisodesCount ||
+    userShow.watchedHistoryTotalCount !== aggregates.watchedHistoryTotalCount ||
+    userShow.watchedHistoryRuntimeMinutes !== aggregates.watchedHistoryRuntimeMinutes ||
     userShow.lastWatchedAt !== aggregates.lastWatchedAt ||
     userShow.status !== nextStatus
   );

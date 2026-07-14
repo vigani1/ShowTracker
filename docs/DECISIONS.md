@@ -51,6 +51,7 @@ Most frequently relevant:
 - [ADR-0046](ADR-0046-tv-time-exported-runtime.md): TV Time imports preserve exported episode runtime and use provider runtime only as fallback.
 - [ADR-0047](ADR-0047-provider-episode-runtime-authority.md): exact provider episode runtime outranks show-level and archived runtime during import and normal tracking.
 - [ADR-0048](ADR-0048-watch-stats-cache-invalidation.md): tracking aggregate changes invalidate materialized statistics, and bulk import rebuilds them once after completion.
+- [ADR-0049](ADR-0049-import-history-statistics.md): statistics count all stored watch history while provider-bounded progress continues to protect Home and release projections.
 
 ## Navigation
 
@@ -114,6 +115,7 @@ Most frequently relevant:
 | [ADR-0046](ADR-0046-tv-time-exported-runtime.md) | TV Time imports preserve exported episode runtime and use provider runtime only as fallback. |
 | [ADR-0047](ADR-0047-provider-episode-runtime-authority.md) | Exact provider episode runtime outranks show-level and archived runtime during import and normal tracking. |
 | [ADR-0048](ADR-0048-watch-stats-cache-invalidation.md) | Tracking aggregate changes invalidate materialized statistics, and bulk import rebuilds them once after completion. |
+| [ADR-0049](ADR-0049-import-history-statistics.md) | Statistics count all stored watch history while provider-bounded progress continues to protect Home and release projections. |
 
 ## Rule For New ADRs
 
