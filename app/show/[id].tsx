@@ -3123,9 +3123,26 @@ export function ShowDetailScreen() {
   };
 
   const collectReleasedShowEpisodes = async () => {
+    const providerEpisodes: NormalizedEpisode[] = [];
+    for (const season of seasons) {
+      const resolvedEpisodes =
+        season.episodes?.length ? season.episodes : await resolveSeasonEpisodes(season);
+      providerEpisodes.push(
+        ...(resolvedEpisodes ?? []).filter((episode) => isEpisodeReleased(episode.airDate))
+      );
+    }
+
     if (watchedEpisodeKeys.size > 0) {
+      const providerByKey = new Map(
+        providerEpisodes.map((episode) => [
+          `${episode.seasonNumber}:${episode.episodeNumber}`,
+          episode,
+        ])
+      );
       const fromWatchedKeys = Array.from(watchedEpisodeKeys)
         .map((key) => {
+          const providerEpisode = providerByKey.get(key);
+          if (providerEpisode) return providerEpisode;
           const [seasonRaw, episodeRaw] = key.split(":");
           const seasonNumber = Number(seasonRaw);
           const episodeNumber = Number(episodeRaw);
@@ -3151,16 +3168,7 @@ export function ShowDetailScreen() {
       }
     }
 
-    const allEpisodes: NormalizedEpisode[] = [];
-    for (const season of seasons) {
-      const resolvedEpisodes =
-        season.episodes?.length ? season.episodes : await resolveSeasonEpisodes(season);
-      const released = (resolvedEpisodes ?? []).filter((episode) =>
-        isEpisodeReleased(episode.airDate)
-      );
-      allEpisodes.push(...released);
-    }
-    return allEpisodes;
+    return providerEpisodes;
   };
 
   const handleRewatchShow = async (releasedEpisodesOverride?: NormalizedEpisode[]) => {

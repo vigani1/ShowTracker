@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded in part by ADR-0047
 
 ## Context
 
@@ -21,8 +21,9 @@ runtime present in the archive.
 
 Parse runtime from both approved tracking files and carry it through the import payload into each
 watched episode. Current v2 values are seconds. Legacy values are mixed: values at or above 300 are
-seconds, while smaller values are minutes. The archive runtime takes precedence over an existing or
-provider runtime during import; provider runtime remains the fallback when the archive has none.
+seconds, while smaller values are minutes. ADR-0047 later makes exact provider episode runtime and
+provider show runtime authoritative. Archive runtime remains the final fallback when provider data
+has no positive value.
 
 Re-import updates runtime on existing episode rows, then the normal tracking aggregate and statistics
 paths recalculate watch time. Watch history and counts retain their idempotent merge behavior.

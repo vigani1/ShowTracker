@@ -37,6 +37,7 @@ import {
   parseTvTimeGdprArchive,
   type TvTimeGdprParseSummary,
 } from "@/lib/import/tv-time-gdpr";
+import { enrichImportedEpisodeRuntimes } from "@/lib/import/provider-runtime";
 
 const RESOLVE_CONCURRENCY = 4;
 const IMPORT_CHUNK_SIZE = 20;
@@ -1062,7 +1063,16 @@ export function ImportScreen() {
         async (item): Promise<ResolveResult> => {
           try {
             const show = await resolveImportedItem(item);
-            return { parsed: item, show };
+            const parsed = show
+              ? {
+                  ...item,
+                  watchedEpisodes: await enrichImportedEpisodeRuntimes(
+                    item.watchedEpisodes,
+                    show
+                  ),
+                }
+              : item;
+            return { parsed, show };
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "Resolve failed";
             return {
