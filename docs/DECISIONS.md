@@ -49,6 +49,7 @@ Most frequently relevant:
 - [ADR-0044](ADR-0044-tv-time-gdpr-import.md): official TV Time GDPR ZIPs are parsed locally through an allowlist and merged idempotently into authenticated tracking state.
 - [ADR-0045](ADR-0045-tv-time-tv-catalog-priority.md): TV Time show imports prefer the regular TV catalog and use anime providers only as fallback.
 - [ADR-0046](ADR-0046-tv-time-exported-runtime.md): TV Time imports preserve exported episode runtime and use provider runtime only as fallback.
+- [ADR-0047](ADR-0047-provider-episode-runtime-authority.md): exact provider episode runtime outranks show-level and archived runtime during import and normal tracking.
 
 ## Navigation
 
@@ -110,6 +111,7 @@ Most frequently relevant:
 | [ADR-0044](ADR-0044-tv-time-gdpr-import.md) | Official TV Time GDPR ZIPs are parsed locally through an allowlist and merged idempotently into authenticated tracking state. |
 | [ADR-0045](ADR-0045-tv-time-tv-catalog-priority.md) | TV Time show imports prefer the regular TV catalog and use anime providers only as fallback. |
 | [ADR-0046](ADR-0046-tv-time-exported-runtime.md) | TV Time imports preserve exported episode runtime and use provider runtime only as fallback. |
+| [ADR-0047](ADR-0047-provider-episode-runtime-authority.md) | Exact provider episode runtime outranks show-level and archived runtime during import and normal tracking. |
 
 ## Rule For New ADRs
 

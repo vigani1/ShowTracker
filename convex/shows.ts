@@ -6220,6 +6220,7 @@ export const toggleEpisodeWatched = mutation({
           watchCount: currentCount + 1,
           watchHistory: [...currentHistory, now],
           watchedAt: now,
+          runtime: args.runtime ?? existingEpisode.runtime ?? args.show.episodeRuntime,
         });
 
         if (userShow) {
@@ -6392,6 +6393,7 @@ export const batchRewatchEpisodes = mutation({
           watchCount: currentCount + 1,
           watchHistory: [...currentHistory, now],
           watchedAt: now,
+          runtime: entry.runtime ?? existing.runtime ?? args.show.episodeRuntime,
         });
         updatedCount += 1;
       } else {
@@ -6507,8 +6509,8 @@ export const batchMarkEpisodesWatched = mutation({
       .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
       .collect();
 
-    const existingKeys = new Set(
-      watchedEpisodes.map((entry) => `${entry.season}:${entry.episode}`)
+    const existingByKey = new Map(
+      watchedEpisodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])
     );
 
     const uniqueEpisodes = Array.from(
@@ -6516,9 +6518,19 @@ export const batchMarkEpisodesWatched = mutation({
     );
 
     let addedCount = 0;
+    let runtimeUpdatedCount = 0;
     for (const entry of uniqueEpisodes) {
       const key = `${entry.season}:${entry.episode}`;
-      if (existingKeys.has(key)) {
+      const existing = existingByKey.get(key);
+      if (existing) {
+        if (
+          typeof entry.runtime === "number" &&
+          entry.runtime > 0 &&
+          entry.runtime !== existing.runtime
+        ) {
+          await ctx.db.patch(existing._id, { runtime: entry.runtime });
+          runtimeUpdatedCount += 1;
+        }
         continue;
       }
 
@@ -6536,14 +6548,21 @@ export const batchMarkEpisodesWatched = mutation({
     }
 
     if (addedCount === 0) {
+      const refreshed =
+        runtimeUpdatedCount > 0
+          ? await refreshUserShowTrackingAggregates(ctx, userId, showId)
+          : null;
       const currentWatchedEpisodes =
-        typeof userShow?.watchedEpisodesCount === "number"
+        typeof refreshed?.watchedEpisodesCount === "number"
+          ? refreshed.watchedEpisodesCount
+          : typeof userShow?.watchedEpisodesCount === "number"
           ? userShow.watchedEpisodesCount
           : computeWatchedEpisodeAggregates(watchedEpisodes, args.show).watchedEpisodesCount;
 
       return {
         processedCount: uniqueEpisodes.length,
         addedCount,
+        runtimeUpdatedCount,
         watchedEpisodes: currentWatchedEpisodes,
         status:
           userShow?.status ??
@@ -6552,7 +6571,7 @@ export const batchMarkEpisodesWatched = mutation({
     }
 
     const addedEpisodesForAggregate = uniqueEpisodes
-      .filter((entry) => !existingKeys.has(`${entry.season}:${entry.episode}`))
+      .filter((entry) => !existingByKey.has(`${entry.season}:${entry.episode}`))
       .map((entry) => ({
         season: entry.season,
         episode: entry.episode,
@@ -6603,6 +6622,7 @@ export const batchMarkEpisodesWatched = mutation({
     return {
       processedCount: uniqueEpisodes.length,
       addedCount,
+      runtimeUpdatedCount,
       watchedEpisodes: refreshed?.watchedEpisodesCount ?? totalWatched,
       status: nextStatus,
     };
@@ -6650,10 +6670,10 @@ export const markSeasonWatched = mutation({
       .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
       .collect();
 
-    const existingSeasonEpisodes = new Set(
+    const existingSeasonEpisodes = new Map(
       watchedEpisodes
         .filter((entry) => entry.season === args.season)
-        .map((entry) => entry.episode)
+        .map((entry) => [entry.episode, entry])
     );
 
     const uniqueEpisodes = Array.from(
@@ -6661,8 +6681,18 @@ export const markSeasonWatched = mutation({
     );
 
     let addedCount = 0;
+    let runtimeUpdatedCount = 0;
     for (const entry of uniqueEpisodes) {
-      if (existingSeasonEpisodes.has(entry.episode)) {
+      const existing = existingSeasonEpisodes.get(entry.episode);
+      if (existing) {
+        if (
+          typeof entry.runtime === "number" &&
+          entry.runtime > 0 &&
+          entry.runtime !== existing.runtime
+        ) {
+          await ctx.db.patch(existing._id, { runtime: entry.runtime });
+          runtimeUpdatedCount += 1;
+        }
         continue;
       }
       await ctx.db.insert("watchedEpisodes", {
@@ -6729,6 +6759,7 @@ export const markSeasonWatched = mutation({
 
     return {
       addedCount,
+      runtimeUpdatedCount,
       watchedEpisodes: refreshed?.watchedEpisodesCount ?? totalWatched,
       status: nextStatus,
     };
@@ -8137,6 +8168,7 @@ export const toggleMovieWatched = mutation({
           watchCount: currentCount + 1,
           watchHistory: [...currentHistory, now],
           watchedAt: now,
+          runtime: args.show.episodeRuntime ?? watchedEntry.runtime,
         });
 
         if (userShow) {
