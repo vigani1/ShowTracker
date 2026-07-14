@@ -46,7 +46,7 @@ test("canonicalizes compatible coordinates directly", () => {
   );
   assert.equal(result.providerEpisodeId, "provider:2");
   assert.equal(result.importMatchMethod, "exact");
-  assert.equal(result.historicalOnly, false);
+  assert.equal(result.unmatched, false);
   assert.equal(result.runtime, 23);
 });
 
@@ -89,8 +89,8 @@ test("keeps incompatible noncontiguous history out of provider progress", () => 
   );
   assert.equal(result.season, 2);
   assert.equal(result.episode, 5);
-  assert.equal(result.importMatchMethod, "historical_only");
-  assert.equal(result.historicalOnly, true);
+  assert.equal(result.importMatchMethod, undefined);
+  assert.equal(result.unmatched, true);
   assert.equal(result.runtime, 30);
 });
 
@@ -100,6 +100,6 @@ test("does not ordinal-map unmatched specials", () => {
     providerEpisodes,
     30
   );
-  assert.equal(result.importMatchMethod, "historical_only");
-  assert.equal(result.historicalOnly, true);
+  assert.equal(result.importMatchMethod, undefined);
+  assert.equal(result.unmatched, true);
 });

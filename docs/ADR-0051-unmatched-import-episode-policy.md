@@ -9,10 +9,11 @@ user can inspect and edit through ShowTracker's provider catalogue.
 
 ## Current Behavior
 
-The client still sends unresolved reconciliation results to Convex so an idempotent rerun can locate
-their TV Time provenance. Convex treats that marker as a deletion instruction: it removes any legacy or
-previously preserved copy and does not insert a replacement. The import result reports the number as
-`unmatchedEpisodes`.
+The client sends unresolved reconciliation results to Convex with the request-only `unmatched` flag so
+an idempotent rerun can locate their TV Time provenance. Convex treats that marker as a deletion
+instruction: it removes any legacy or previously preserved copy and does not insert a replacement. The
+import result reports the number as `unmatchedEpisodes`. ADR-0052 removes the obsolete durable
+`historicalOnly` field after production cleanup.
 
 ## Decision
 
@@ -20,8 +21,8 @@ previously preserved copy and does not insert a replacement. The import result r
 - Report unmatched TV Time rows as skipped rather than silently discarding them.
 - On rerun, delete old coordinate-only or historical-only copies identified by source ID/coordinates.
 - Exclude skipped rows from statistics, progress, status, Home, Watchlist, Schedule, and detail views.
-- Retain the defensive `historicalOnly` read filters temporarily for backward compatibility until all
-  previously imported accounts have had an opportunity to rerun.
+- Remove the temporary `historicalOnly` schema field and read filters after the bounded production
+  cleanup defined by ADR-0052.
 
 ## Reasoning
 
