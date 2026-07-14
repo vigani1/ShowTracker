@@ -9,6 +9,8 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import * as DocumentPicker from "expo-document-picker";
+import { File as ExpoFile } from "expo-file-system";
 import { useAction, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { AppBackButton } from "@/components/AppBackButton";
@@ -31,6 +33,10 @@ import {
   type ImportWatchStatus,
   type ParsedImportItem,
 } from "@/lib/import/tv-time";
+import {
+  parseTvTimeGdprArchive,
+  type TvTimeGdprParseSummary,
+} from "@/lib/import/tv-time-gdpr";
 
 const RESOLVE_CONCURRENCY = 4;
 const IMPORT_CHUNK_SIZE = 20;
@@ -92,6 +98,8 @@ type ImportPayloadItem = {
   show: ShowPayload;
   status: ImportWatchStatus;
   watchedEpisodes: ParsedImportItem["watchedEpisodes"];
+  favorite?: boolean;
+  followedAt?: number;
 };
 
 type ResolveResult = {
@@ -109,7 +117,9 @@ type ImportProgress = {
 type ImportResult = {
   importedShows: number;
   insertedEpisodes: number;
+  updatedEpisodes: number;
   skippedEpisodes: number;
+  favoritesAdded: number;
   unresolvedTitles: string[];
   failedTitles: string[];
   fallbackImportedTitles: string[];
@@ -433,6 +443,11 @@ function mergeImportPayloads(items: ImportPayloadItem[]) {
         STATUS_PRIORITY[item.status] >= STATUS_PRIORITY[existing.status]
           ? item.status
           : existing.status,
+      favorite: existing.favorite || item.favorite,
+      followedAt:
+        typeof existing.followedAt === "number" && typeof item.followedAt === "number"
+          ? Math.min(existing.followedAt, item.followedAt)
+          : existing.followedAt ?? item.followedAt,
       watchedEpisodes: Array.from(episodes.values()),
     });
 
@@ -832,6 +847,7 @@ export function ImportScreen() {
   const [isResetConfirmArmed, setIsResetConfirmArmed] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [parsedItems, setParsedItems] = useState<ParsedImportItem[]>([]);
+  const [gdprSummary, setGdprSummary] = useState<TvTimeGdprParseSummary | null>(null);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
@@ -858,6 +874,7 @@ export function ImportScreen() {
 
   const handleRawJsonChange = (value: string) => {
     setRawJson(value);
+    setGdprSummary(null);
 
     if (loadedFileMeta) {
       loadedFileContentRef.current = null;
@@ -865,7 +882,47 @@ export function ImportScreen() {
     }
   };
 
+  const parseGdprZip = async (bytes: ArrayBuffer, name: string, sizeBytes: number) => {
+    setIsParsing(true);
+    setParseError(null);
+    setWarning(null);
+    setImportResult(null);
+    setProgress(null);
+    try {
+      const result = await parseTvTimeGdprArchive(bytes);
+      setParsedItems(result.items);
+      setGdprSummary(result.summary);
+      setRawJson("");
+      loadedFileContentRef.current = null;
+      setLoadedFileMeta({ name, sizeBytes });
+      const ignoredNotice =
+        result.summary.ignoredFileCount > 0
+          ? ` ${result.summary.ignoredFileCount} unrelated or sensitive files were ignored.`
+          : "";
+      const archiveWarning = result.summary.warnings[0];
+      setWarning(
+        archiveWarning
+          ? `${ignoredNotice.trim()} ${archiveWarning}`.trim()
+          : ignoredNotice.trim() || null
+      );
+    } catch (error) {
+      console.error("TV Time GDPR archive parse failed", error);
+      setParsedItems([]);
+      setGdprSummary(null);
+      setGdprSummary(null);
+      setParseError(
+        error instanceof Error ? error.message : "Could not read this TV Time archive."
+      );
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
   const handleSelectedWebFile = async (file: File) => {
+    if (file.name.toLowerCase().endsWith(".zip") || file.type === "application/zip") {
+      await parseGdprZip(await file.arrayBuffer(), file.name, file.size);
+      return;
+    }
     const text = await file.text();
     loadedFileContentRef.current = text;
     setLoadedFileMeta({ name: file.name, sizeBytes: file.size });
@@ -882,6 +939,7 @@ export function ImportScreen() {
 
     setImportResult(null);
     setParseError(null);
+    setGdprSummary(null);
   };
 
   const ensureWebFileInput = () => {
@@ -897,7 +955,7 @@ export function ImportScreen() {
     const input = document.createElement("input");
     input.id = WEB_IMPORT_FILE_INPUT_ID;
     input.type = "file";
-    input.accept = ".json,application/json,text/plain";
+    input.accept = ".zip,.json,application/zip,application/json,text/plain";
     input.style.display = "none";
     input.setAttribute("data-testid", "import-file-input");
     input.onchange = () => {
@@ -912,11 +970,30 @@ export function ImportScreen() {
     return input;
   };
 
-  const handleLoadFromFile = () => {
-    if (Platform.OS !== "web" || typeof document === "undefined") {
-      setWarning("File upload is web-only. On mobile, paste JSON directly below.");
+  const handleLoadFromFile = async () => {
+    if (Platform.OS !== "web") {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ["application/zip", "application/json", "text/plain"],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled) return;
+      const asset = result.assets[0];
+      if (!asset) return;
+      if (asset.name.toLowerCase().endsWith(".zip") || asset.mimeType === "application/zip") {
+        const file = new ExpoFile(asset.uri);
+        await parseGdprZip(await file.arrayBuffer(), asset.name, asset.size ?? file.size);
+      } else {
+        const text = await new ExpoFile(asset.uri).text();
+        loadedFileContentRef.current = text;
+        setRawJson(text);
+        setLoadedFileMeta({ name: asset.name, sizeBytes: asset.size ?? text.length });
+        setGdprSummary(null);
+      }
       return;
     }
+
+    if (typeof document === "undefined") return;
 
     const input = ensureWebFileInput();
     input?.click();
@@ -945,7 +1022,8 @@ export function ImportScreen() {
           return;
         }
 
-        setParsedItems(items);
+        setParsedItems(items.map((item) => ({ ...item, source: "legacy_json" })));
+        setGdprSummary(null);
 
         if (!isLikelyTvTimeExport(sourceForParse)) {
           setWarning(
@@ -1018,7 +1096,7 @@ export function ImportScreen() {
         .map((entry) => entry.parsed.title);
 
       const fallbackImportedTitles = resolvedResults
-        .filter((entry) => !entry.show)
+        .filter((entry) => !entry.show && entry.parsed.source !== "tv_time_gdpr")
         .map((entry) => entry.parsed.title);
 
       const failedTitles = resolvedResults
@@ -1036,15 +1114,19 @@ export function ImportScreen() {
             },
             status: entry.parsed.status,
             watchedEpisodes: entry.parsed.watchedEpisodes,
+            favorite: entry.parsed.favorite,
+            followedAt: entry.parsed.followedAt,
           };
         });
 
       const fallbackImportCandidates: ImportPayloadItem[] = resolvedResults
-        .filter((entry) => !entry.show)
+        .filter((entry) => !entry.show && entry.parsed.source !== "tv_time_gdpr")
         .map((entry) => ({
           show: toShowPayload(buildFallbackShowFromParsedItem(entry.parsed)),
           status: entry.parsed.status,
           watchedEpisodes: entry.parsed.watchedEpisodes,
+          favorite: entry.parsed.favorite,
+          followedAt: entry.parsed.followedAt,
         }));
 
       const importCandidates: ImportPayloadItem[] = [
@@ -1066,14 +1148,18 @@ export function ImportScreen() {
       setProgress({ phase: "importing", current: 0, total: batches.length });
 
       let insertedEpisodes = 0;
+      let updatedEpisodes = 0;
       let skippedEpisodes = 0;
+      let favoritesAdded = 0;
 
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
         const batch = batches[batchIndex];
         const result = await importTrackedShows({ items: batch });
 
         insertedEpisodes += result.insertedEpisodes;
+        updatedEpisodes += result.updatedEpisodes;
         skippedEpisodes += result.skippedEpisodes;
+        favoritesAdded += result.favoritesAdded;
 
         setProgress({
           phase: "importing",
@@ -1085,7 +1171,9 @@ export function ImportScreen() {
       setImportResult({
         importedShows: mergedImportItems.length,
         insertedEpisodes,
+        updatedEpisodes,
         skippedEpisodes,
+        favoritesAdded,
         unresolvedTitles,
         failedTitles,
         fallbackImportedTitles,
@@ -1142,7 +1230,7 @@ export function ImportScreen() {
       <ScrollView showsVerticalScrollIndicator={false} className="flex-1">
         <PageIntro
           title="Import"
-          subtitle="Bring your watch history from TV Time JSON exports"
+          subtitle="Bring your TV Time history into ShowTracker"
           eyebrow="Migration"
           icon="download-outline"
           className="mb-4"
@@ -1153,13 +1241,13 @@ export function ImportScreen() {
           <Text className="text-sm font-semibold text-text-primary">Quick Steps</Text>
           <View className="mt-2 gap-1">
             <Text className="text-xs text-text-secondary">
-              1. Install "Tv Time Liberator" Chrome extension and click Liberate on tvtime.com.
+              1. Request and download your official TV Time GDPR archive.
             </Text>
             <Text className="text-xs text-text-secondary">
-              2. Use the downloaded `shows.json` / `movies.json` file here.
+              2. Select the ZIP here without extracting or editing it.
             </Text>
             <Text className="text-xs text-text-secondary">
-              3. Review preview and press Import to migrate your data.
+              3. Review the preview, then resolve and import it.
             </Text>
           </View>
         </View>
@@ -1191,9 +1279,10 @@ export function ImportScreen() {
         </View>
 
         <View className="mt-4 overflow-hidden rounded-xl border border-border-default bg-bg-surface p-4">
-          <Text className="text-sm font-semibold text-text-primary">TV Time JSON</Text>
+          <Text className="text-sm font-semibold text-text-primary">TV Time archive</Text>
           <Text className="mt-1 text-xs text-text-secondary">
-            We import in safe batches to avoid timeout errors on large histories.
+            ZIP parsing happens on this device. Login tokens, sessions, IP history, and all other
+            unrelated files are ignored.
           </Text>
 
           <View className="mt-3 flex-row gap-2">
@@ -1208,7 +1297,7 @@ export function ImportScreen() {
             >
               <Ionicons name="document-outline" size={14} color="#a1a1aa" />
               <Text className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                Load File
+                Select ZIP
               </Text>
             </Pressable>
             <Pressable
@@ -1240,6 +1329,8 @@ export function ImportScreen() {
                 onPress={() => {
                   loadedFileContentRef.current = null;
                   setLoadedFileMeta(null);
+                  setGdprSummary(null);
+                  setParsedItems([]);
                   setWarning(null);
                 }}
                 className="mt-2 self-start rounded-md border border-border-default bg-bg-elevated px-2.5 py-1"
@@ -1251,18 +1342,18 @@ export function ImportScreen() {
             </View>
           ) : null}
 
-          <TextInput
+          {!gdprSummary ? <TextInput
             multiline
             value={rawJson}
             onChangeText={handleRawJsonChange}
             testID="import-json-input"
-            placeholder='Paste JSON export (example: { "shows": [...] })'
+            placeholder='Legacy option: paste a TV Time JSON export'
             placeholderTextColor="#52525b"
             className="mt-3 min-h-[220px] rounded-lg border border-border-default bg-bg-base px-3 py-3 text-sm text-text-primary"
             textAlignVertical="top"
             autoCapitalize="none"
             autoCorrect={false}
-          />
+          /> : null}
 
           {progressLabel ? (
             <View className="mt-3 flex-row items-center gap-2 rounded-lg border border-border-default bg-bg-base px-3 py-2">
@@ -1297,6 +1388,20 @@ export function ImportScreen() {
               <View className="rounded-md bg-bg-elevated px-2.5 py-1.5">
                 <Text className="text-xs text-text-secondary">Episodes {summary.episodes}</Text>
               </View>
+              {gdprSummary ? (
+                <View className="rounded-md bg-bg-elevated px-2.5 py-1.5">
+                  <Text className="text-xs text-text-secondary">
+                    Rewatches {gdprSummary.rewatches}
+                  </Text>
+                </View>
+              ) : null}
+              {gdprSummary ? (
+                <View className="rounded-md bg-bg-elevated px-2.5 py-1.5">
+                  <Text className="text-xs text-text-secondary">
+                    Favorites {gdprSummary.favorites}
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
             <Text className="mt-2 text-[11px] text-text-muted">
@@ -1349,7 +1454,8 @@ export function ImportScreen() {
             <Text className="text-sm font-semibold text-success">Import complete</Text>
             <Text className="mt-1 text-sm text-text-secondary">
               {importResult.importedShows} shows imported, {importResult.insertedEpisodes} episodes added, {" "}
-              {importResult.skippedEpisodes} duplicates skipped.
+              {importResult.updatedEpisodes} episodes enriched, {importResult.favoritesAdded} favorites added, and {" "}
+              {importResult.skippedEpisodes} unchanged episodes skipped.
             </Text>
             {importResult.unresolvedTitles.length > 0 ? (
               <Text className="mt-2 text-xs text-warning">

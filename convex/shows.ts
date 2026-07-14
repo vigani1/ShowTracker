@@ -2196,9 +2196,25 @@ function mergeNumberArrays(...values: (number[] | undefined)[]) {
 }
 
 function sortFiniteTimestamps(values: number[]) {
-  return values
-    .filter((value) => Number.isFinite(value))
-    .sort((a, b) => a - b);
+  return Array.from(new Set(values.filter((value) => Number.isFinite(value)))).sort(
+    (a, b) => a - b
+  );
+}
+
+function mergeImportStatus(
+  existingStatus: UserShowStatus,
+  importedStatus: UserShowStatus,
+  hasWatchedEpisodes: boolean
+): UserShowStatus {
+  if (["paused", "dropped", "completed"].includes(existingStatus)) {
+    return existingStatus;
+  }
+  if (existingStatus === "watching") {
+    return importedStatus === "completed" ? "completed" : existingStatus;
+  }
+  return hasWatchedEpisodes && importedStatus === "plan_to_watch"
+    ? "watching"
+    : importedStatus;
 }
 
 function buildShowPatch(
@@ -5801,6 +5817,8 @@ export const importTrackedShows = mutation({
       v.object({
         show: v.object(showInput),
         status: userShowStatusValidator,
+        favorite: v.optional(v.boolean()),
+        followedAt: v.optional(v.number()),
         watchedEpisodes: v.array(
           v.object({
             season: v.number(),
@@ -5826,7 +5844,9 @@ export const importTrackedShows = mutation({
 
     let importedShows = 0;
     let insertedEpisodes = 0;
+    let updatedEpisodes = 0;
     let skippedEpisodes = 0;
+    let favoritesAdded = 0;
 
     for (const item of args.items) {
       const showId = await ensureShowRecordId(ctx, item.show);
@@ -5843,14 +5863,21 @@ export const importTrackedShows = mutation({
         item.show.mediaType === "anime"
           ? item.show.rootAnilistId ?? item.show.anilistId
           : undefined;
+      const importedAddedAt =
+        typeof item.followedAt === "number" && Number.isFinite(item.followedAt)
+          ? Math.min(item.followedAt, now)
+          : now;
+      const importedStatus = existingUserShow
+        ? mergeImportStatus(existingUserShow.status, item.status, hasWatchedEpisodes)
+        : item.status;
 
       if (!existingUserShow) {
         const insertData: Omit<Doc<"userShows">, "_id" | "_creationTime"> = {
           userId,
           showId,
-          status: item.status,
+          status: importedStatus,
           mediaType: item.show.mediaType,
-          addedAt: now,
+          addedAt: importedAddedAt,
           watchedEpisodesCount: 0,
           watchedTotalCount: 0,
           watchedRuntimeMinutes: 0,
@@ -5862,25 +5889,26 @@ export const importTrackedShows = mutation({
           insertData.isAutoTracked = false;
         }
 
-        if (hasWatchedEpisodes) {
-          insertData.lastWatchedAt = now;
+        if (importedStatus === "completed") {
+          insertData.completedAt = importedAddedAt;
         }
 
-        if (item.status === "completed") {
-          insertData.completedAt = now;
-        }
-
-        if (item.status === "dropped") {
-          insertData.droppedAt = now;
+        if (importedStatus === "dropped") {
+          insertData.droppedAt = importedAddedAt;
         }
 
         userShowId = await ctx.db.insert("userShows", insertData);
       } else {
         userShowId = existingUserShow._id;
-        const patch: Partial<Doc<"userShows">> = {
-          status: item.status,
-          statusChangedAt: now,
-        };
+        const patch: Partial<Doc<"userShows">> = {};
+
+        if (importedStatus !== existingUserShow.status) {
+          patch.status = importedStatus;
+          patch.statusChangedAt = now;
+          if (importedStatus === "completed") {
+            patch.completedAt = now;
+          }
+        }
 
         if (typeof relationRootAnilistId === "number") {
           patch.relationRootAnilistId = relationRootAnilistId;
@@ -5893,14 +5921,9 @@ export const importTrackedShows = mutation({
           }
         }
 
-        if (hasWatchedEpisodes) {
-          patch.lastWatchedAt = now;
+        if (Object.keys(patch).length > 0) {
+          await ctx.db.patch(existingUserShow._id, patch);
         }
-
-        patch.completedAt = item.status === "completed" ? now : undefined;
-        patch.droppedAt = item.status === "dropped" ? now : undefined;
-
-        await ctx.db.patch(existingUserShow._id, patch);
       }
 
       const existingEpisodes = await ctx.db
@@ -5908,8 +5931,8 @@ export const importTrackedShows = mutation({
         .withIndex("by_user_show", (q) => q.eq("userId", userId).eq("showId", showId))
         .collect();
 
-      const existingEpisodeKeys = new Set(
-        existingEpisodes.map((entry) => `${entry.season}:${entry.episode}`)
+      const existingEpisodesByKey = new Map(
+        existingEpisodes.map((entry) => [`${entry.season}:${entry.episode}`, entry])
       );
 
       const mergedIncomingEpisodes = new Map<
@@ -5962,7 +5985,11 @@ export const importTrackedShows = mutation({
           ...existingHistory,
           ...incomingHistory,
         ]);
-        const mergedCount = (existing.watchCount ?? 1) + incomingCount;
+        const mergedCount = Math.max(
+          existing.watchCount ?? 1,
+          incomingCount,
+          mergedHistory.length
+        );
 
         const watchedAtCandidates = [
           existing.watchedAt,
@@ -5988,10 +6015,10 @@ export const importTrackedShows = mutation({
 
       for (const episode of uniqueIncomingEpisodes) {
         const key = `${episode.season}:${episode.episode}`;
-        if (existingEpisodeKeys.has(key)) {
-          skippedEpisodes += 1;
-          continue;
-        }
+        const existingEpisode = existingEpisodesByKey.get(key);
+        const hasImportedTimestamp =
+          (episode.watchHistory?.length ?? 0) > 0 ||
+          (typeof episode.watchedAt === "number" && Number.isFinite(episode.watchedAt));
 
         const watchedAt =
           typeof episode.watchedAt === "number" && Number.isFinite(episode.watchedAt)
@@ -6017,6 +6044,43 @@ export const importTrackedShows = mutation({
             ? normalizedWatchHistory[normalizedWatchHistory.length - 1]
             : watchedAt;
 
+        if (existingEpisode) {
+          const existingHistory = sortFiniteTimestamps(
+            existingEpisode.watchHistory ?? [existingEpisode.watchedAt]
+          );
+          const mergedHistory = sortFiniteTimestamps([
+            ...existingHistory,
+            ...(hasImportedTimestamp ? normalizedWatchHistory : []),
+          ]);
+          const mergedWatchCount = Math.max(
+            existingEpisode.watchCount ?? 1,
+            watchCount,
+            mergedHistory.length
+          );
+          const mergedWatchedAt =
+            mergedHistory[mergedHistory.length - 1] ??
+            Math.max(existingEpisode.watchedAt, normalizedWatchedAt);
+          const runtime = existingEpisode.runtime ?? item.show.episodeRuntime;
+          const changed =
+            mergedWatchedAt !== existingEpisode.watchedAt ||
+            mergedWatchCount !== (existingEpisode.watchCount ?? 1) ||
+            runtime !== existingEpisode.runtime ||
+            mergedHistory.length !== existingHistory.length;
+
+          if (changed) {
+            await ctx.db.patch(existingEpisode._id, {
+              watchedAt: mergedWatchedAt,
+              runtime,
+              watchCount: mergedWatchCount,
+              watchHistory: mergedHistory,
+            });
+            updatedEpisodes += 1;
+          } else {
+            skippedEpisodes += 1;
+          }
+          continue;
+        }
+
         await ctx.db.insert("watchedEpisodes", {
           userId,
           showId,
@@ -6040,25 +6104,43 @@ export const importTrackedShows = mutation({
         Math.floor(refreshed?.watchedEpisodesCount ?? item.watchedEpisodes.length)
       );
       const normalizedImportStatus = getImportedStatusFromProgress(
-        item.status,
+        importedStatus,
         item.show,
         watchedEpisodesCount
       );
 
-      if (normalizedImportStatus !== item.status || normalizedImportStatus === "paused") {
+      if (normalizedImportStatus !== importedStatus || normalizedImportStatus === "paused") {
         const importStatusPatch: Partial<Doc<"userShows">> = {
           completedAt: normalizedImportStatus === "completed" ? now : undefined,
           droppedAt: normalizedImportStatus === "dropped" ? now : undefined,
           autoPausedAt: undefined,
         };
 
-        if (normalizedImportStatus !== item.status) {
+        if (normalizedImportStatus !== importedStatus) {
           importStatusPatch.status = normalizedImportStatus;
           importStatusPatch.statusChangedAt = now;
         }
 
         await ctx.db.patch(userShowId, importStatusPatch);
         await upsertFeedProjectionForUserShow(ctx, userShowId);
+      }
+
+      if (item.favorite) {
+        const existingFavorite = await ctx.db
+          .query("userFavorites")
+          .withIndex("by_user_show", (q) =>
+            q.eq("userId", userId).eq("showId", showId)
+          )
+          .unique();
+        if (!existingFavorite) {
+          await ctx.db.insert("userFavorites", {
+            userId,
+            showId,
+            mediaType: item.show.mediaType,
+            addedAt: importedAddedAt,
+          });
+          favoritesAdded += 1;
+        }
       }
 
       const showKey = String(showId);
@@ -6071,7 +6153,9 @@ export const importTrackedShows = mutation({
     return {
       importedShows,
       insertedEpisodes,
+      updatedEpisodes,
       skippedEpisodes,
+      favoritesAdded,
     };
   },
 });

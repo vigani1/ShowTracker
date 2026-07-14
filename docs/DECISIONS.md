@@ -46,6 +46,7 @@ Most frequently relevant:
 - [ADR-0041](ADR-0041-hydrated-season-stale-alias-pruning.md): hydrated TMDB season details prune stale cache aliases before they inflate Home.
 - [ADR-0042](ADR-0042-terminal-hydrated-season-watchable-counts.md): terminal hydrated seasons prevent raw catalog totals from reactivating caught-up rows.
 - [ADR-0043](ADR-0043-complete-hydration-release-count-authority.md): complete hydration and dense provider rows are authoritative over summary/raw-total release inflation.
+- [ADR-0044](ADR-0044-tv-time-gdpr-import.md): official TV Time GDPR ZIPs are parsed locally through an allowlist and merged idempotently into authenticated tracking state.
 
 ## Navigation
 
@@ -104,6 +105,7 @@ Most frequently relevant:
 | [ADR-0041](ADR-0041-hydrated-season-stale-alias-pruning.md) | Hydrated TMDB season details prune stale cache aliases before they inflate Home. |
 | [ADR-0042](ADR-0042-terminal-hydrated-season-watchable-counts.md) | Terminal hydrated seasons prevent raw catalog totals from reactivating caught-up rows. |
 | [ADR-0043](ADR-0043-complete-hydration-release-count-authority.md) | Complete hydration and dense provider rows are authoritative over summary/raw-total release inflation. |
+| [ADR-0044](ADR-0044-tv-time-gdpr-import.md) | Official TV Time GDPR ZIPs are parsed locally through an allowlist and merged idempotently into authenticated tracking state. |
 
 ## Rule For New ADRs
 
