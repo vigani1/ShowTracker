@@ -6,6 +6,21 @@ import type { ParsedImportEpisode } from "@/lib/import/tv-time";
 
 const CATALOGUE_FETCH_CONCURRENCY = 3;
 
+async function retryProviderRequest<T>(request: () => Promise<T>) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** attempt));
+      }
+    }
+  }
+  throw lastError;
+}
+
 function episodeKey(season: number, episode: number) {
   return `${season}:${episode}`;
 }
@@ -39,34 +54,6 @@ function sortEpisodes<T extends { seasonNumber: number; episodeNumber: number }>
   return [...episodes].sort(
     (a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber
   );
-}
-
-function isContiguousSourcePrefix(episodes: ParsedImportEpisode[]) {
-  const regular = episodes
-    .filter((entry) => getSourceCoordinates(entry).season > 0)
-    .sort((a, b) => {
-      const sourceA = getSourceCoordinates(a);
-      const sourceB = getSourceCoordinates(b);
-      return sourceA.season - sourceB.season || sourceA.episode - sourceB.episode;
-    });
-  if (regular.length === 0 || getSourceCoordinates(regular[0]).season !== 1) return false;
-
-  const seasons = new Map<number, number[]>();
-  for (const entry of regular) {
-    const source = getSourceCoordinates(entry);
-    const values = seasons.get(source.season) ?? [];
-    values.push(source.episode);
-    seasons.set(source.season, values);
-  }
-  const seasonNumbers = Array.from(seasons.keys()).sort((a, b) => a - b);
-  for (let index = 0; index < seasonNumbers.length; index += 1) {
-    if (seasonNumbers[index] !== index + 1) return false;
-    const episodeNumbers = Array.from(new Set(seasons.get(seasonNumbers[index]) ?? [])).sort(
-      (a, b) => a - b
-    );
-    if (episodeNumbers.some((value, episodeIndex) => value !== episodeIndex + 1)) return false;
-  }
-  return true;
 }
 
 function withProviderEpisode(
@@ -124,41 +111,71 @@ export function reconcileEpisodesWithProviderCatalogue(
   const regularSource = episodes.filter(
     (entry) => getSourceCoordinates(entry).season > 0
   );
-  const allRegularCoordinatesMatch =
-    regularSource.length > 0 &&
-    regularSource.every((entry) => {
-      const source = getSourceCoordinates(entry);
-      return providerByCoordinate.has(episodeKey(source.season, source.episode));
-    });
-
+  const specialSource = episodes.filter(
+    (entry) => getSourceCoordinates(entry).season === 0
+  );
   const ordinalProviderEpisodes = sortEpisodes(
     validProviderEpisodes.filter((entry) => entry.seasonNumber > 0)
   );
-  const useOrdinal =
-    !allRegularCoordinatesMatch &&
-    isContiguousSourcePrefix(regularSource) &&
-    regularSource.length <= ordinalProviderEpisodes.length;
   const ordinalSource = [...regularSource].sort((a, b) => {
     const sourceA = getSourceCoordinates(a);
     const sourceB = getSourceCoordinates(b);
     return sourceA.season - sourceB.season || sourceA.episode - sourceB.episode;
   });
   const ordinalIndex = new Map(ordinalSource.map((entry, index) => [entry, index]));
+  const ordinalProviderSpecials = sortEpisodes(
+    validProviderEpisodes.filter((entry) => entry.seasonNumber === 0)
+  );
+  const ordinalSpecialSource = [...specialSource].sort((a, b) => {
+    const sourceA = getSourceCoordinates(a);
+    const sourceB = getSourceCoordinates(b);
+    return sourceA.episode - sourceB.episode;
+  });
+  const specialOrdinalIndex = new Map(
+    ordinalSpecialSource.map((entry, index) => [entry, index])
+  );
+  const hasContiguousSpecialOrdering = ordinalSpecialSource.every(
+    (entry, index) => getSourceCoordinates(entry).episode === index + 1
+  );
+  const allRegularCoordinatesMatch = regularSource.every((entry) => {
+    const source = getSourceCoordinates(entry);
+    return providerByCoordinate.has(episodeKey(source.season, source.episode));
+  });
+  const useFlattenedOrdinal = !allRegularCoordinatesMatch;
 
   return episodes.map((entry) => {
     const source = getSourceCoordinates(entry);
     const direct = providerByCoordinate.get(episodeKey(source.season, source.episode));
     if (source.season === 0) {
-      return direct
-        ? withProviderEpisode(entry, direct, "exact", showRuntime)
-        : asUnmatched(entry, showRuntime);
+      if (direct) return withProviderEpisode(entry, direct, "exact", showRuntime);
+      const specialIndex = specialOrdinalIndex.get(entry);
+      if (
+        typeof specialIndex === "number" &&
+        hasContiguousSpecialOrdering &&
+        ordinalProviderSpecials[specialIndex]
+      ) {
+        return withProviderEpisode(
+          entry,
+          ordinalProviderSpecials[specialIndex],
+          "ordinal",
+          showRuntime
+        );
+      }
+      return asUnmatched(entry, showRuntime);
     }
     if (allRegularCoordinatesMatch && direct) {
       return withProviderEpisode(entry, direct, "exact", showRuntime);
     }
     const index = ordinalIndex.get(entry);
-    if (useOrdinal && typeof index === "number" && ordinalProviderEpisodes[index]) {
+    if (
+      useFlattenedOrdinal &&
+      typeof index === "number" &&
+      ordinalProviderEpisodes[index]
+    ) {
       return withProviderEpisode(entry, ordinalProviderEpisodes[index], "ordinal", showRuntime);
+    }
+    if (direct) {
+      return withProviderEpisode(entry, direct, "exact", showRuntime);
     }
     return asUnmatched(entry, showRuntime);
   });
@@ -172,7 +189,9 @@ async function getProviderEpisodeCatalogue(
   if (show.mediaType === "movie") return [];
 
   if (typeof show.tmdbId === "number") {
-    const details = await getTmdbShowDetails("tv", show.tmdbId);
+    const details = await retryProviderRequest(() =>
+      getTmdbShowDetails("tv", show.tmdbId!)
+    );
     const seasonEpisodeCounts = new Map(
       (details.seasons ?? []).map((season) => [
         season.season_number,
@@ -194,7 +213,7 @@ async function getProviderEpisodeCatalogue(
       seasonNumbers,
       CATALOGUE_FETCH_CONCURRENCY,
       async (seasonNumber) =>
-        getTmdbSeasonDetails(show.tmdbId!, seasonNumber)
+        retryProviderRequest(() => getTmdbSeasonDetails(show.tmdbId!, seasonNumber))
           .then(normalizeTmdbSeason)
           .catch(() => null)
     );
@@ -208,11 +227,21 @@ async function getProviderEpisodeCatalogue(
   }
   if (typeof tvmazeId === "number") {
     const episodes = await getTvMazeShowEpisodes(tvmazeId, true);
-    return episodes.flatMap((entry) =>
-      typeof entry.number === "number" && entry.number > 0
-        ? [normalizeTvMazeEpisode(entry)]
-        : []
-    );
+    let specialNumber = 0;
+    return episodes.map((entry) => {
+      if (typeof entry.number === "number" && entry.number > 0) {
+        return normalizeTvMazeEpisode(entry);
+      }
+      specialNumber += 1;
+      return {
+        id: `tvmaze-episode:${entry.id}`,
+        seasonNumber: 0,
+        episodeNumber: specialNumber,
+        name: entry.name?.trim() || `Special ${specialNumber}`,
+        runtime: entry.runtime ?? undefined,
+        airDate: entry.airstamp ?? entry.airdate ?? undefined,
+      } satisfies NormalizedEpisode;
+    });
   }
   return [];
 }

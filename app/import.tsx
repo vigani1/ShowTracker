@@ -38,6 +38,7 @@ import {
   type TvTimeGdprParseSummary,
 } from "@/lib/import/tv-time-gdpr";
 import { enrichImportedEpisodeRuntimes } from "@/lib/import/provider-runtime";
+import { resolveGdprImportPlans } from "@/lib/import/gdpr-resolver";
 
 const RESOLVE_CONCURRENCY = 4;
 const IMPORT_CHUNK_SIZE = 20;
@@ -1062,33 +1063,25 @@ export function ImportScreen() {
         total: parsedItems.length,
       });
 
-      const resolvedResults = await mapWithConcurrency(
+      const resolvedGroups = await mapWithConcurrency(
         parsedItems,
         RESOLVE_CONCURRENCY,
-        async (item): Promise<ResolveResult> => {
+        async (item): Promise<ResolveResult[]> => {
           try {
+            if (item.source === "tv_time_gdpr") {
+              const { plans } = await resolveGdprImportPlans(item);
+              return plans.length > 0
+                ? plans
+                : [{ parsed: item, show: null }];
+            }
             const show = await resolveImportedItem(item);
-            const parsed = show
-              ? {
-                  ...item,
-                  watchedEpisodes: await enrichImportedEpisodeRuntimes(
-                  item.watchedEpisodes,
-                    show,
-                    {
-                      sourceTvdbId: item.tvdbId,
-                      canonicalize: item.source === "tv_time_gdpr",
-                    }
-                  ),
-                }
-              : item;
-            return { parsed, show };
+            const watchedEpisodes = show
+              ? await enrichImportedEpisodeRuntimes(item.watchedEpisodes, show)
+              : item.watchedEpisodes;
+            return [{ parsed: { ...item, watchedEpisodes }, show }];
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "Resolve failed";
-            return {
-              parsed: item,
-              show: null,
-              error: errorMessage,
-            };
+            return [{ parsed: item, show: null, error: errorMessage }];
           } finally {
             setProgress((current) => {
               if (!current || current.phase !== "resolving") {
@@ -1102,6 +1095,7 @@ export function ImportScreen() {
           }
         }
       );
+      const resolvedResults = resolvedGroups.flat();
 
       const unresolvedTitles = resolvedResults
         .filter((entry) => !entry.show)
@@ -1122,7 +1116,7 @@ export function ImportScreen() {
           return {
             show: {
               ...basePayload,
-              tvdbId: entry.parsed.tvdbId ?? basePayload.tvdbId,
+              tvdbId: basePayload.tvdbId,
             },
             status: entry.parsed.status,
             watchedEpisodes: entry.parsed.watchedEpisodes,

@@ -170,6 +170,7 @@ export default defineSchema({
     watchHistory: v.optional(v.array(v.number())),
   })
     .index("by_user_show", ["userId", "showId"])
+    .index("by_user_source_episode", ["userId", "sourceEpisodeId"])
     .index("by_user", ["userId"])
     .index("by_watchedAt", ["userId", "watchedAt"])
     .index("by_user_show_season_episode", ["userId", "showId", "season", "episode"]),

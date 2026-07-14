@@ -81,17 +81,40 @@ test("maps contiguous source seasons by canonical provider order", () => {
   );
 });
 
-test("keeps incompatible noncontiguous history out of provider progress", () => {
-  const [result] = reconcileEpisodesWithProviderCatalogue(
-    [{ season: 2, episode: 5, runtime: 27 }],
+test("flattens noncontiguous source season groups into provider order", () => {
+  const result = reconcileEpisodesWithProviderCatalogue(
+    [
+      { season: 1, episode: 1 },
+      { season: 3, episode: 4 },
+    ],
     providerEpisodes,
     30
   );
-  assert.equal(result.season, 2);
-  assert.equal(result.episode, 5);
-  assert.equal(result.importMatchMethod, undefined);
-  assert.equal(result.unmatched, true);
-  assert.equal(result.runtime, 30);
+  assert.deepEqual(
+    result.map((entry) => [entry.season, entry.episode, entry.importMatchMethod]),
+    [
+      [1, 1, "ordinal"],
+      [1, 2, "ordinal"],
+    ]
+  );
+});
+
+test("flattens up to provider capacity when the source has extra episodes", () => {
+  const result = reconcileEpisodesWithProviderCatalogue(
+    [
+      { season: 1, episode: 1 },
+      { season: 1, episode: 5 },
+      { season: 1, episode: 6 },
+      { season: 1, episode: 7 },
+      { season: 1, episode: 8 },
+    ],
+    providerEpisodes,
+    30
+  );
+  assert.equal(result[0].importMatchMethod, "ordinal");
+  assert.equal(result[0].unmatched, false);
+  assert.equal(result[3].unmatched, false);
+  assert.equal(result[4].unmatched, true);
 });
 
 test("does not ordinal-map unmatched specials", () => {
@@ -102,4 +125,26 @@ test("does not ordinal-map unmatched specials", () => {
   );
   assert.equal(result.importMatchMethod, undefined);
   assert.equal(result.unmatched, true);
+});
+
+test("maps source specials across provider special ordering", () => {
+  const result = reconcileEpisodesWithProviderCatalogue(
+    [
+      { season: 0, episode: 1, isSpecial: true },
+      { season: 0, episode: 2, isSpecial: true },
+    ],
+    [
+      ...providerEpisodes,
+      { id: "special:1", seasonNumber: 0, episodeNumber: 1, runtime: 30 },
+      { id: "special:2", seasonNumber: 0, episodeNumber: 2, runtime: 31 },
+    ],
+    30
+  );
+  assert.deepEqual(
+    result.map((episode) => [episode.providerEpisodeId, episode.importMatchMethod]),
+    [
+      ["special:1", "exact"],
+      ["special:2", "exact"],
+    ]
+  );
 });
