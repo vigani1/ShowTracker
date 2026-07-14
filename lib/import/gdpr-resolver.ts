@@ -200,8 +200,27 @@ function sourceEpisodeKey(episode: ParsedImportItem["watchedEpisodes"][number]) 
     `${episode.sourceSeason ?? episode.season}:${episode.sourceEpisode ?? episode.episode}`;
 }
 
+export function selectMetadataOnlyCandidate(
+  item: ParsedImportItem,
+  candidates: NormalizedShow[]
+) {
+  return candidates
+    .filter((show) => !isNamedExtensionTitle(item.title, show.title))
+    .map((show) => ({ show, score: scoreCandidate(item, show) }))
+    .filter((candidate) => candidate.score >= 0.68)
+    .sort((a, b) => b.score - a.score)[0]?.show ?? null;
+}
+
 export async function resolveGdprImportPlans(item: ParsedImportItem) {
   const candidates = await collectCandidates(item);
+  if (item.watchedEpisodes.length === 0) {
+    const show = selectMetadataOnlyCandidate(item, candidates);
+    return {
+      plans: show ? [{ parsed: item, show }] : [],
+      unmatched: [],
+    };
+  }
+
   const plans: GdprImportPlan[] = [];
   let remaining = item.watchedEpisodes;
   const unused = [...candidates];
