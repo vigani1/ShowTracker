@@ -50,6 +50,7 @@ Most frequently relevant:
 - [ADR-0045](ADR-0045-tv-time-tv-catalog-priority.md): TV Time show imports prefer the regular TV catalog and use anime providers only as fallback.
 - [ADR-0046](ADR-0046-tv-time-exported-runtime.md): TV Time imports preserve exported episode runtime and use provider runtime only as fallback.
 - [ADR-0047](ADR-0047-provider-episode-runtime-authority.md): exact provider episode runtime outranks show-level and archived runtime during import and normal tracking.
+- [ADR-0048](ADR-0048-watch-stats-cache-invalidation.md): tracking aggregate changes invalidate materialized statistics, and bulk import rebuilds them once after completion.
 
 ## Navigation
 
@@ -112,6 +113,7 @@ Most frequently relevant:
 | [ADR-0045](ADR-0045-tv-time-tv-catalog-priority.md) | TV Time show imports prefer the regular TV catalog and use anime providers only as fallback. |
 | [ADR-0046](ADR-0046-tv-time-exported-runtime.md) | TV Time imports preserve exported episode runtime and use provider runtime only as fallback. |
 | [ADR-0047](ADR-0047-provider-episode-runtime-authority.md) | Exact provider episode runtime outranks show-level and archived runtime during import and normal tracking. |
+| [ADR-0048](ADR-0048-watch-stats-cache-invalidation.md) | Tracking aggregate changes invalidate materialized statistics, and bulk import rebuilds them once after completion. |
 
 ## Rule For New ADRs
 

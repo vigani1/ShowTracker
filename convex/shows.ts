@@ -2458,7 +2458,7 @@ async function refreshUserShowTrackingAggregates(
   ctx: MutationCtx,
   userId: Id<"users">,
   showId: Id<"shows">,
-  options: { deriveStatus?: boolean } = {}
+  options: { deriveStatus?: boolean; invalidateStats?: boolean } = {}
 ) {
   const userShow = await ctx.db
     .query("userShows")
@@ -2469,7 +2469,21 @@ async function refreshUserShowTrackingAggregates(
     return null;
   }
 
-  return refreshUserShowTrackingAggregatesForDoc(ctx, userShow, options);
+  const refreshed = await refreshUserShowTrackingAggregatesForDoc(ctx, userShow, options);
+  if (options.invalidateStats !== false) {
+    await invalidateUserStatsCache(ctx, userId);
+  }
+  return refreshed;
+}
+
+async function invalidateUserStatsCache(ctx: MutationCtx, userId: Id<"users">) {
+  const cachedStats = await ctx.db
+    .query("userStats")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  for (const entry of cachedStats) {
+    await ctx.db.delete(entry._id);
+  }
 }
 
 async function refreshUserShowTrackingAggregatesForDoc(
@@ -6105,6 +6119,7 @@ export const importTrackedShows = mutation({
 
       const refreshed = await refreshUserShowTrackingAggregates(ctx, userId, showId, {
         deriveStatus: false,
+        invalidateStats: false,
       });
 
       const watchedEpisodesCount = Math.max(
@@ -6157,6 +6172,8 @@ export const importTrackedShows = mutation({
         importedShows += 1;
       }
     }
+
+    await invalidateUserStatsCache(ctx, userId);
 
     return {
       importedShows,

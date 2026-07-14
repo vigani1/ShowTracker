@@ -826,6 +826,7 @@ async function resolveImportedItem(item: ParsedImportItem): Promise<NormalizedSh
 
 export function ImportScreen() {
   const importTrackedShows = useMutation(api.shows.importTrackedShows);
+  const rebuildUserStats = useMutation(api.stats.rebuildUserStats);
   const resetUserTrackingData = useAction(api.shows.resetUserTrackingData);
   const loadedFileContentRef = useRef<string | null>(null);
 
@@ -1170,6 +1171,8 @@ export function ImportScreen() {
           total: batches.length,
         });
       }
+
+      await rebuildUserStats();
 
       setImportResult({
         importedShows: mergedImportItems.length,
