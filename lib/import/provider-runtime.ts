@@ -84,12 +84,12 @@ function withProviderEpisode(
     sourceEpisode: sourceCoordinates.episode,
     providerEpisodeId: provider.id,
     importMatchMethod: method,
-    historicalOnly: false,
+    unmatched: false,
     runtime: provider.runtime ?? showRuntime ?? source.runtime,
   };
 }
 
-function asHistoricalOnly(source: ParsedImportEpisode, showRuntime?: number): ParsedImportEpisode {
+function asUnmatched(source: ParsedImportEpisode, showRuntime?: number): ParsedImportEpisode {
   const sourceCoordinates = getSourceCoordinates(source);
   return {
     ...source,
@@ -98,8 +98,8 @@ function asHistoricalOnly(source: ParsedImportEpisode, showRuntime?: number): Pa
     sourceSeason: sourceCoordinates.season,
     sourceEpisode: sourceCoordinates.episode,
     providerEpisodeId: undefined,
-    importMatchMethod: "historical_only",
-    historicalOnly: true,
+    importMatchMethod: undefined,
+    unmatched: true,
     runtime: showRuntime ?? source.runtime,
   };
 }
@@ -151,7 +151,7 @@ export function reconcileEpisodesWithProviderCatalogue(
     if (source.season === 0) {
       return direct
         ? withProviderEpisode(entry, direct, "exact", showRuntime)
-        : asHistoricalOnly(entry, showRuntime);
+        : asUnmatched(entry, showRuntime);
     }
     if (allRegularCoordinatesMatch && direct) {
       return withProviderEpisode(entry, direct, "exact", showRuntime);
@@ -160,7 +160,7 @@ export function reconcileEpisodesWithProviderCatalogue(
     if (useOrdinal && typeof index === "number" && ordinalProviderEpisodes[index]) {
       return withProviderEpisode(entry, ordinalProviderEpisodes[index], "ordinal", showRuntime);
     }
-    return asHistoricalOnly(entry, showRuntime);
+    return asUnmatched(entry, showRuntime);
   });
 }
 
@@ -244,7 +244,7 @@ export async function enrichImportedEpisodeRuntimes(
       providerEpisodeId:
         typeof show.tmdbId === "number" ? `tmdb-movie:${show.tmdbId}` : show.id,
       importMatchMethod: "exact" as const,
-      historicalOnly: false,
+      unmatched: false,
       runtime: show.episodeRuntime ?? episode.runtime,
     }));
   }

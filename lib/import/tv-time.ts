@@ -14,8 +14,8 @@ export type ParsedImportEpisode = {
   sourceEpisode?: number;
   sourceEpisodeId?: string;
   providerEpisodeId?: string;
-  importMatchMethod?: "exact" | "ordinal" | "historical_only";
-  historicalOnly?: boolean;
+  importMatchMethod?: "exact" | "ordinal";
+  unmatched?: boolean;
   isSpecial?: boolean;
   runtime?: number;
   watchedAt?: number;
