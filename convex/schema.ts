@@ -162,6 +162,7 @@ export default defineSchema({
     sourceSeason: v.optional(v.number()),
     sourceEpisode: v.optional(v.number()),
     sourceEpisodeId: v.optional(v.string()),
+    isSpecial: v.optional(v.boolean()),
     providerEpisodeId: v.optional(v.string()),
     importMatchMethod: v.optional(v.string()),
     historicalOnly: v.optional(v.boolean()),
