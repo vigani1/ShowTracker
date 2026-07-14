@@ -122,7 +122,7 @@ type ImportResult = {
   skippedEpisodes: number;
   favoritesAdded: number;
   canonicalEpisodes: number;
-  historicalOnlyEpisodes: number;
+  unmatchedEpisodes: number;
   unresolvedTitles: string[];
   failedTitles: string[];
   fallbackImportedTitles: string[];
@@ -1164,7 +1164,7 @@ export function ImportScreen() {
       let skippedEpisodes = 0;
       let favoritesAdded = 0;
       let canonicalEpisodes = 0;
-      let historicalOnlyEpisodes = 0;
+      let unmatchedEpisodes = 0;
 
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
         const batch = batches[batchIndex];
@@ -1175,7 +1175,7 @@ export function ImportScreen() {
         skippedEpisodes += result.skippedEpisodes;
         favoritesAdded += result.favoritesAdded;
         canonicalEpisodes += result.canonicalEpisodes;
-        historicalOnlyEpisodes += result.historicalOnlyEpisodes;
+        unmatchedEpisodes += result.unmatchedEpisodes;
 
         setProgress({
           phase: "importing",
@@ -1193,7 +1193,7 @@ export function ImportScreen() {
         skippedEpisodes,
         favoritesAdded,
         canonicalEpisodes,
-        historicalOnlyEpisodes,
+        unmatchedEpisodes,
         unresolvedTitles,
         failedTitles,
         fallbackImportedTitles,
@@ -1478,8 +1478,8 @@ export function ImportScreen() {
               {importResult.skippedEpisodes} unchanged episodes skipped.
             </Text>
             <Text className="mt-2 text-xs text-text-secondary">
-              Canonical provider episodes: {importResult.canonicalEpisodes}. Historical-only
-              records preserved: {importResult.historicalOnlyEpisodes}.
+              Canonical provider episodes: {importResult.canonicalEpisodes}. Unmatched source
+              episodes skipped: {importResult.unmatchedEpisodes}.
             </Text>
             {importResult.unresolvedTitles.length > 0 ? (
               <Text className="mt-2 text-xs text-warning">

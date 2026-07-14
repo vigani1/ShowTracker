@@ -5901,7 +5901,7 @@ export const importTrackedShows = mutation({
     let skippedEpisodes = 0;
     let favoritesAdded = 0;
     let canonicalEpisodes = 0;
-    let historicalOnlyEpisodes = 0;
+    let unmatchedEpisodes = 0;
 
     for (const item of args.items) {
       const showId = await ensureShowRecordId(ctx, item.show);
@@ -6114,10 +6114,19 @@ export const importTrackedShows = mutation({
             ? legacySourceEpisode
             : null;
         if (episode.historicalOnly === true) {
-          historicalOnlyEpisodes += 1;
-        } else {
-          canonicalEpisodes += 1;
+          unmatchedEpisodes += 1;
+          const rowsToDelete = existingEpisode ? [existingEpisode] : [];
+          if (
+            obsoleteSourceEpisode &&
+            (!existingEpisode || obsoleteSourceEpisode._id !== existingEpisode._id)
+          ) {
+            rowsToDelete.push(obsoleteSourceEpisode);
+          }
+          await Promise.all(rowsToDelete.map((entry) => ctx.db.delete(entry._id)));
+          updatedEpisodes += rowsToDelete.length;
+          continue;
         }
+        canonicalEpisodes += 1;
         const hasImportedTimestamp =
           (episode.watchHistory?.length ?? 0) > 0 ||
           (typeof episode.watchedAt === "number" && Number.isFinite(episode.watchedAt));
@@ -6309,7 +6318,7 @@ export const importTrackedShows = mutation({
       skippedEpisodes,
       favoritesAdded,
       canonicalEpisodes,
-      historicalOnlyEpisodes,
+      unmatchedEpisodes,
     };
   },
 });
