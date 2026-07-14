@@ -16,6 +16,10 @@ provider order up to catalogue capacity, and handles contiguous specials separat
 extensions and small movie bundles become separate import plans. Convex uses source episode identity
 across shows so reruns move an existing record instead of duplicating it.
 
+GDPR entries with no watched episodes still resolve one high-confidence base catalogue title. This
+preserves plan-to-watch, dropped, favorite, and follow-date metadata without manufacturing companion
+series or episode history.
+
 The provider-backed audit maps 17,481 of 17,502 source episode rows. The remaining 21 are isolated
 provider-count extras across eight shows, including Bleach S00E99; no complete regular show is omitted.
 
@@ -29,6 +33,7 @@ provider-count extras across eight shows, including Bleach S00E99; no complete r
   Stories`, `OVA`, `Case`, or a film bundle.
 - Match sparse specials directly; use ordinal special mapping only for contiguous S00 numbering.
 - Index imported rows by authenticated user and source episode ID so cross-show reruns migrate rows.
+- Resolve zero-episode entries by title/year confidence and import metadata only.
 
 ## Reasoning
 
@@ -53,10 +58,12 @@ to fill a regular TV source when a TV catalogue exists.
 - A provider request failure cannot be interpreted as a zero-episode catalogue; bounded retries run
   before the candidate is rejected.
 - Cross-show migration refreshes aggregates for both the old and new show.
+- Zero-episode entries never select named extensions or low-confidence title matches.
 
 ## Verification
 
 - Unit-test exact, flattened ordinal, partial-capacity, contiguous-special, and sparse-special cases.
+- Unit-test metadata-only exact selection, extension exclusion, and low-confidence rejection.
 - Run the provider-backed audit against all 17,502 episode rows in the real GDPR archive.
 - Verify known splits: Justice League 52 + Unlimited 39, Elite 32 + four Short Stories, and the
   Psycho-Pass three-film bundle.

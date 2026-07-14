@@ -30,7 +30,7 @@
     "schedule-confidence:dev:cleanup": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs cleanup-dev-cases",
     "schedule-confidence:dev:workflow": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs validate-dev-workflow --deltas .schedule-confidence/dev-convex-deltas.json --audit .schedule-confidence/dev-audit-report.json",
     "schedule-confidence:validate": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs validate-fixtures",
-    "test:tv-time-import": "tsx --test lib/import/tv-time-gdpr.test.ts lib/import/provider-runtime.test.ts lib/tracking/history-aggregates.test.ts",
+    "test:tv-time-import": "tsx --test lib/import/tv-time-gdpr.test.ts lib/import/gdpr-resolver.test.ts lib/import/provider-runtime.test.ts lib/tracking/history-aggregates.test.ts",
     "ui:inspect": "node scripts/ui-inspect.mjs",
     "ui:inspect:quick": "cross-env UI_INSPECT_PRESET=quick node scripts/ui-inspect.mjs",
     "ui:inspect:headed": "cross-env PW_HEADLESS=false node scripts/ui-inspect.mjs",
