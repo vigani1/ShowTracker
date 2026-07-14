@@ -27,6 +27,9 @@ export type ParsedImportItem = {
   imdbId?: string;
   status: ImportWatchStatus;
   watchedEpisodes: ParsedImportEpisode[];
+  favorite?: boolean;
+  followedAt?: number;
+  source?: "tv_time_gdpr" | "legacy_json";
 };
 
 const MAX_VISIT_NODES = 12000;

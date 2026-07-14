@@ -30,6 +30,7 @@
     "schedule-confidence:dev:cleanup": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs cleanup-dev-cases",
     "schedule-confidence:dev:workflow": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs validate-dev-workflow --deltas .schedule-confidence/dev-convex-deltas.json --audit .schedule-confidence/dev-audit-report.json",
     "schedule-confidence:validate": "node --no-warnings=ExperimentalWarning scripts/schedule-confidence.mjs validate-fixtures",
+    "test:tv-time-import": "tsx --test lib/import/tv-time-gdpr.test.ts",
     "ui:inspect": "node scripts/ui-inspect.mjs",
     "ui:inspect:quick": "cross-env UI_INSPECT_PRESET=quick node scripts/ui-inspect.mjs",
     "ui:inspect:headed": "cross-env PW_HEADLESS=false node scripts/ui-inspect.mjs",
@@ -44,6 +45,8 @@
     "expo": "^54.0.33",
     "expo-asset": "~12.0.12",
     "expo-constants": "~18.0.13",
+    "expo-document-picker": "~14.0.8",
+    "expo-file-system": "~19.0.23",
     "expo-font": "~14.0.11",
     "expo-image": "~3.0.11",
     "expo-linear-gradient": "~15.0.8",
@@ -51,7 +54,9 @@
     "expo-router": "~6.0.23",
     "expo-secure-store": "~15.0.8",
     "expo-status-bar": "~3.0.9",
+    "jszip": "^3.10.1",
     "nativewind": "^4.0.36",
+    "papaparse": "^5.5.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
@@ -65,11 +70,13 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.0",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "~19.1.10",
     "cross-env": "^7.0.3",
     "eslint": "^8.57.1",
     "eslint-config-expo": "~10.0.0",
     "tailwindcss": "^3.4.14",
+    "tsx": "^4.23.1",
     "typescript": "~5.9.2"
   }
 }
