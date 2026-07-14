@@ -5885,6 +5885,7 @@ export const importTrackedShows = mutation({
 
     const now = Date.now();
     const processedShowIds = new Set<string>();
+    const movedFromShowIds = new Set<Id<"shows">>();
 
     let importedShows = 0;
     let insertedEpisodes = 0;
@@ -6082,7 +6083,15 @@ export const importTrackedShows = mutation({
       for (const episode of uniqueIncomingEpisodes) {
         const sourceSeason = episode.sourceSeason ?? episode.season;
         const sourceEpisodeNumber = episode.sourceEpisode ?? episode.episode;
-        const provenanceEpisode = existingEpisodes.find(
+        const sourceIdEpisode = episode.sourceEpisodeId
+          ? await ctx.db
+              .query("watchedEpisodes")
+              .withIndex("by_user_source_episode", (q) =>
+                q.eq("userId", userId).eq("sourceEpisodeId", episode.sourceEpisodeId)
+              )
+              .first()
+          : null;
+        const provenanceEpisode = sourceIdEpisode ?? existingEpisodes.find(
           (entry) =>
             (episode.sourceEpisodeId && entry.sourceEpisodeId === episode.sourceEpisodeId) ||
             (entry.sourceSeason === sourceSeason && entry.sourceEpisode === sourceEpisodeNumber)
@@ -6116,7 +6125,10 @@ export const importTrackedShows = mutation({
           ) {
             rowsToDelete.push(obsoleteSourceEpisode);
           }
-          await Promise.all(rowsToDelete.map((entry) => ctx.db.delete(entry._id)));
+          for (const entry of rowsToDelete) {
+            if (entry.showId !== showId) movedFromShowIds.add(entry.showId);
+            await ctx.db.delete(entry._id);
+          }
           updatedEpisodes += rowsToDelete.length;
           continue;
         }
@@ -6179,6 +6191,7 @@ export const importTrackedShows = mutation({
             runtime !== existingEpisode.runtime ||
             mergedHistory.length !== existingHistory.length;
           const provenanceChanged =
+            existingEpisode.showId !== showId ||
             existingEpisode.season !== episode.season ||
             existingEpisode.episode !== episode.episode ||
             existingEpisode.sourceSeason !== episode.sourceSeason ||
@@ -6189,6 +6202,7 @@ export const importTrackedShows = mutation({
 
           if (changed || provenanceChanged || obsoleteSourceEpisode) {
             await ctx.db.patch(existingEpisode._id, {
+              showId,
               season: episode.season,
               episode: episode.episode,
               watchedAt: mergedWatchedAt,
@@ -6204,7 +6218,11 @@ export const importTrackedShows = mutation({
             if (obsoleteSourceEpisode) {
               await ctx.db.delete(obsoleteSourceEpisode._id);
             }
+            if (existingEpisode.showId !== showId) {
+              movedFromShowIds.add(existingEpisode.showId);
+            }
             Object.assign(existingEpisode, {
+              showId,
               season: episode.season,
               episode: episode.episode,
               sourceSeason: episode.sourceSeason,
@@ -6297,6 +6315,13 @@ export const importTrackedShows = mutation({
         processedShowIds.add(showKey);
         importedShows += 1;
       }
+    }
+
+    for (const previousShowId of movedFromShowIds) {
+      await refreshUserShowTrackingAggregates(ctx, userId, previousShowId, {
+        deriveStatus: false,
+        invalidateStats: false,
+      });
     }
 
     await invalidateUserStatsCache(ctx, userId);

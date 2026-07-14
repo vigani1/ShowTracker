@@ -121,6 +121,7 @@ Most frequently relevant:
 | [ADR-0050](ADR-0050-tv-time-episode-reconciliation.md) | TV Time imports reconcile whole-show episode catalogues with provenance and isolate uncertain records from provider progress. |
 | [ADR-0051](ADR-0051-unmatched-import-episode-policy.md) | Unmatched TV Time episodes are reported and omitted instead of being retained as invisible account history. |
 | [ADR-0052](ADR-0052-canonical-import-storage-contract.md) | Imported episodes persist canonical/source identity and match provenance without historical-only or source-special flags. |
+| [ADR-0053](ADR-0053-provider-spanning-tv-time-import.md) | TV Time imports flatten season groups, score provider catalogues by episode coverage, and split combined source histories across verified companion shows. |
 
 ## Rule For New ADRs
 
