@@ -73,6 +73,7 @@ type EpisodeAccumulator = {
   sourceEpisodeId?: string;
   timestamps: number[];
   watchCount: number;
+  runtimeMinutes?: number;
 };
 
 type SeriesAccumulator = {
@@ -164,6 +165,13 @@ function parseEpochMicros(value: unknown) {
   return Math.floor(parsed / 1000);
 }
 
+function parseRuntimeMinutes(value: unknown, unit: "seconds" | "mixed") {
+  const parsed = Number(cleanString(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  const minutes = unit === "seconds" || parsed >= 300 ? parsed / 60 : parsed;
+  return minutes > 0 ? minutes : undefined;
+}
+
 function uniqueSortedTimestamps(values: Array<number | undefined>) {
   return Array.from(
     new Set(
@@ -214,6 +222,7 @@ function addEpisode(
     sourceEpisodeId?: string;
     watchedAt?: number;
     watchCount?: number;
+    runtimeMinutes?: number;
   }
 ) {
   if (args.season === undefined || !args.episode) {
@@ -228,6 +237,7 @@ function addEpisode(
       sourceEpisodeId: args.sourceEpisodeId,
       timestamps: uniqueSortedTimestamps([args.watchedAt]),
       watchCount: Math.max(1, args.watchCount ?? 1),
+      runtimeMinutes: args.runtimeMinutes,
     });
     return;
   }
@@ -242,6 +252,9 @@ function addEpisode(
     args.watchCount ?? 1,
     existing.timestamps.length
   );
+  if (typeof args.runtimeMinutes === "number") {
+    existing.runtimeMinutes = Math.max(existing.runtimeMinutes ?? 0, args.runtimeMinutes);
+  }
 }
 
 function parseCsv(name: TvTimeGdprFileName, source: string) {
@@ -296,6 +309,7 @@ function applyTrackingV2(
         sourceEpisodeId,
         watchedAt: parseSqlTimestamp(row.created_at),
         watchCount: rewatchCount + 1,
+        runtimeMinutes: parseRuntimeMinutes(row.runtime, "seconds"),
       });
       const accumulated = target.episodes.get(`${season}:${episode}`);
       if (accumulated) {
@@ -342,6 +356,7 @@ function applyLegacyTracking(
           episode: 1,
           watchedAt,
           watchCount: eventType === "rewatch" ? 2 : 1,
+          runtimeMinutes: parseRuntimeMinutes(row.runtime, "mixed"),
         });
       }
       continue;
@@ -359,6 +374,7 @@ function applyLegacyTracking(
       sourceEpisodeId: normalizeSourceId(row.episode_id),
       watchedAt,
       watchCount: eventType === "rewatch" ? 2 : 1,
+      runtimeMinutes: parseRuntimeMinutes(row.runtime, "mixed"),
     });
   }
 }
@@ -462,6 +478,7 @@ function toParsedItem(
       return {
         season: entry.season,
         episode: entry.episode,
+        runtime: entry.runtimeMinutes,
         watchedAt: history.at(-1),
         watchCount: watchCount > 1 ? watchCount : undefined,
         watchHistory: history.length > 0 ? history : undefined,

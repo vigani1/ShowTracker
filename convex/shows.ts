@@ -5823,6 +5823,7 @@ export const importTrackedShows = mutation({
           v.object({
             season: v.number(),
             episode: v.number(),
+            runtime: v.optional(v.number()),
             watchedAt: v.optional(v.number()),
             watchCount: v.optional(v.number()),
             watchHistory: v.optional(v.array(v.number())),
@@ -5940,6 +5941,7 @@ export const importTrackedShows = mutation({
         {
           season: number;
           episode: number;
+          runtime?: number;
           watchedAt?: number;
           watchCount?: number;
           watchHistory?: number[];
@@ -5971,6 +5973,7 @@ export const importTrackedShows = mutation({
           mergedIncomingEpisodes.set(episodeKey, {
             season: episode.season,
             episode: episode.episode,
+            runtime: episode.runtime,
             watchedAt: episode.watchedAt,
             watchCount: incomingCount,
             watchHistory: incomingHistory,
@@ -6005,6 +6008,7 @@ export const importTrackedShows = mutation({
         mergedIncomingEpisodes.set(episodeKey, {
           season: episode.season,
           episode: episode.episode,
+          runtime: episode.runtime ?? existing.runtime,
           watchedAt: mergedWatchedAt,
           watchCount: mergedCount,
           watchHistory: mergedHistory,
@@ -6060,7 +6064,11 @@ export const importTrackedShows = mutation({
           const mergedWatchedAt =
             mergedHistory[mergedHistory.length - 1] ??
             Math.max(existingEpisode.watchedAt, normalizedWatchedAt);
-          const runtime = existingEpisode.runtime ?? item.show.episodeRuntime;
+          const importedRuntime =
+            typeof episode.runtime === "number" && Number.isFinite(episode.runtime) && episode.runtime > 0
+              ? episode.runtime
+              : undefined;
+          const runtime = importedRuntime ?? existingEpisode.runtime ?? item.show.episodeRuntime;
           const changed =
             mergedWatchedAt !== existingEpisode.watchedAt ||
             mergedWatchCount !== (existingEpisode.watchCount ?? 1) ||
@@ -6087,7 +6095,7 @@ export const importTrackedShows = mutation({
           season: episode.season,
           episode: episode.episode,
           watchedAt: normalizedWatchedAt,
-          runtime: item.show.episodeRuntime,
+          runtime: episode.runtime ?? item.show.episodeRuntime,
           watchCount,
           watchHistory: normalizedWatchHistory,
         });
