@@ -1,6 +1,5 @@
 import { useMemo, useState, useCallback } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Image,
   Modal,
@@ -18,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { AppBackButton } from "@/components/AppBackButton";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 import { SearchShowsModal } from "@/components/SearchShowsModal";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { toHttpsImageUrl } from "@/lib/image-url";
@@ -220,7 +220,7 @@ function EditModeHeader({
           className="flex-1 items-center justify-center rounded-xl bg-primary py-3.5 active:bg-primary/90"
         >
           {isSaving ? (
-            <ActivityIndicator size="small" color="#ffffff" />
+            <BrandLoader compact onPrimary />
           ) : (
             <Text className="font-semibold text-white">Save Changes</Text>
           )}
@@ -490,7 +490,7 @@ export function ListDetailScreen() {
     return (
       <ScreenWrapper>
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#7c3aed" />
+          <BrandLoader />
         </View>
       </ScreenWrapper>
     );
@@ -642,7 +642,7 @@ export function ListDetailScreen() {
                   }`}
                 >
                   {isConfirmingAction ? (
-                    <ActivityIndicator size="small" color="#fff" />
+                    <BrandLoader compact onPrimary />
                   ) : (
                     <Text className="text-sm font-black uppercase tracking-wide text-white">
                       {confirmButtonLabel}

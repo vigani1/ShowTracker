@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Feather } from "@expo/vector-icons";
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   ScrollView,
@@ -24,6 +23,7 @@ import { HeroSection } from "@/components/HeroSection";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
 import { useStableCount } from "@/hooks/use-stable-display-value";
 import { getTrendingAniList, searchAniList } from "@/lib/api/anilist";
@@ -797,7 +797,7 @@ export function DiscoverScreen() {
     if (!activeState.isLoadingMore) return null;
     return (
       <View className="items-center py-4">
-        <ActivityIndicator size="small" color="#ef4444" />
+        <BrandLoader compact />
       </View>
     );
   }, [activeState.isLoadingMore]);
@@ -806,7 +806,7 @@ export function DiscoverScreen() {
     if (activeState.isLoading) {
       return (
         <View className="items-center gap-2 rounded-xl border-2 border-border-default bg-bg-surface py-8">
-          <ActivityIndicator size="small" color="#ef4444" />
+          <BrandLoader compact />
           <Text className="text-sm text-text-secondary">Loading trending titles</Text>
         </View>
       );

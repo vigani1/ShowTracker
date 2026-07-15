@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   Platform,
   Pressable,
@@ -25,6 +24,7 @@ import {
 import { PageIntro } from "@/components/PageIntro";
 import { SearchInput } from "@/components/SearchInput";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import {
   useStableCount,
@@ -36,6 +36,7 @@ import {
   type TrackingStatusFilter,
 } from "@/lib/filters/tracking-filters";
 import { toHttpsImageUrl } from "@/lib/image-url";
+import { getProgressTone, PROGRESS_TONE_COLORS } from "@/lib/progress-tone";
 
 type LibraryMediaTab = "all" | "tv" | "anime" | "movie";
 type LibraryStatusFilter = TrackingStatusFilter;
@@ -187,6 +188,7 @@ function LibraryCard({
   const rawPercent =
     typeof item.progressPercent === "number" ? item.progressPercent : 0;
   const progress = Math.max(0, Math.min(100, rawPercent)) / 100;
+  const progressTone = getProgressTone({ progress, status: item.status });
 
   const posterHeight = isCompact ? 206 : 280;
 
@@ -242,8 +244,11 @@ function LibraryCard({
           {!isMovie && progress > 0 ? (
             <View className="mt-1.5 h-1 overflow-hidden bg-white/15">
               <View
-                className="h-full bg-red-500"
-                style={{ width: `${Math.round(progress * 100)}%` }}
+                className="h-full"
+                style={{
+                  backgroundColor: PROGRESS_TONE_COLORS[progressTone],
+                  width: `${Math.round(progress * 100)}%`,
+                }}
               />
             </View>
           ) : null}
@@ -642,6 +647,7 @@ export default function LibraryScreen() {
                   value={statusFilter}
                   onValueChange={(value) => setStatusFilter(value)}
                   align="center"
+                  showScrollAffordance
                 />
 
                 {/* Filter Buttons */}
@@ -800,7 +806,7 @@ export default function LibraryScreen() {
 
                 {isLoading ? (
                   <View className="items-center gap-2 rounded-xl border-2 border-border-default bg-bg-surface py-8">
-                    <ActivityIndicator size="small" color="#ef4444" />
+                    <BrandLoader compact />
                     <Text className="text-sm text-text-secondary">
                       Loading your library
                     </Text>
@@ -822,11 +828,8 @@ export default function LibraryScreen() {
             ListFooterComponent={
               !isLoading && hasMore ? (
                 <View className="items-center py-4">
-                  <ActivityIndicator
-                    size="small"
-                    color={isLoadingMore ? "#ef4444" : "#52525b"}
-                  />
-                  <Text className="mt-1 text-xs text-text-secondary">
+                  {isLoadingMore ? <BrandLoader compact /> : null}
+                  <Text className={`${isLoadingMore ? "mt-2" : ""} text-xs text-text-secondary`}>
                     {isLoadingMore ? "Loading more..." : "Scroll for more"}
                   </Text>
                 </View>
@@ -835,7 +838,7 @@ export default function LibraryScreen() {
           />
         ) : (
           <View className="flex-1 items-center justify-center">
-            <ActivityIndicator size="small" color="#ef4444" />
+            <BrandLoader />
           </View>
         )}
       </View>

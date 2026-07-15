@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   PanResponder,
   Platform,
@@ -11,6 +10,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { BrandLoader } from "@/components/BrandLoader";
 import type { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
 import type { NormalizedEpisode } from "@/lib/api/types";
@@ -468,7 +468,7 @@ export function ContinueTrackingRail({
                 className="items-center justify-center rounded-2xl border border-border-default bg-bg-base"
                 style={{ width: entry.width, marginRight }}
               >
-                <ActivityIndicator size="small" color="#ef4444" />
+                <BrandLoader compact />
                 <Text className="mt-2 text-[11px] text-text-secondary">Loading</Text>
               </View>
             );
@@ -569,7 +569,7 @@ export function ContinueTrackingRail({
                     }`}
                   >
                     {isUpdating ? (
-                      <ActivityIndicator size="small" color="#a1a1aa" />
+                      <BrandLoader micro />
                     ) : watched ? (
                       <Ionicons name="checkmark" size={14} color="#ffffff" />
                     ) : !availability.isReleased ? (

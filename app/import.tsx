@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   ScrollView,
@@ -16,6 +15,7 @@ import { api } from "@/convex/_generated/api";
 import { AppBackButton } from "@/components/AppBackButton";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 import { getAniListMediaById, getAniListMediaByMalId, searchAniList } from "@/lib/api/anilist";
 import { getJikanAnime, searchJikan } from "@/lib/api/jikan";
 import { normalizeTmdbShowDetails } from "@/lib/api/normalize";
@@ -1282,7 +1282,7 @@ export function ImportScreen() {
             }`}
           >
             {isResetting ? (
-              <ActivityIndicator size="small" color="#f59e0b" />
+              <BrandLoader compact />
             ) : (
               <Ionicons name="trash-outline" size={14} color="#f59e0b" />
             )}
@@ -1324,7 +1324,7 @@ export function ImportScreen() {
               }`}
             >
               {isParsing ? (
-                <ActivityIndicator size="small" color="#ef4444" />
+                <BrandLoader compact />
               ) : (
                 <Ionicons name="sparkles-outline" size={14} color="#ef4444" />
               )}
@@ -1371,7 +1371,7 @@ export function ImportScreen() {
 
           {progressLabel ? (
             <View className="mt-3 flex-row items-center gap-2 rounded-lg border border-border-default bg-bg-base px-3 py-2">
-              <ActivityIndicator size="small" color="#ef4444" />
+              <BrandLoader compact />
               <Text className="text-xs text-text-secondary">{progressLabel}</Text>
             </View>
           ) : null}
@@ -1452,7 +1452,7 @@ export function ImportScreen() {
               }`}
             >
               {isImporting ? (
-                <ActivityIndicator size="small" color="#fff" />
+                <BrandLoader compact onPrimary />
               ) : (
                 <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
               )}

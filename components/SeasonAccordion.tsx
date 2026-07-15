@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, View, Text, ActivityIndicator, ScrollView } from "react-native";
+import { Pressable, View, Text, ScrollView } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { NormalizedEpisode } from "@/lib/api/types";
+import { BrandLoader } from "@/components/BrandLoader";
 import { SwipeableEpisodeCard } from "@/components/SwipeableEpisodeCard";
 
 interface EpisodeAvailability {
@@ -272,7 +273,7 @@ export function SeasonAccordion({
               
               {/* Loading - shows during update, replaces watched state */}
               {isMarking ? (
-                <ActivityIndicator size="small" color="#a1a1aa" />
+                <BrandLoader micro />
               ) : (
                 <>
                   {/* Fill circle - shown when fully watched */}
@@ -316,7 +317,7 @@ export function SeasonAccordion({
           <View className="p-4">
             {isLoading ? (
               <View className="flex-row items-center justify-center gap-3 py-8">
-                <ActivityIndicator size="small" color="#ef4444" />
+                <BrandLoader compact />
                 <Text className="text-sm text-text-secondary">Loading episodes...</Text>
               </View>
             ) : error ? (

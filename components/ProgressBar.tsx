@@ -1,4 +1,5 @@
 import { Platform, View } from "react-native";
+import { PROGRESS_TONE_COLORS, type ProgressTone } from "@/lib/progress-tone";
 
 interface ProgressBarProps {
   /** 0–1 progress value */
@@ -7,6 +8,7 @@ interface ProgressBarProps {
   /** Height of the bar in pixels */
   height?: number;
   animated?: boolean;
+  tone?: ProgressTone;
 }
 
 export function ProgressBar({
@@ -14,6 +16,7 @@ export function ProgressBar({
   className,
   height = 4,
   animated = false,
+  tone = "active",
 }: ProgressBarProps) {
   const clampedProgress = Number.isFinite(progress)
     ? Math.max(0, Math.min(1, progress))
@@ -26,8 +29,9 @@ export function ProgressBar({
       style={{ height }}
     >
       <View
-        className="h-full bg-primary"
+        className="h-full"
         style={{
+          backgroundColor: PROGRESS_TONE_COLORS[tone],
           width: widthPercent,
           ...(animated && Platform.OS === "web"
             ? { transition: "width 0.4s ease-out" as string }

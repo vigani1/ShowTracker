@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Platform,
   Text,
   View,
@@ -14,6 +13,7 @@ import { FilterBar } from "@/components/FilterBar";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 import {
   getMovieRecommendations,
   getTvRecommendations,
@@ -979,7 +979,7 @@ export function RecommendationsScreen() {
 
               {isLoading && (
                 <View className="mb-4 items-center gap-2 rounded-xl border-2 border-border-default bg-bg-surface py-8">
-                  <ActivityIndicator size="small" color="#ef4444" />
+                  <BrandLoader compact />
                   <Text className="text-sm text-text-secondary">
                     Finding shows you'll love...
                   </Text>
@@ -1046,7 +1046,7 @@ export function RecommendationsScreen() {
             <View className="h-8">
               {isLoadingMore && (
                 <View className="items-center py-4">
-                  <ActivityIndicator size="small" color="#ef4444" />
+                  <BrandLoader compact />
                   <Text className="mt-2 text-sm text-text-secondary">
                     Loading more...
                   </Text>

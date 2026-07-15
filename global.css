@@ -41,3 +41,10 @@ body > div {
   position: fixed;
   inset: 0;
 }
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}

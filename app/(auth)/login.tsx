@@ -1,7 +1,6 @@
 import { Link, type Href, useRouter } from "expo-router";
 import { useState } from "react";
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   ScrollView,
@@ -11,6 +10,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { BrandLoader } from "@/components/BrandLoader";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useMutation } from "convex/react";
@@ -308,7 +308,7 @@ export function LoginScreen() {
                     className="mt-4 items-center justify-center border-2 border-primary bg-primary py-3 active:opacity-90"
                   >
                     {isPending ? (
-                      <ActivityIndicator size="small" color="#fff" />
+                      <BrandLoader compact onPrimary />
                     ) : (
                       <Text className="text-sm font-black uppercase tracking-wide text-white">Sign In</Text>
                     )}

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Platform,
   Text,
   View,
@@ -11,6 +10,7 @@ import {
 import { FlashList } from "@shopify/flash-list";
 import { MediaPosterCard } from "@/components/MediaPosterCard";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 import { SearchInput } from "@/components/SearchInput";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import { PageIntro } from "@/components/PageIntro";
@@ -662,7 +662,7 @@ export function SearchScreen() {
         {resultLabel ? (
           <View className="mb-3 flex-row items-center justify-between">
             <Text className="text-sm font-medium text-text-secondary">{resultLabel}</Text>
-            {isLoading ? <ActivityIndicator size="small" color="#ef4444" /> : null}
+            {isLoading ? <BrandLoader compact /> : null}
           </View>
         ) : null}
 

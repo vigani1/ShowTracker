@@ -1,5 +1,6 @@
-import { Pressable, View, Text, ActivityIndicator, Image, Platform } from "react-native";
+import { Pressable, View, Text, Image, Platform } from "react-native";
 import { toHttpsImageUrl } from "@/lib/image-url";
+import { BrandLoader } from "@/components/BrandLoader";
 
 interface EpisodeAvailability {
   isReleased: boolean;
@@ -123,7 +124,7 @@ export function EpisodeCard({
 
             {/* Loading indicator - shows during update, replaces watched state */}
             {isUpdating ? (
-              <ActivityIndicator size="small" color="#a1a1aa" />
+              <BrandLoader micro />
             ) : (
               <>
                 {/* Fill circle - shown when watched */}

@@ -1,7 +1,6 @@
 import { Link, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   ScrollView,
@@ -11,6 +10,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { BrandLoader } from "@/components/BrandLoader";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
@@ -334,7 +334,7 @@ export function RegisterScreen() {
                     className="mt-4 items-center justify-center border-2 border-primary bg-primary py-3 active:opacity-90"
                   >
                     {isPending ? (
-                      <ActivityIndicator size="small" color="#fff" />
+                      <BrandLoader compact onPrimary />
                     ) : (
                       <Text className="text-sm font-black uppercase tracking-wide text-white">Create Account</Text>
                     )}

@@ -1,22 +1,16 @@
-import type { ReactElement } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Platform,
   Pressable,
   ScrollView,
   Text,
   View,
-  useWindowDimensions,
 } from "react-native";
 import { Link, useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { OverlayDetailFrame } from "@/components/OverlayDetailFrame";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
-import { DESKTOP_SIDEBAR_BREAKPOINT } from "@/constants/navigation";
+import { BrandLoader } from "@/components/BrandLoader";
 
 type AnimeHomeFranchiseMode = "core_only" | "all_relations";
 type AnimeCompletionBehavior =
@@ -30,115 +24,115 @@ const TRACKING_REPAIR_MAX_BATCHES = 6;
 const STATS_REBUILD_TRACKING_MAX_BATCHES = 25;
 const ANIME_SETTINGS_UPDATE_TIMEOUT_MS = 12000;
 
-function SettingRow({
+function MaintenanceTile({
   title,
-  detail,
+  caption,
   icon,
-  tone,
-  action,
-  actionIcon,
   busy,
   disabled,
   onPress,
 }: {
   title: string;
-  detail: string;
+  caption: string;
   icon: keyof typeof Ionicons.glyphMap;
-  tone: "red" | "blue" | "yellow";
-  action: string;
-  actionIcon?: keyof typeof Ionicons.glyphMap;
   busy?: boolean;
   disabled?: boolean;
   onPress?: () => void;
 }) {
-  const color = tone === "red" ? "#ef4444" : tone === "blue" ? "#38bdf8" : "#facc15";
-  const bg =
-    tone === "red"
-      ? "rgba(239,68,68,0.10)"
-      : tone === "blue"
-        ? "rgba(56,189,248,0.10)"
-        : "rgba(250,204,21,0.10)";
-
   return (
     <Pressable
       accessibilityRole="button"
       disabled={disabled || busy}
       onPress={onPress}
-      className="flex-row items-center gap-3 border-b border-border-default px-4 py-4 last:border-b-0"
-      style={({ pressed }) => ({ opacity: disabled ? 0.5 : pressed ? 0.82 : 1 })}
+      className="min-h-28 flex-1 justify-between rounded-lg border border-border-default bg-bg-surface p-3"
+      style={({ pressed }) => ({
+        flexBasis: "30%",
+        opacity: disabled ? 0.5 : pressed ? 0.82 : 1,
+      })}
     >
-      <View className="h-10 w-10 items-center justify-center rounded-lg" style={{ backgroundColor: bg }}>
-        <Ionicons name={icon} size={18} color={color} />
+      <View className="flex-row items-start justify-between gap-2">
+        <View className="h-9 w-9 items-center justify-center rounded-md bg-bg-elevated">
+          {busy ? (
+            <BrandLoader compact />
+          ) : (
+            <Ionicons name={icon} size={17} color="#d4d4d8" />
+          )}
+        </View>
+        <Ionicons name="arrow-up-outline" size={14} color="#71717a" style={{ transform: [{ rotate: "45deg" }] }} />
       </View>
-      <View className="min-w-0 flex-1">
-        <Text className="text-sm font-black text-text-primary">{title}</Text>
-        <Text className="mt-0.5 text-xs text-text-secondary">{detail}</Text>
-      </View>
-      <View
-        className="min-w-28 flex-row items-center justify-center gap-2 rounded-full border px-3 py-2"
-        style={{
-          borderColor: color,
-          backgroundColor: bg,
-        }}
-      >
-        {busy ? (
-          <ActivityIndicator size="small" color={color} />
-        ) : (
-          <>
-            <Text className="text-xs font-black uppercase tracking-wide" style={{ color }}>
-              {action}
-            </Text>
-            <Ionicons name={actionIcon ?? "arrow-forward"} size={14} color={color} />
-          </>
-        )}
+      <View>
+        <Text className="text-sm font-black text-text-primary" numberOfLines={2}>{title}</Text>
+        <Text className="mt-0.5 text-[11px] text-text-muted" numberOfLines={1}>{caption}</Text>
       </View>
     </Pressable>
   );
 }
 
-function OptionRow({
+function PreferenceControl({
   title,
-  detail,
-  selected,
+  icon,
+  options,
   disabled,
-  onPress,
 }: {
   title: string;
-  detail: string;
-  selected: boolean;
+  icon: keyof typeof Ionicons.glyphMap;
+  options: {
+    title: string;
+    shortLabel: string;
+    detail: string;
+    selected: boolean;
+    onPress: () => void;
+  }[];
   disabled?: boolean;
-  onPress: () => void;
 }) {
+  const selectedOption = options.find((option) => option.selected) ?? options[0];
+
   return (
-    <Pressable
-      disabled={disabled}
-      onPress={onPress}
-      className={`flex-row items-center gap-3 rounded-lg border px-3 py-3 ${
-        selected ? "border-primary/70 bg-primary/10" : "border-border-default bg-bg-base"
-      }`}
-      style={({ pressed }) => ({ opacity: disabled ? 0.45 : pressed ? 0.86 : 1 })}
-    >
-      <View className="min-w-0 flex-1">
-        <Text className={`text-sm font-bold ${selected ? "text-primary" : "text-text-primary"}`}>
-          {title}
-        </Text>
-        <Text className="mt-0.5 text-xs text-text-secondary">{detail}</Text>
+    <View className="rounded-lg border border-border-default bg-bg-surface p-3">
+      <View className="mb-3 flex-row items-center gap-2">
+        <Ionicons name={icon} size={15} color="#a1a1aa" />
+        <Text className="text-xs font-black uppercase tracking-wide text-text-secondary">{title}</Text>
       </View>
-      <Ionicons
-        name={selected ? "radio-button-on" : "radio-button-off"}
-        size={18}
-        color={selected ? "#ef4444" : "#71717a"}
-      />
-    </Pressable>
+      <View className="flex-row overflow-hidden rounded-md border border-border-default bg-bg-base">
+        {options.map((option, index) => (
+          <Pressable
+            key={option.title}
+            accessibilityRole="button"
+            accessibilityState={{ selected: option.selected }}
+            disabled={disabled}
+            onPress={option.onPress}
+            className={`${option.selected ? "bg-primary" : "bg-bg-base"} flex-1 items-center justify-center px-2 py-2.5`}
+            style={({ pressed }) => ({
+              borderRightWidth: index === options.length - 1 ? 0 : 1,
+              borderRightColor: "#27272a",
+              opacity: disabled ? 0.45 : pressed ? 0.84 : 1,
+            })}
+          >
+            <Text
+              className={`${option.selected ? "text-white" : "text-text-secondary"} text-center text-[11px] font-black`}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+            >
+              {option.shortLabel}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <View className="mt-3 flex-row items-start gap-2">
+        <View className="mt-1 h-1.5 w-1.5 rounded-full bg-primary" />
+        <Text className="min-w-0 flex-1 text-xs leading-4 text-text-muted">
+          <Text className="font-bold text-text-secondary">{selectedOption.title}. </Text>
+          {selectedOption.detail}
+        </Text>
+      </View>
+    </View>
   );
 }
 
 export default function ProfileSettingsScreen() {
   const router = useRouter();
   const { isAuthenticated } = useConvexAuth();
-  const { width } = useWindowDimensions();
-  const isDesktop = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
-  const isOverlaySettingsRoute = router.canDismiss();
   const animeHomeSettings = useQuery(api.shows.getUserAnimeHomeSettings);
   const rebuildUserStats = useMutation(api.stats.rebuildUserStats);
   const repairMyShowsTrackingBatch = useMutation(api.shows.repairMyShowsTrackingBatch);
@@ -150,6 +144,11 @@ export default function ProfileSettingsScreen() {
   const [isSavingAnimeSettings, setIsSavingAnimeSettings] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasDraftChanges, setHasDraftChanges] = useState(false);
+  const [draftRelationMode, setDraftRelationMode] = useState<AnimeHomeFranchiseMode>("core_only");
+  const [draftCompletionBehavior, setDraftCompletionBehavior] = useState<AnimeCompletionBehavior>("ask_every_time");
+  const [draftPausedSectionMode, setDraftPausedSectionMode] = useState<HomePausedSectionMode>("auto_paused_only");
+  const [draftAirtimeMode, setDraftAirtimeMode] = useState<WatchlistAirtimeMode>("same_day");
   const animeSettingsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const animeHomeFranchiseMode =
@@ -161,6 +160,20 @@ export default function ProfileSettingsScreen() {
   const watchlistAirtimeMode =
     (animeHomeSettings?.watchlistAirtimeMode as WatchlistAirtimeMode | undefined) ?? "same_day";
 
+  useEffect(() => {
+    if (hasDraftChanges) return;
+    setDraftRelationMode(animeHomeFranchiseMode);
+    setDraftCompletionBehavior(animeCompletionBehavior);
+    setDraftPausedSectionMode(homePausedSectionMode);
+    setDraftAirtimeMode(watchlistAirtimeMode);
+  }, [
+    animeCompletionBehavior,
+    animeHomeFranchiseMode,
+    hasDraftChanges,
+    homePausedSectionMode,
+    watchlistAirtimeMode,
+  ]);
+
   const close = useCallback(() => {
     if (router.canDismiss()) {
       router.back();
@@ -169,13 +182,8 @@ export default function ProfileSettingsScreen() {
     router.replace("/profile");
   }, [router]);
 
-  const updateAnimeSettings = useCallback(
-    async (args: {
-      relationMode?: AnimeHomeFranchiseMode;
-      completionBehavior?: AnimeCompletionBehavior;
-      pausedSectionMode?: HomePausedSectionMode;
-      watchlistAirtimeMode?: WatchlistAirtimeMode;
-    }) => {
+  const saveAnimeSettings = useCallback(
+    async () => {
       if (isSavingAnimeSettings) return;
       setIsSavingAnimeSettings(true);
       setError(null);
@@ -190,7 +198,10 @@ export default function ProfileSettingsScreen() {
         if (animeSettingsTimeoutRef.current) clearTimeout(animeSettingsTimeoutRef.current);
         await Promise.race([
           setUserAnimeHomeSettings({
-            ...args,
+            relationMode: draftRelationMode,
+            completionBehavior: draftCompletionBehavior,
+            pausedSectionMode: draftPausedSectionMode,
+            watchlistAirtimeMode: draftAirtimeMode,
             lastKnownUpdatedAt,
           }),
           new Promise<never>((_, reject) => {
@@ -201,14 +212,15 @@ export default function ProfileSettingsScreen() {
           }),
         ]);
         settingsSaved = true;
-        if (args.relationMode === "all_relations") {
+        if (draftRelationMode === "all_relations" && animeHomeFranchiseMode !== "all_relations") {
           await syncTrackedAnimeRelations({ force: true });
         }
+        setHasDraftChanges(false);
         setNotice("Settings saved.");
       } catch (settingsError) {
         console.error("Failed to update settings", settingsError);
         setError(
-          settingsSaved && args.relationMode === "all_relations"
+          settingsSaved && draftRelationMode === "all_relations"
             ? "Settings saved, but anime relation sync failed. Try again from Settings."
             : "Could not save settings."
         );
@@ -220,8 +232,28 @@ export default function ProfileSettingsScreen() {
         setIsSavingAnimeSettings(false);
       }
     },
-    [animeHomeSettings?.updatedAt, isSavingAnimeSettings, setUserAnimeHomeSettings, syncTrackedAnimeRelations]
+    [
+      animeHomeFranchiseMode,
+      animeHomeSettings?.updatedAt,
+      draftAirtimeMode,
+      draftCompletionBehavior,
+      draftPausedSectionMode,
+      draftRelationMode,
+      isSavingAnimeSettings,
+      setUserAnimeHomeSettings,
+      syncTrackedAnimeRelations,
+    ]
   );
+
+  const cancelChanges = useCallback(() => {
+    setDraftRelationMode(animeHomeFranchiseMode);
+    setDraftCompletionBehavior(animeCompletionBehavior);
+    setDraftPausedSectionMode(homePausedSectionMode);
+    setDraftAirtimeMode(watchlistAirtimeMode);
+    setHasDraftChanges(false);
+    setError(null);
+    setNotice(null);
+  }, [animeCompletionBehavior, animeHomeFranchiseMode, homePausedSectionMode, watchlistAirtimeMode]);
 
   const refreshStats = useCallback(async () => {
     if (!isAuthenticated || isRefreshingStats) return;
@@ -294,126 +326,121 @@ export default function ProfileSettingsScreen() {
   const animeGroups = useMemo(
     () => [
       {
-        title: "Home Franchise View",
+        title: "Franchise Scope",
+        icon: "git-branch-outline" as const,
         options: [
           {
             title: "Core Franchise Titles",
+            shortLabel: "Core only",
             detail: "Keep Home focused on the main timeline.",
-            selected: animeHomeFranchiseMode === "core_only",
-            onPress: () => updateAnimeSettings({ relationMode: "core_only" }),
+            selected: draftRelationMode === "core_only",
+            onPress: () => { setDraftRelationMode("core_only"); setHasDraftChanges(true); },
           },
           {
             title: "All Franchise Titles",
+            shortLabel: "All titles",
             detail: "Include side stories and related entries.",
-            selected: animeHomeFranchiseMode === "all_relations",
-            onPress: () => updateAnimeSettings({ relationMode: "all_relations" }),
+            selected: draftRelationMode === "all_relations",
+            onPress: () => { setDraftRelationMode("all_relations"); setHasDraftChanges(true); },
           },
         ],
       },
       {
-        title: "On Completion",
+        title: "After Finishing",
+        icon: "play-skip-forward-outline" as const,
         options: [
           {
             title: "Ask Every Time",
+            shortLabel: "Ask",
             detail: "Prompt before moving to the next season.",
-            selected: animeCompletionBehavior === "ask_every_time",
-            onPress: () => updateAnimeSettings({ completionBehavior: "ask_every_time" }),
+            selected: draftCompletionBehavior === "ask_every_time",
+            onPress: () => { setDraftCompletionBehavior("ask_every_time"); setHasDraftChanges(true); },
           },
           {
             title: "Open Next Season",
+            shortLabel: "Open next",
             detail: "Jump directly to the next main season.",
-            selected: animeCompletionBehavior === "auto_open_next",
-            onPress: () => updateAnimeSettings({ completionBehavior: "auto_open_next" }),
+            selected: draftCompletionBehavior === "auto_open_next",
+            onPress: () => { setDraftCompletionBehavior("auto_open_next"); setHasDraftChanges(true); },
           },
           {
             title: "Pause Other Franchise Titles",
+            shortLabel: "Pause others",
             detail: "Keep the next season active and pause the rest.",
-            selected: animeCompletionBehavior === "auto_pause_others_keep_next",
-            onPress: () => updateAnimeSettings({ completionBehavior: "auto_pause_others_keep_next" }),
+            selected: draftCompletionBehavior === "auto_pause_others_keep_next",
+            onPress: () => { setDraftCompletionBehavior("auto_pause_others_keep_next"); setHasDraftChanges(true); },
           },
         ],
       },
       {
-        title: "Home Watchlist",
+        title: "Episode Availability",
+        icon: "time-outline" as const,
         options: [
           {
             title: "Show Same-Day Episodes",
+            shortLabel: "Same day",
             detail: "Show episodes on Home once their calendar day starts.",
-            selected: watchlistAirtimeMode === "same_day",
-            onPress: () => updateAnimeSettings({ watchlistAirtimeMode: "same_day" }),
+            selected: draftAirtimeMode === "same_day",
+            onPress: () => { setDraftAirtimeMode("same_day"); setHasDraftChanges(true); },
           },
           {
             title: "Wait Until Airtime",
+            shortLabel: "After airtime",
             detail: "Hide same-day episodes until the scheduled time passes.",
-            selected: watchlistAirtimeMode === "after_airtime",
-            onPress: () => updateAnimeSettings({ watchlistAirtimeMode: "after_airtime" }),
+            selected: draftAirtimeMode === "after_airtime",
+            onPress: () => { setDraftAirtimeMode("after_airtime"); setHasDraftChanges(true); },
           },
         ],
       },
       {
-        title: "Home Paused Shelf",
+        title: "Paused Shelf",
+        icon: "pause-circle-outline" as const,
         options: [
           {
             title: "Auto-paused Only",
+            shortLabel: "Auto only",
             detail: "Show just titles snoozed by inactivity.",
-            selected: homePausedSectionMode === "auto_paused_only",
-            onPress: () => updateAnimeSettings({ pausedSectionMode: "auto_paused_only" }),
+            selected: draftPausedSectionMode === "auto_paused_only",
+            onPress: () => { setDraftPausedSectionMode("auto_paused_only"); setHasDraftChanges(true); },
           },
           {
             title: "All Paused Shows",
+            shortLabel: "All paused",
             detail: "Include manually paused and auto-paused titles.",
-            selected: homePausedSectionMode === "all_paused",
-            onPress: () => updateAnimeSettings({ pausedSectionMode: "all_paused" }),
+            selected: draftPausedSectionMode === "all_paused",
+            onPress: () => { setDraftPausedSectionMode("all_paused"); setHasDraftChanges(true); },
           },
         ],
       },
     ],
     [
-      animeCompletionBehavior,
-      animeHomeFranchiseMode,
-      homePausedSectionMode,
-      updateAnimeSettings,
-      watchlistAirtimeMode,
+      draftAirtimeMode,
+      draftCompletionBehavior,
+      draftPausedSectionMode,
+      draftRelationMode,
     ]
   );
 
-  const wrapSettings = (content: ReactElement) => {
-    if (!isOverlaySettingsRoute) {
-      return (
-        <ScreenWrapper contentClassName="px-0 py-0" edges={["top"]}>
-          {content}
-        </ScreenWrapper>
-      );
-    }
-
-    return (
-      <OverlayDetailFrame onClose={close} closeAccessibilityLabel="Close settings">
-        {content}
-      </OverlayDetailFrame>
-    );
-  };
-
-  return wrapSettings(
+  return (
+    <ScreenWrapper contentClassName="px-0 py-0" edges={["top"]}>
       <View className="flex-1 bg-bg-base">
         <View className="border-b border-border-default bg-bg-base px-5 py-5">
           <View className="flex-row items-start gap-4">
-            {isDesktop || !isOverlaySettingsRoute ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Close settings"
-                onPress={close}
-                className="mt-0.5 h-10 w-10 items-center justify-center rounded-full border border-border-default bg-bg-surface"
-              >
-                <Ionicons name="close" size={18} color="#e4e4e7" />
-              </Pressable>
-            ) : null}
             <View className="min-w-0 flex-1">
-              <Text className="text-xs font-black uppercase tracking-wide text-primary">Settings</Text>
+              <Text className="text-xs font-bold uppercase tracking-wide text-text-muted">Settings</Text>
               <Text className="mt-1 text-2xl font-black text-text-primary">Profile Controls</Text>
               <Text className="mt-1 text-sm text-text-secondary">
-                Data maintenance and anime behavior without cluttering your profile.
+                Tracking maintenance and default behavior.
               </Text>
             </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close settings"
+              onPress={close}
+              className="mt-0.5 h-10 w-10 items-center justify-center rounded-md border border-border-default bg-bg-surface"
+            >
+              <Ionicons name="close" size={18} color="#e4e4e7" />
+            </Pressable>
           </View>
           {notice ? <Text className="mt-3 text-xs text-success">{notice}</Text> : null}
           {error ? <Text className="mt-3 text-xs text-primary">{error}</Text> : null}
@@ -421,91 +448,82 @@ export default function ProfileSettingsScreen() {
 
         <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 32 }}>
           <View className="gap-5">
-            <View className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
-              <LinearGradient
-                colors={["rgba(239,68,68,0.16)", "rgba(56,189,248,0.08)", "transparent"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={{ height: 3 }}
-              />
-              <View className="border-b border-border-default px-4 py-3">
+            <View className="gap-3">
+              <View className="border-b border-border-default pb-3">
                 <Text className="text-xs font-black uppercase tracking-wide text-text-secondary">
-                  Maintenance
+                  Data & Maintenance
                 </Text>
               </View>
-              <SettingRow
-                title="Refresh stats"
-                detail="Cache watch time, streaks, rewatches, and totals."
-                icon="bar-chart-outline"
-                tone="red"
-                action="Refresh"
-                actionIcon="refresh"
-                busy={isRefreshingStats}
-                disabled={!isAuthenticated}
-                onPress={refreshStats}
-              />
-              <SettingRow
-                title="Refresh my shows"
-                detail="Fix stale watched counts, statuses, and Home projections."
-                icon="refresh-outline"
-                tone="blue"
-                action="Refresh"
-                actionIcon="refresh"
-                busy={isRepairingTracking}
-                disabled={!isAuthenticated}
-                onPress={refreshShows}
-              />
-              <Link href="/import" asChild>
-                <SettingRow
-                  title="Import from TV Time"
-                  detail="Paste or upload your export JSON."
-                  icon="cloud-upload-outline"
-                  tone="yellow"
-                  action="Open"
+              <View className="flex-row flex-wrap gap-2">
+                <MaintenanceTile
+                  title="Refresh stats"
+                  caption="Watch totals"
+                  icon="bar-chart-outline"
+                  busy={isRefreshingStats}
+                  disabled={!isAuthenticated}
+                  onPress={refreshStats}
                 />
-              </Link>
+                <MaintenanceTile
+                  title="Refresh shows"
+                  caption="Tracking data"
+                  icon="refresh-outline"
+                  busy={isRepairingTracking}
+                  disabled={!isAuthenticated}
+                  onPress={refreshShows}
+                />
+                <Link href="/import" asChild>
+                  <MaintenanceTile
+                    title="TV Time import"
+                    caption="Archive tools"
+                    icon="cloud-upload-outline"
+                  />
+                </Link>
+              </View>
             </View>
 
-            <View className="overflow-hidden rounded-xl border border-border-default bg-bg-surface">
-              <LinearGradient
-                colors={["rgba(239,68,68,0.14)", "transparent"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={{ height: 3 }}
-              />
-              <View className="border-b border-border-default px-4 py-3">
+            <View>
+              <View className="border-b border-border-default pb-3">
                 <Text className="text-xs font-black uppercase tracking-wide text-text-secondary">
-                  Anime Defaults
+                  Viewing Preferences
                 </Text>
               </View>
-              <View className="gap-4 p-4">
+              <View className="gap-5 pt-4">
                 {animeGroups.map((group) => (
-                  <View key={group.title} className="gap-2">
-                    <Text className="text-xs font-black uppercase tracking-wide text-text-muted">
-                      {group.title}
-                    </Text>
-                    {group.options.map((option) => (
-                      <OptionRow
-                        key={option.title}
-                        title={option.title}
-                        detail={option.detail}
-                        selected={option.selected}
-                        disabled={isSavingAnimeSettings}
-                        onPress={option.onPress}
-                      />
-                    ))}
-                  </View>
+                  <PreferenceControl
+                    key={group.title}
+                    title={group.title}
+                    icon={group.icon}
+                    options={group.options}
+                    disabled={isSavingAnimeSettings}
+                  />
                 ))}
-                {isSavingAnimeSettings ? (
-                  <View className="flex-row items-center gap-2">
-                    <ActivityIndicator size="small" color="#a1a1aa" />
-                    <Text className="text-xs text-text-secondary">Saving settings...</Text>
-                  </View>
-                ) : null}
+                <View className="flex-row justify-end gap-2 border-t border-border-default pt-4">
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!hasDraftChanges || isSavingAnimeSettings}
+                    onPress={cancelChanges}
+                    className="min-h-10 items-center justify-center rounded-lg border border-border-default bg-bg-surface px-5"
+                    style={{ opacity: !hasDraftChanges || isSavingAnimeSettings ? 0.45 : 1 }}
+                  >
+                    <Text className="text-sm font-bold text-text-secondary">Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!hasDraftChanges || isSavingAnimeSettings}
+                    onPress={saveAnimeSettings}
+                    className="min-h-10 flex-row items-center justify-center gap-2 rounded-lg bg-primary px-5"
+                    style={{ opacity: !hasDraftChanges || isSavingAnimeSettings ? 0.45 : 1 }}
+                  >
+                    {isSavingAnimeSettings ? <BrandLoader compact onPrimary /> : <Ionicons name="checkmark" size={17} color="#ffffff" />}
+                    <Text className="text-sm font-black text-white">Save</Text>
+                  </Pressable>
+                </View>
               </View>
             </View>
+
           </View>
         </ScrollView>
       </View>
+    </ScreenWrapper>
   );
 }

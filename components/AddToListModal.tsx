@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  ActivityIndicator,
   Modal,
   Pressable,
   ScrollView,
@@ -11,6 +10,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Ionicons } from "@expo/vector-icons";
+import { BrandLoader } from "@/components/BrandLoader";
 import type { NormalizedShow } from "@/lib/api/types";
 
 interface AddToListModalProps {
@@ -141,7 +141,7 @@ export function AddToListModal({ visible, onClose, show }: AddToListModalProps) 
             <View className="gap-2 p-4">
               {isLoading ? (
                 <View className="items-center py-8">
-                  <ActivityIndicator size="small" color="#ef4444" />
+                  <BrandLoader compact />
                   <Text className="mt-2 text-sm text-text-secondary">Loading your lists...</Text>
                 </View>
               ) : userLists?.length === 0 ? (
@@ -185,7 +185,7 @@ export function AddToListModal({ visible, onClose, show }: AddToListModalProps) 
                       </View>
 
                       {isProcessing ? (
-                        <ActivityIndicator size="small" color={isInList ? "#22c55e" : "#a1a1aa"} />
+                        <BrandLoader micro />
                       ) : isInList ? (
                         <View className="h-6 w-6 items-center justify-center rounded-full bg-success">
                           <Ionicons name="checkmark" size={14} color="#fff" />

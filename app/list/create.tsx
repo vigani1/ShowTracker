@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   Text,
@@ -13,6 +12,7 @@ import { api } from "@/convex/_generated/api";
 import { AppBackButton } from "@/components/AppBackButton";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 
 export default function CreateListScreen() {
   const [name, setName] = useState("");
@@ -108,7 +108,7 @@ export default function CreateListScreen() {
               className={`w-full items-center justify-center rounded-xl bg-primary px-5 py-3 ${isCreating || !name.trim() ? "opacity-50" : ""}`}
             >
               {isCreating ? (
-                <ActivityIndicator size="small" color="#ffffff" />
+                <BrandLoader compact onPrimary />
               ) : (
                 <Text className="font-semibold text-white">Create list</Text>
               )}

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -21,6 +20,7 @@ import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@/convex/_generated/api";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 import { useStableCount } from "@/hooks/use-stable-display-value";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
@@ -337,161 +337,116 @@ function StatsPanelUnified({
   ];
 
   return (
-    <View className="overflow-hidden rounded-3xl border border-border-default bg-[#121214]">
-      <LinearGradient
-        colors={["rgba(239,68,68,0.16)", "rgba(39,39,42,0.26)", "rgba(18,18,20,0)"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
-      />
-
-      <View
-        className={`${isMobile ? "gap-4" : "flex-row items-stretch gap-4"} relative p-4`}
-      >
-        <View className="min-w-0 flex-1 justify-between rounded-2xl border border-white/10 bg-black/20 p-4">
+    <View className="gap-3">
+      <View className="overflow-hidden rounded-lg border border-primary/20 bg-[#181214] px-4 py-5">
+        <View className="flex-row items-center justify-between gap-3">
           <View className="flex-row items-center gap-2">
-            <View className="h-8 w-8 items-center justify-center rounded-xl bg-primary/15">
-              <Ionicons name="time-outline" size={16} color="#ef4444" />
+            <View className="h-8 w-8 items-center justify-center rounded-md bg-primary/15">
+              <Ionicons name="time-outline" size={16} color="#f87171" />
             </View>
-            <Text className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+            <Text className="text-[10px] font-bold uppercase tracking-widest text-text-secondary">
               Total watch time
             </Text>
           </View>
-          <Text
-            className={`${isMobile ? "text-4xl" : "text-5xl"} mt-5 font-black leading-tight text-text-primary`}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.64}
-          >
-            {stats.totalWatchTimeFormatted ?? "0min"}
+          <Text className="text-[11px] font-bold text-text-muted">
+            {formatCount(stats.totalEpisodesWatched ?? 0)} episodes
           </Text>
-          <View className="mt-5 flex-row flex-wrap gap-2">
-            <View className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-              <Text className="text-[11px] font-bold text-text-secondary">
-                {formatCount(stats.totalEpisodesWatched ?? 0)} episodes
-              </Text>
-            </View>
-            <View className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-              <Text className="text-[11px] font-bold text-text-secondary">
-                {formatCount(stats.movieCount ?? 0)} movies
-              </Text>
-            </View>
-            {breakdownPills(stats.totalWatchTimeBreakdown).map((s) => (
-              <View key={s.key} className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1.5">
-                <Text className="text-[11px] font-black text-text-primary">
-                  {s.value}{s.label}
-                </Text>
-              </View>
-            ))}
-          </View>
         </View>
-
-        <View className={`${isMobile ? "" : "w-72"} justify-between rounded-2xl border border-white/10 bg-white/[0.04] p-4`}>
-          <View className="flex-row items-center justify-between">
-            <Text className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
-              Completion
-            </Text>
-            <View className="flex-row items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1">
-              <Ionicons name="checkmark-circle" size={12} color="#ef4444" />
-              <Text className="text-xs font-black text-text-primary" numberOfLines={1}>
-                {pct}%
+        <Text
+          className={`${isMobile ? "text-4xl" : "text-5xl"} mt-4 font-black leading-tight text-text-primary`}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.64}
+        >
+          {stats.totalWatchTimeFormatted ?? "0min"}
+        </Text>
+        <View className="mt-4 flex-row flex-wrap gap-2">
+          {breakdownPills(stats.totalWatchTimeBreakdown).map((segment) => (
+            <View key={segment.key} className="rounded-md bg-black/25 px-2.5 py-1.5">
+              <Text className="text-[11px] font-black text-text-secondary">
+                {segment.value}{segment.label}
               </Text>
             </View>
-          </View>
-          <View className="mt-6 flex-row items-end gap-2">
-            <Text className="text-3xl font-black text-text-primary">{completed}</Text>
-            <Text className="pb-1 text-sm font-semibold text-text-muted">of {total} finished</Text>
-          </View>
-          <View className="mt-4 h-2.5 overflow-hidden rounded-full bg-black/40">
-            <View
-              className="h-full rounded-full bg-primary"
-              style={{ width: `${pct}%` }}
-            />
-          </View>
-          <Text className="mt-2 text-[11px] font-semibold text-text-muted">
-            {Math.max(total - completed, 0)} still in progress or queued
-          </Text>
+          ))}
         </View>
       </View>
 
-      <View
-        className="relative flex-row flex-wrap px-4 pb-4"
-        style={{ gap: isMobile ? 10 : 12 }}
-      >
-        {mediaMetrics.map((m) => {
-          const segments = breakdownPills(m.breakdown);
+      <View className="flex-row flex-wrap gap-3">
+        <View
+          className="min-h-36 justify-between rounded-lg border border-border-default bg-bg-surface p-4"
+          style={{ flexBasis: isDesktop ? 0 : "47%", flexGrow: 1 }}
+        >
+          <View className="flex-row items-center justify-between gap-2">
+            <Text className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+              Completion
+            </Text>
+            <Text className="text-xs font-black text-primary">{pct}%</Text>
+          </View>
+          <View className="mt-4">
+            <Text className="text-2xl font-black text-text-primary">{completed}</Text>
+            <Text className="mt-0.5 text-[11px] font-semibold text-text-muted">
+              of {total} finished
+            </Text>
+          </View>
+          <View className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/40">
+            <View className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+          </View>
+        </View>
 
+        {mediaMetrics.map((metric) => {
+          const firstSegment = breakdownPills(metric.breakdown)[0];
           return (
             <View
-              key={m.title}
-              className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]"
-              style={{
-                flexBasis: isDesktop ? 0 : "100%",
-                flexGrow: 1,
-              }}
+              key={metric.title}
+              className="min-h-36 justify-between rounded-lg border border-border-default bg-bg-surface p-4"
+              style={{ flexBasis: isDesktop ? 0 : "47%", flexGrow: 1 }}
             >
-              <View className="h-1 bg-primary" />
-              <View className="p-4">
-                <View className="flex-row items-center justify-between">
-                  <View className="h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
-                    <Ionicons name={m.icon} size={17} color="#ef4444" />
-                  </View>
-                  <Text className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
-                    {m.title}
-                  </Text>
+              <View className="flex-row items-center justify-between gap-2">
+                <View className="h-8 w-8 items-center justify-center rounded-md bg-bg-elevated">
+                  <Ionicons name={metric.icon} size={16} color="#d4d4d8" />
                 </View>
-                <Text
-                  className="mt-5 text-2xl font-black leading-tight text-text-primary"
-                  numberOfLines={1}
-                  minimumFontScale={0.74}
-                  adjustsFontSizeToFit
-                >
-                  {m.value}
+                <Text className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                  {metric.title}
                 </Text>
-                <Text className="mt-1 text-xs font-semibold text-text-muted" numberOfLines={1}>
-                  {m.meta}
+              </View>
+              <Text
+                className="mt-4 text-xl font-black leading-tight text-text-primary"
+                numberOfLines={1}
+                minimumFontScale={0.64}
+                adjustsFontSizeToFit
+              >
+                {metric.value}
+              </Text>
+              <View className="mt-2 flex-row items-center justify-between gap-2">
+                <Text className="text-[11px] font-semibold text-text-muted" numberOfLines={1}>
+                  {metric.meta}
                 </Text>
-                {segments.length > 0 ? (
-                  <View className="mt-3 flex-row flex-wrap gap-1.5">
-                    {segments.map((s) => (
-                      <View
-                        key={s.key}
-                        className="rounded-lg bg-black/30 px-2 py-1"
-                      >
-                        <Text className="text-[10px] font-bold text-text-secondary">
-                          {s.value}{s.label}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
+                {firstSegment ? (
+                  <Text className="text-[10px] font-bold text-text-secondary">
+                    {firstSegment.value}{firstSegment.label}
+                  </Text>
                 ) : null}
               </View>
             </View>
           );
         })}
+      </View>
 
-        <View
-          className={`${isMobile ? "gap-2" : "flex-row gap-3"} w-full`}
-        >
-          {streakMetrics.map((m) => (
-            <View
-              key={m.label}
-              className="flex-1 flex-row items-center justify-between rounded-2xl border border-white/10 bg-black/20 px-4 py-3"
-            >
-              <View className="flex-row items-center gap-3">
-                <View className="h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
-                  <Ionicons name={m.icon} size={17} color="#ef4444" />
-                </View>
-                <Text className="text-xs font-bold uppercase tracking-widest text-text-muted">
-                  {m.label}
-                </Text>
-              </View>
-              <Text className="text-2xl font-black text-text-primary">
-                {m.value}
+      <View className="flex-row overflow-hidden rounded-lg border border-border-default bg-bg-surface">
+        {streakMetrics.map((metric) => (
+          <View
+            key={metric.label}
+            className="flex-1 flex-row items-center justify-between border-r border-border-default px-4 py-3 last:border-r-0"
+          >
+            <View className="min-w-0 flex-row items-center gap-2">
+              <Ionicons name={metric.icon} size={15} color="#a1a1aa" />
+              <Text className="text-[10px] font-bold uppercase tracking-wide text-text-muted" numberOfLines={1}>
+                {metric.label}
               </Text>
             </View>
-          ))}
-        </View>
+            <Text className="text-lg font-black text-text-primary">{metric.value}</Text>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -1014,7 +969,7 @@ export default function ProfileScreen() {
     return (
       <ScreenWrapper>
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#ef4444" />
+          <BrandLoader />
         </View>
       </ScreenWrapper>
     );
@@ -1162,7 +1117,7 @@ export default function ProfileScreen() {
             <StatsPanelUnified stats={stats} isDesktop={isDesktop} />
           ) : (
             <View className="items-center justify-center rounded-2xl border border-border-default bg-bg-surface py-8">
-              <ActivityIndicator size="small" color="#ef4444" />
+              <BrandLoader compact />
               <Text className="mt-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
                 Loading detailed stats
               </Text>
@@ -1172,7 +1127,7 @@ export default function ProfileScreen() {
 
         {isHeavySectionsLoading ? (
           <View className="mt-6 items-center justify-center rounded-xl border border-border-default bg-bg-surface py-5">
-            <ActivityIndicator size="small" color="#ef4444" />
+            <BrandLoader compact />
             <Text className="mt-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
               Loading library sections
             </Text>
@@ -1327,7 +1282,7 @@ export default function ProfileScreen() {
 
         {isLoadingMoreRails ? (
           <View className="items-center py-2">
-            <ActivityIndicator size="small" color="#ef4444" />
+            <BrandLoader compact />
           </View>
         ) : null}
 
@@ -1477,13 +1432,16 @@ export default function ProfileScreen() {
                     <Pressable
                       onPress={handleSaveProfile}
                       disabled={isSavingProfile}
-                      className="flex-1 items-center justify-center border-2 border-primary bg-primary py-3"
+                      className="flex-1 flex-row items-center justify-center gap-2 rounded-lg border-2 border-primary bg-primary py-3"
                       style={{ opacity: isSavingProfile ? 0.6 : 1 }}
                     >
                       {isSavingProfile ? (
-                        <ActivityIndicator size="small" color="#fff" />
+                        <BrandLoader compact onPrimary />
                       ) : (
-                        <Text className="text-sm font-black uppercase tracking-wide text-white">Save</Text>
+                        <>
+                          <Ionicons name="checkmark" size={16} color="#fff" />
+                          <Text className="text-sm font-black uppercase tracking-wide text-white">Save</Text>
+                        </>
                       )}
                     </Pressable>
                   </View>
@@ -1544,7 +1502,7 @@ export default function ProfileScreen() {
                   style={{ opacity: isSigningOut ? 0.6 : 1 }}
                 >
                   {isSigningOut ? (
-                    <ActivityIndicator size="small" color="#fff" />
+                    <BrandLoader compact onPrimary />
                   ) : (
                     <Text className="text-sm font-black uppercase tracking-wide text-white">Sign Out</Text>
                   )}

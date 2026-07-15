@@ -1,7 +1,7 @@
 import { DESKTOP_SIDEBAR_BREAKPOINT, SIDEBAR_WIDTH_COLLAPSED } from "@/constants/navigation";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { Link, usePathname } from "expo-router";
-import { Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
+import { Image, Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
 
 const navItems = [
   { href: "/home", label: "Home", icon: "home", iconOutline: "home-outline" },
@@ -24,21 +24,24 @@ export function Sidebar() {
   const sidebarWidth = SIDEBAR_WIDTH_COLLAPSED;
   const isLibraryActive =
     pathname === "/library" || pathname.startsWith("/library");
+  const isProfileActive =
+    pathname === "/profile" || pathname.startsWith("/profile/");
 
   return (
     <View
       className="border-r border-border-default bg-bg-surface/95"
       style={{ width: sidebarWidth, minWidth: sidebarWidth }}
     >
-      {/* Red accent bar at top */}
-      <View style={{ height: 3, backgroundColor: "#ef4444" }} />
-
       <View className="flex-1 px-2 py-4">
         {/* Logo */}
         <View className="mb-6 items-center justify-center">
           <Link href="/home" asChild>
-            <Pressable className="h-10 w-10 items-center justify-center rounded-md border-2 border-primary bg-primary/20">
-              <Text className="text-sm font-black text-primary">ST</Text>
+            <Pressable className="h-10 w-10 items-center justify-center overflow-hidden">
+              <Image
+                source={require("../assets/showtracker-mark.png")}
+                resizeMode="contain"
+                style={{ width: 40, height: 28 }}
+              />
             </Pressable>
           </Link>
         </View>
@@ -50,13 +53,16 @@ export function Sidebar() {
             return (
               <Link key={item.href} href={item.href as any} asChild>
                 <Pressable
-                  className={`items-center justify-center rounded-lg px-2 py-3 ${isActive ? "border-l-2 border-primary bg-primary/15" : ""}`}
+                  className={`relative items-center justify-center rounded-lg px-2 py-2.5 ${isActive ? "bg-bg-elevated" : ""}`}
                 >
-                  <Ionicons
-                    name={(isActive ? item.icon : item.iconOutline) as keyof typeof Ionicons.glyphMap}
-                    size={22}
-                    color={isActive ? "#ef4444" : "#a1a1aa"}
-                  />
+                  {isActive ? <View className="absolute right-0 h-6 w-1 rounded-l-full bg-primary" /> : null}
+                  <View className={`h-8 w-8 items-center justify-center rounded-md ${isActive ? "bg-primary/15" : ""}`}>
+                    <Ionicons
+                      name={(isActive ? item.icon : item.iconOutline) as keyof typeof Ionicons.glyphMap}
+                      size={21}
+                      color={isActive ? "#ef4444" : "#a1a1aa"}
+                    />
+                  </View>
                   <Text
                     className={`mt-1 text-[10px] font-medium tracking-tight ${isActive ? "text-text-primary" : "text-text-secondary"}`}
                     numberOfLines={1}
@@ -75,8 +81,11 @@ export function Sidebar() {
         <View className="border-t border-border-default pt-3">
           {/* Search */}
           <Link href="/search" asChild>
-            <Pressable className={`items-center justify-center rounded-lg px-2 py-3 ${pathname === "/search" ? "border-l-2 border-primary bg-primary/15" : ""}`}>
-              <Feather name="search" size={20} color={pathname === "/search" ? "#ef4444" : "#a1a1aa"} />
+            <Pressable className={`relative items-center justify-center rounded-lg px-2 py-2.5 ${pathname === "/search" ? "bg-bg-elevated" : ""}`}>
+              {pathname === "/search" ? <View className="absolute right-0 h-6 w-1 rounded-l-full bg-primary" /> : null}
+              <View className={`h-8 w-8 items-center justify-center rounded-md ${pathname === "/search" ? "bg-primary/15" : ""}`}>
+                <Feather name="search" size={20} color={pathname === "/search" ? "#ef4444" : "#a1a1aa"} />
+              </View>
               <Text className={`mt-1 text-[10px] font-medium tracking-tight ${pathname === "/search" ? "text-text-primary" : "text-text-secondary"}`} numberOfLines={1}>
                 Search
               </Text>
@@ -86,13 +95,16 @@ export function Sidebar() {
           {/* Library */}
           <Link href="/library" asChild>
             <Pressable
-              className={`items-center justify-center rounded-lg px-2 py-3 ${isLibraryActive ? "border-l-2 border-primary bg-primary/15" : ""}`}
+              className={`relative items-center justify-center rounded-lg px-2 py-2.5 ${isLibraryActive ? "bg-bg-elevated" : ""}`}
             >
-              <Ionicons
-                name={(isLibraryActive ? "albums" : "albums-outline") as keyof typeof Ionicons.glyphMap}
-                size={22}
-                color={isLibraryActive ? "#ef4444" : "#a1a1aa"}
-              />
+              {isLibraryActive ? <View className="absolute right-0 h-6 w-1 rounded-l-full bg-primary" /> : null}
+              <View className={`h-8 w-8 items-center justify-center rounded-md ${isLibraryActive ? "bg-primary/15" : ""}`}>
+                <Ionicons
+                  name={(isLibraryActive ? "albums" : "albums-outline") as keyof typeof Ionicons.glyphMap}
+                  size={21}
+                  color={isLibraryActive ? "#ef4444" : "#a1a1aa"}
+                />
+              </View>
               <Text
                 className={`mt-1 text-[10px] font-medium tracking-tight ${isLibraryActive ? "text-text-primary" : "text-text-secondary"}`}
                 numberOfLines={1}
@@ -105,12 +117,13 @@ export function Sidebar() {
           {/* Profile */}
           <Link href="/profile" asChild>
             <Pressable
-              className={`items-center justify-center rounded-lg px-2 py-3 ${pathname === "/profile" ? "border-l-2 border-primary bg-primary/15" : ""}`}
+              className={`relative items-center justify-center rounded-lg px-2 py-2.5 ${isProfileActive ? "bg-bg-elevated" : ""}`}
             >
-              <View className="h-7 w-7 items-center justify-center rounded-full bg-bg-elevated">
-                <Ionicons name="person" size={16} color={pathname === "/profile" ? "#ef4444" : "#a1a1aa"} />
+              {isProfileActive ? <View className="absolute right-0 h-6 w-1 rounded-l-full bg-primary" /> : null}
+              <View className={`h-8 w-8 items-center justify-center rounded-md ${isProfileActive ? "bg-primary/15" : ""}`}>
+                <Ionicons name={isProfileActive ? "person" : "person-outline"} size={18} color={isProfileActive ? "#ef4444" : "#a1a1aa"} />
               </View>
-              <Text className={`mt-1 text-[10px] font-medium tracking-tight ${pathname === "/profile" ? "text-text-primary" : "text-text-secondary"}`} numberOfLines={1}>
+              <Text className={`mt-1 text-[10px] font-medium tracking-tight ${isProfileActive ? "text-text-primary" : "text-text-secondary"}`} numberOfLines={1}>
                 Profile
               </Text>
             </Pressable>

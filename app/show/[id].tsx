@@ -8,7 +8,6 @@ import {
   type ReactElement,
 } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Image,
   Modal,
@@ -23,6 +22,8 @@ import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
+import { getProgressTone } from "@/lib/progress-tone";
 import { Badge } from "@/components/Badge";
 import { ProgressBar } from "@/components/ProgressBar";
 import { OverlayDetailFrame } from "@/components/OverlayDetailFrame";
@@ -3994,7 +3995,7 @@ export function ShowDetailScreen() {
     return wrapShowDetail(
       <ScreenWrapper contentClassName="px-0 py-0" edges={detailScreenEdges}>
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#ef4444" />
+          <BrandLoader />
           <Text className="mt-4 text-sm text-text-secondary">Loading show details...</Text>
         </View>
       </ScreenWrapper>
@@ -4142,7 +4143,15 @@ export function ShowDetailScreen() {
                   episodes
                 </Text>
               </View>
-              <ProgressBar progress={watchProgressRatio} height={8} animated />
+              <ProgressBar
+                progress={watchProgressRatio}
+                height={8}
+                animated
+                tone={getProgressTone({
+                  progress: watchProgressRatio,
+                  status: displayTrackingStatus,
+                })}
+              />
               <View className="mt-3 flex-row items-center justify-between">
                 <Text className="text-xs text-text-muted">
                   {displayIsInWatchlist
@@ -4204,7 +4213,7 @@ export function ShowDetailScreen() {
 
                   {isUpdatingAnimeSettings ? (
                     <View className="flex-row items-center gap-2">
-                      <ActivityIndicator size="small" color="#52525b" />
+                      <BrandLoader compact />
                       <Text className="text-xs text-text-secondary">Updating franchise settings...</Text>
                     </View>
                   ) : null}
@@ -4213,7 +4222,7 @@ export function ShowDetailScreen() {
 
               {isSettingStatus ? (
                 <View className="mb-6 flex-row items-center gap-2">
-                  <ActivityIndicator size="small" color="#52525b" />
+                  <BrandLoader compact />
                   <Text className="text-xs text-text-secondary">
                     Updating status...
                   </Text>
@@ -4222,7 +4231,7 @@ export function ShowDetailScreen() {
 
               {isRepairingTracking ? (
                 <View className="mb-6 flex-row items-center gap-2">
-                  <ActivityIndicator size="small" color="#52525b" />
+                  <BrandLoader compact />
                   <Text className="text-xs text-text-secondary">
                     Refreshing tracking...
                   </Text>
@@ -4278,7 +4287,7 @@ export function ShowDetailScreen() {
                       }`}
                     >
                       {isSyncingRelatedAnime ? (
-                        <ActivityIndicator size="small" color="#ef4444" />
+                        <BrandLoader micro />
                       ) : (
                         <Ionicons name="refresh" size={17} color="#ef4444" />
                       )}
@@ -4289,7 +4298,7 @@ export function ShowDetailScreen() {
 
               {isLoadingRelatedAnime && relatedAnime.length === 0 ? (
                 <View className="items-center py-5">
-                  <ActivityIndicator size="small" color="#ef4444" />
+                  <BrandLoader compact />
                   <Text className="mt-2 text-xs text-text-secondary">
                     Loading franchise links...
                   </Text>
@@ -4434,7 +4443,7 @@ export function ShowDetailScreen() {
                     })}
                   >
                     {isMarkingShow ? (
-                      <ActivityIndicator size="small" color="#a1a1aa" />
+                      <BrandLoader micro />
                     ) : (
                       <Ionicons name="checkmark-done-outline" size={15} color="#a1a1aa" />
                     )}
@@ -4505,7 +4514,7 @@ export function ShowDetailScreen() {
 
               {isTogglingMovieWatch ? (
                 <View className="items-center py-4">
-                  <ActivityIndicator size="small" color="#ef4444" />
+                  <BrandLoader compact />
                 </View>
               ) : (
                 <View className="gap-3">
@@ -4611,7 +4620,7 @@ export function ShowDetailScreen() {
               >
                 {isNavigatingToNextSeason ? (
                   <View className="flex-row items-center gap-2">
-                    <ActivityIndicator size="small" color="#ef4444" />
+                    <BrandLoader compact />
                     <Text className="font-semibold text-text-primary">Opening...</Text>
                   </View>
                 ) : (
@@ -4628,7 +4637,7 @@ export function ShowDetailScreen() {
               >
                 {isPausingRelatedEntries ? (
                   <View className="flex-row items-center gap-2">
-                    <ActivityIndicator size="small" color="#a1a1aa" />
+                    <BrandLoader compact />
                     <Text className="font-semibold text-text-secondary">Pausing...</Text>
                   </View>
                 ) : (
@@ -4703,7 +4712,7 @@ export function ShowDetailScreen() {
               >
                 {isPreviousEpisodesPromptRunning ? (
                   <View className="flex-row items-center gap-2">
-                    <ActivityIndicator size="small" color="#ef4444" />
+                    <BrandLoader compact />
                     <Text className="font-semibold text-text-primary">Processing...</Text>
                   </View>
                 ) : (
@@ -4770,7 +4779,7 @@ export function ShowDetailScreen() {
               >
                 {isWatchActionRunning ? (
                   <View className="flex-row items-center gap-2">
-                    <ActivityIndicator size="small" color="#a1a1aa" />
+                    <BrandLoader compact />
                     <Text className="font-semibold text-text-secondary">Processing...</Text>
                   </View>
                 ) : (
@@ -4972,7 +4981,7 @@ export function ShowDetailScreen() {
 
               {isUpdatingAnimeSettings ? (
                 <View className="flex-row items-center justify-center gap-2 py-1">
-                  <ActivityIndicator size="small" color="#a1a1aa" />
+                  <BrandLoader compact />
                   <Text className="text-xs text-text-secondary">Saving franchise setting...</Text>
                 </View>
               ) : null}
@@ -5166,7 +5175,7 @@ export function ShowDetailScreen() {
 
               {isStatusMenuBusy ? (
                 <View className="flex-row items-center justify-center gap-2 py-1">
-                  <ActivityIndicator size="small" color="#a1a1aa" />
+                  <BrandLoader compact />
                   <Text className="text-xs text-text-secondary">Saving...</Text>
                 </View>
               ) : null}

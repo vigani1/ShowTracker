@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import type { NormalizedShow } from "@/lib/api/types";
 import { Badge } from "@/components/Badge";
+import { PROGRESS_TONE_COLORS } from "@/lib/progress-tone";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
 interface MediaPosterCardProps {
@@ -116,7 +117,13 @@ export function MediaPosterCard({
           {/* Progress bar */}
           {typeof progress === "number" && progress > 0 && progress < 1 ? (
             <View className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
-              <View className="h-full bg-primary" style={{ width: `${progress * 100}%` }} />
+              <View
+                className="h-full"
+                style={{
+                  backgroundColor: PROGRESS_TONE_COLORS.active,
+                  width: `${progress * 100}%`,
+                }}
+              />
             </View>
           ) : null}
 

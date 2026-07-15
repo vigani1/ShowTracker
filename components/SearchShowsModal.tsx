@@ -1,6 +1,5 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import {
-  ActivityIndicator,
   Image,
   Modal,
   Pressable,
@@ -12,6 +11,7 @@ import { FlashList } from "@shopify/flash-list";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Ionicons } from "@expo/vector-icons";
+import { BrandLoader } from "@/components/BrandLoader";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { toHttpsImageUrl } from "@/lib/image-url";
 
@@ -96,7 +96,7 @@ function ShowItemRow({
 
       {/* Status */}
       {isAdding ? (
-        <ActivityIndicator size="small" color="#ef4444" />
+        <BrandLoader micro />
       ) : isAlreadyInList ? (
         <View className="h-6 w-6 items-center justify-center rounded-full bg-success">
           <Ionicons name="checkmark" size={14} color="#fff" />
@@ -228,7 +228,7 @@ export function SearchShowsModal({ visible, onClose, listId, existingShowIds }: 
     return (
       <View className="items-center justify-center py-4">
         {isLoadingMore ? (
-          <ActivityIndicator size="small" color="#ef4444" />
+          <BrandLoader compact />
         ) : hasMore ? (
           <Text className="text-xs font-medium text-text-secondary">
             Scroll for more ({filteredShows.length - paginatedShows.length} remaining)
@@ -310,7 +310,7 @@ export function SearchShowsModal({ visible, onClose, listId, existingShowIds }: 
           <View className="flex-1">
             {isLoading ? (
               <View className="flex-1 items-center justify-center px-6">
-                <ActivityIndicator size="large" color="#ef4444" />
+                <BrandLoader />
                 <Text className="mt-3 text-sm text-text-secondary">Loading your watchlist...</Text>
               </View>
             ) : watchlist?.length === 0 ? (

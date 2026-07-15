@@ -1,5 +1,15 @@
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { useState } from "react";
+import {
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 
 export type FilterBarOption<T extends string = string> = {
   value: T;
@@ -16,6 +26,7 @@ type FilterBarProps<T extends string> = {
   leadingLabel?: string;
   align?: "start" | "center";
   compact?: boolean;
+  showScrollAffordance?: boolean;
 };
 
 type DropdownFilterChipProps = {
@@ -40,12 +51,32 @@ export function FilterBar<T extends string>({
   leadingLabel,
   align = "start",
   compact = false,
+  showScrollAffordance = false,
 }: FilterBarProps<T>) {
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [contentWidth, setContentWidth] = useState(0);
+  const [scrollX, setScrollX] = useState(0);
+  const hasOverflow = contentWidth > viewportWidth + 4;
+  const showLeftCue = showScrollAffordance && hasOverflow && scrollX > 6;
+  const showRightCue =
+    showScrollAffordance && hasOverflow && scrollX < contentWidth - viewportWidth - 6;
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    setViewportWidth(event.nativeEvent.layout.width);
+  };
+
+  const handleScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    setScrollX(event.nativeEvent.contentOffset.x);
+  };
+
   return (
-    <View className={className}>
+    <View className={`relative ${className ?? ""}`.trim()} onLayout={handleLayout}>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        onContentSizeChange={(width) => setContentWidth(width)}
+        onScrollEndDrag={handleScrollEnd}
+        onMomentumScrollEnd={handleScrollEnd}
         contentContainerStyle={{
           gap: 8,
           flexGrow: 1,
@@ -106,6 +137,28 @@ export function FilterBar<T extends string>({
           })}
         </View>
       </ScrollView>
+      {showLeftCue ? (
+        <LinearGradient
+          pointerEvents="none"
+          colors={["#09090b", "rgba(9,9,11,0)"]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          className="absolute bottom-0 left-0 top-0 w-12 justify-center pl-1"
+        >
+          <Ionicons name="chevron-back" size={16} color="#d4d4d8" />
+        </LinearGradient>
+      ) : null}
+      {showRightCue ? (
+        <LinearGradient
+          pointerEvents="none"
+          colors={["rgba(9,9,11,0)", "#09090b"]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          className="absolute bottom-0 right-0 top-0 w-14 items-end justify-center pr-1"
+        >
+          <Ionicons name="chevron-forward" size={16} color="#d4d4d8" />
+        </LinearGradient>
+      ) : null}
     </View>
   );
 }

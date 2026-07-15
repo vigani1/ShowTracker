@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, Text, View } from "react-native";
+import { Modal, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Badge } from "@/components/Badge";
+import { BrandLoader } from "@/components/BrandLoader";
 
 type ShowActionBarProps = {
   statusLabel: string;
@@ -57,7 +58,7 @@ function MenuAction({
       })}
     >
       {loading ? (
-        <ActivityIndicator size="small" color={iconColor} />
+        <BrandLoader compact />
       ) : (
         <Ionicons name={icon} size={18} color={iconColor} />
       )}

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   Modal,
   Platform,
@@ -20,6 +19,7 @@ import { FilterBar } from "@/components/FilterBar";
 import { HomeModeSwitch } from "@/components/HomeModeSwitch";
 import { PageIntro } from "@/components/PageIntro";
 import { ScreenWrapper } from "@/components/ScreenWrapper";
+import { BrandLoader } from "@/components/BrandLoader";
 import { useHorizontalSectionSwipe } from "@/hooks/use-horizontal-section-swipe";
 import {
   useStableDisplayPair,
@@ -2452,7 +2452,7 @@ export function HomeScreen() {
           })}
         >
           {isLoadingMoreWatchlist ? (
-            <ActivityIndicator size="small" color="#ef4444" />
+            <BrandLoader compact />
           ) : (
             <Text className="text-[11px] font-black uppercase tracking-[1.2px] text-zinc-200">
               Load more
@@ -2568,10 +2568,9 @@ export function HomeScreen() {
                   ) : null}
                 </View>
 
+                {watchlistFooter}
                 {autoPausedSection}
                 {notStartedSection}
-
-                {watchlistFooter}
               </ScrollView>
             ) : (
               <FlashList
@@ -2588,9 +2587,9 @@ export function HomeScreen() {
                 ListHeaderComponent={watchlistHeader}
                 ListFooterComponent={
                   <>
+                    {isWatchlistFilterSettling ? watchlistSettlingFooter : watchlistFooter}
                     {autoPausedSection}
                     {notStartedSection}
-                    {isWatchlistFilterSettling ? watchlistSettlingFooter : watchlistFooter}
                   </>
                 }
               />
@@ -2667,7 +2666,7 @@ export function HomeScreen() {
           )
         ) : (
           <View className="flex-1 items-center justify-center">
-            <ActivityIndicator size="small" color="#ef4444" />
+            <BrandLoader />
           </View>
         )}
       </View>
